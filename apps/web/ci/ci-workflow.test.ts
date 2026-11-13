@@ -51,6 +51,30 @@ const BASELINE_IF = "${{ !cancelled() && steps.scope.outputs.docs_only != 'true'
 const FAILURE_IF = "failure()";
 const isDiagnostic = (s: { run?: string }) => s.run === DIAGNOSE_BASELINE || s.run === DIAGNOSE_FAILURE;
 
+/**
+ * The two REQUIRED checks and their parts (2026-11-12). The ruleset on main
+ * requires check runs named exactly `verify` and `e2e`; to cut a push's time
+ * to green, each was split into parts that run in parallel, and the required
+ * name now belongs to a small gate job that needs every part, runs
+ * `if: always()`, and passes only when .github/scripts/ci-gate.sh reads every
+ * part's result as `success` (ci-gate.test.ts).
+ */
+const GATES: Record<"verify" | "e2e", string[]> = {
+  verify: ["verify-db", "verify-app"],
+  e2e: ["e2e-migrations", "e2e-shard"],
+};
+const PARTS = [...GATES.verify, ...GATES.e2e];
+/** The parts that start a Supabase stack in their own runner. */
+const STACK_PARTS = ["verify-db", "e2e-shard"];
+const GATE_SCRIPT = "bash .github/scripts/ci-gate.sh";
+/** verify-db's two suites: the db package's, and the web tests that need a database (vitest project `live`). */
+const DB_TESTS = "pnpm --filter @bis/db test";
+const WEB_LIVE_TESTS = "pnpm --filter web test --project live";
+/** verify-app's web suite: everything else (vitest project `unit`). */
+const WEB_UNIT_TESTS = "pnpm --filter web test --project unit";
+const SHARDS = 4;
+const PLAYWRIGHT = `pnpm --filter web test:e2e --shard=\${{ matrix.shard }}/${SHARDS}`;
+
 function read(relative: string): string {
   return fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
 }
@@ -141,6 +165,22 @@ function jobKeys(job: string[]): string[] {
     const key = /^ {4}([A-Za-z0-9_-]+):/.exec(line)?.[1];
     return key ? [key] : [];
   });
+}
+
+/** A one-line value set directly on a job (`if: always()`, `needs: [a, b]`), or undefined. */
+function jobValue(job: string[], key: string): string | undefined {
+  for (const line of job) {
+    const m = new RegExp(`^ {4}${key}: (.+)$`).exec(line);
+    if (m?.[1]) return m[1].trim();
+  }
+  return undefined;
+}
+
+/** A job's `needs`, written one-line as `[a, b]` or as a bare id. */
+function jobNeeds(job: string[]): string[] {
+  const v = jobValue(job, "needs");
+  if (!v) return [];
+  return v.replace(/^\[|\]$/g, "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /** `NAME: value` pairs in a job's OWN `env:` block (six columns in). */
@@ -235,7 +275,9 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
   // against GITHUB_ENV it could aim them back at the shared project, and it
   // would hand a job a credential it has no use for. The guard's two local
   // modes refuse that at run time; this refuses it in review.
-  it.each(["verify", "e2e"])("gives %s no cloud Supabase value: none in the workflow-level env, none in its job env (mutation: put NEXT_PUBLIC_SUPABASE_URL back in e2e's env → FAILS)", (id) => {
+  // Every job since 2026-11-12, gates and scanner included: the split added
+  // four job envs a cloud value could be pasted into.
+  it.each(Object.keys(ciJobs))("gives %s no cloud Supabase value: none in the workflow-level env, none in its job env (mutation: put NEXT_PUBLIC_SUPABASE_URL back in e2e-shard's env → FAILS)", (id) => {
     expect(SUPABASE_NAMES.filter((n) => n in ciEnv)).toEqual([]);
     expect([...SUPABASE_NAMES, "BIS_CI_SUPABASE_DB_URL"].filter((n) => n in jobEnv(job(id)))).toEqual([]);
   });
@@ -249,55 +291,62 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
   // needs bis-ci's DB URL, read-only, and nothing else does, so the secret is
   // scoped to that step under a name no app code reads; the guard refuses it
   // in the job's scope (ci-target-guard.test.ts).
-  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside the migration check step's own env, as BIS_CI_SUPABASE_DB_URL (mutation: map it in e2e's job env, or as SUPABASE_DB_URL → FAILS)", () => {
+  // e2e-migrations since 2026-11-12: the check left the e2e job when e2e was
+  // split into shards, so it reads bis-ci once per push, not once per shard.
+  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside e2e-migrations' migration check step's own env, as BIS_CI_SUPABASE_DB_URL (mutation: map it in a job env, or as SUPABASE_DB_URL → FAILS)", () => {
     const matches = ciLines.filter((l) => l.includes("secrets.CI_SUPABASE_DB_URL"));
     expect(matches.map((l) => l.trim())).toEqual(["BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}"]);
-    expect(stepEnv(job("e2e"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
-    expect(job("verify").filter((l) => /secrets\.CI_SUPABASE_/.test(l))).toEqual([]);
+    expect(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "e2e-migrations")) {
+      expect(job(id).filter((l) => /secrets\.CI_SUPABASE_/.test(l)), id).toEqual([]);
+    }
   });
 
-  it("hands the Stripe TEST key to the e2e job only, as STRIPE_SECRET_KEY (mutation: move it to the top-level env, or drop it → FAILS)", () => {
-    expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
-    expect(jobEnv(job("verify")).STRIPE_SECRET_KEY).toBeUndefined();
+  /** Every job but the Playwright shards: none may carry what only the shards' app and specs read. */
+  const notShards = () => Object.keys(ciJobs).filter((j) => j !== "e2e-shard");
+
+  it("hands the Stripe TEST key to the e2e shards only, as STRIPE_SECRET_KEY (mutation: move it to the top-level env, or drop it → FAILS)", () => {
+    expect(jobEnv(job("e2e-shard")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
+    for (const id of notShards()) expect(jobEnv(job(id)).STRIPE_SECRET_KEY, id).toBeUndefined();
     expect(ciEnv.STRIPE_SECRET_KEY).toBeUndefined();
   });
 
-  it("gives the e2e job — and only it — the AI gateway's fake provider as a literal (item 8a-1, spec 6; mutation: drop it, or move it to the top-level env -> FAILS)", () => {
-    expect(jobEnv(job("e2e")).AI_PROVIDER).toBe("fake");
-    expect(jobEnv(job("verify")).AI_PROVIDER).toBeUndefined();
+  it("gives the e2e shards — and only them — the AI gateway's fake provider as a literal (item 8a-1, spec 6; mutation: drop it, or move it to the top-level env -> FAILS)", () => {
+    expect(jobEnv(job("e2e-shard")).AI_PROVIDER).toBe("fake");
+    for (const id of notShards()) expect(jobEnv(job(id)).AI_PROVIDER, id).toBeUndefined();
     expect(ciEnv.AI_PROVIDER).toBeUndefined();
   });
 
-  it("references secrets.CI_STRIPE_SECRET_KEY on exactly one non-comment line: e2e's own job-level env (mutation: also give a STEP inside verify its own `env: STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}` — jobEnv only reads a job's 4-space env: block, so the two checks above stay green and this is the only one that FAILS)", () => {
+  it("references secrets.CI_STRIPE_SECRET_KEY on exactly one non-comment line: e2e-shard's own job-level env (mutation: also give a STEP inside verify-db its own `env: STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}` — jobEnv only reads a job's 4-space env: block, so the two checks above stay green and this is the only one that FAILS)", () => {
     const matches = ciLines.filter((line) => line.includes("secrets.CI_STRIPE_SECRET_KEY"));
     expect(matches).toHaveLength(1);
     expect(matches[0]?.trim()).toBe("STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}");
-    // The one occurrence is the same line jobEnv already found inside e2e's
-    // own job-level env: block, not a second copy living on some step.
-    expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
+    // The one occurrence is the same line jobEnv already found inside the
+    // shards' own job-level env: block, not a second copy living on some step.
+    expect(jobEnv(job("e2e-shard")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
   });
 
-  it("gives the e2e job — and only it — the fixture webhook signing secret as a LITERAL, never a secrets reference: the e2e signs its own fixture events with it, and it signs nothing anywhere else (mutation: move it to the top-level env, or read it from secrets → FAILS)", () => {
-    expect(jobEnv(job("e2e")).STRIPE_WEBHOOK_SECRET).toBe("whsec_bis_ci_e2e_fixture_only");
-    expect(jobEnv(job("verify")).STRIPE_WEBHOOK_SECRET).toBeUndefined();
+  it("gives the e2e shards — and only them — the fixture webhook signing secret as a LITERAL, never a secrets reference: the e2e signs its own fixture events with it, and it signs nothing anywhere else (mutation: move it to the top-level env, or read it from secrets → FAILS)", () => {
+    expect(jobEnv(job("e2e-shard")).STRIPE_WEBHOOK_SECRET).toBe("whsec_bis_ci_e2e_fixture_only");
+    for (const id of notShards()) expect(jobEnv(job(id)).STRIPE_WEBHOOK_SECRET, id).toBeUndefined();
     expect(ciEnv.STRIPE_WEBHOOK_SECRET).toBeUndefined();
     expect(ciLines.filter((l) => l.includes("STRIPE_WEBHOOK_SECRET") && !l.trim().startsWith("#"))).toHaveLength(1);
   });
 
-  it("the e2e job turns BILLING_ENFORCE on and verify does not (mutation: remove it, or add it to verify → FAILS)", () => {
+  it("the e2e shards turn BILLING_ENFORCE on and no other job does (mutation: remove it, or add it to verify-db → FAILS)", () => {
     // jobEnv returns the line's raw text after the colon, quotes included
     // (as written in ci.yml, matching BIS_I18N_QA's own quoted "1" below).
-    expect(jobEnv(job("e2e")).BILLING_ENFORCE).toBe("\"1\"");
-    expect(jobEnv(job("verify")).BILLING_ENFORCE).toBeUndefined();
+    expect(jobEnv(job("e2e-shard")).BILLING_ENFORCE).toBe("\"1\"");
+    for (const id of notShards()) expect(jobEnv(job(id)).BILLING_ENFORCE, id).toBeUndefined();
     expect(ciEnv.BILLING_ENFORCE).toBeUndefined();
   });
 
-  it("gives the e2e job — and only it — a fixed OWNER_LINE_PIN_PEPPER literal of at least 32 characters, never a secrets reference, so the owner-line setup spec can save a PIN (F-032 Task 15; mutation: drop it, shorten it, read it from secrets, or add it to verify or the top-level env → FAILS)", () => {
-    const value = jobEnv(job("e2e")).OWNER_LINE_PIN_PEPPER;
+  it("gives the e2e shards — and only them — a fixed OWNER_LINE_PIN_PEPPER literal of at least 32 characters, never a secrets reference, so the owner-line setup spec can save a PIN (F-032 Task 15; mutation: drop it, shorten it, read it from secrets, or add it to verify-db or the top-level env → FAILS)", () => {
+    const value = jobEnv(job("e2e-shard")).OWNER_LINE_PIN_PEPPER;
     expect(value).toBe("bis_ci_e2e_owner_line_pin_pepper_fixture_only");
     // pinPepperConfigured's own floor (lib/owner-line/secrets.ts PEPPER_MIN): a shorter value reads as unset.
     expect(value!.length).toBeGreaterThanOrEqual(32);
-    expect(jobEnv(job("verify")).OWNER_LINE_PIN_PEPPER).toBeUndefined();
+    for (const id of notShards()) expect(jobEnv(job(id)).OWNER_LINE_PIN_PEPPER, id).toBeUndefined();
     expect(ciEnv.OWNER_LINE_PIN_PEPPER).toBeUndefined();
     expect(ciLines.filter((l) => l.includes("OWNER_LINE_PIN_PEPPER") && !l.trim().startsWith("#"))).toHaveLength(1);
   });
@@ -307,7 +356,7 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     // history the branch is checked against. A rebuilt project changes both
     // files together.
     expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
-    expect(stepEnv(job("e2e"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
+    expect(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
   });
 });
 
@@ -372,41 +421,69 @@ describe("screenshots.yml captures on the CI project, never production's", () =>
 });
 
 describe("ci.yml's jobs", () => {
-  // e2e and verify start TOGETHER since 2026-10-08. `needs: verify` existed
-  // to stop the two racing for one cloud database (the b9f31dc timeouts, in
-  // git history); each now has a stack in its own runner, so nothing couples
-  // them. A red verify still blocks the merge on its own: the ruleset on main
-  // requires BOTH checks green on the head commit, and a skipped e2e would be
-  // the one way to weaken that (a check skipped by a job's dependency is not
-  // a failure). What it costs: e2e also runs on a commit whose verify is red.
-  it("keeps the job ids the main ruleset requires, and starts e2e beside verify, not after it (mutation: re-add `needs: verify` → FAILS)", () => {
-    expect(Object.keys(ciJobs)).toEqual(expect.arrayContaining(["verify", "e2e"]));
-    expect(jobKeys(job("e2e"))).not.toContain("needs");
-    expect(jobKeys(job("verify"))).not.toContain("needs");
+  // 2026-11-12: the ruleset on main requires check runs named exactly
+  // `verify` and `e2e`. Each is now a GATE job whose parts run in parallel on
+  // their own runners: verify = verify-db (the suites that need a database) +
+  // verify-app (typecheck, lint, the web unit suite, the build); e2e =
+  // e2e-migrations (bis-ci holds every migration) + e2e-shard (Playwright in
+  // four shards, each on its own stack). No PART needs another: e2e starts
+  // beside verify as it has since 2026-10-08 (the b9f31dc timeouts that once
+  // made e2e wait for verify were two jobs racing for ONE database; every
+  // part now has its own or none), and the shards do not wait for the
+  // migration check (a red one is its own check run within a minute, and
+  // "Re-run failed jobs" after pushing the migration re-runs only it and the
+  // gate). A red part still blocks the merge: its gate is red.
+  it("keeps the job ids the main ruleset requires as gates, and each gate needs exactly its parts (mutation: drop e2e-migrations from e2e's needs → FAILS)", () => {
+    expect(Object.keys(ciJobs)).toEqual(expect.arrayContaining(["verify", "e2e", ...PARTS]));
+    for (const [gate, parts] of Object.entries(GATES)) expect(jobNeeds(job(gate)), gate).toEqual(parts);
   });
 
-  it.each(["verify", "e2e"])("%s has no job-level name, if or continue-on-error", (id) => {
-    // A `name:` renames the check run, so the ruleset's required `verify` /
-    // `e2e` would never report. A job skipped by `if:` reports as skipped,
-    // which does not block a merge. `continue-on-error` turns a red job green.
+  it.each(PARTS)("%s needs nothing, so it starts the moment a runner is free (mutation: re-add `needs: verify-db` to e2e-shard, or `needs: e2e-migrations` → FAILS)", (id) => {
+    expect(jobKeys(job(id))).not.toContain("needs");
+  });
+
+  it.each(PARTS)("%s has no job-level name, if or continue-on-error", (id) => {
+    // A part skipped by a job-level `if:` reports `skipped`, which the gate
+    // refuses but which tells nobody why; `continue-on-error` turns a red part
+    // green; a `name:` would make its check run harder to find from the gate.
     const keys = jobKeys(job(id));
     expect(keys).toContain("steps"); // the parser found the job's own keys
     expect(keys.filter((k) => ["name", "if", "continue-on-error"].includes(k))).toEqual([]);
   });
 
-  it.each([
-    ["verify", GUARD_BEFORE_LOCAL],
-    ["e2e", GUARD_BEFORE_LOCAL],
-  ])("%s runs the target guard straight after checkout, before anything else", (id, guard) => {
+  // The gate is the required check. A `name:` renames the check run, so the
+  // ruleset's `verify` / `e2e` would never report. `if: always()` and nothing
+  // weaker: a gate that `needs` a failed part is SKIPPED unless it says
+  // always(), and GitHub reports a skipped required check as passing;
+  // `!cancelled()` would skip it on a cancelled run the same way.
+  it.each(Object.keys(GATES))("the %s gate has no name or continue-on-error, runs if: always(), and passes only through ci-gate.sh reading every part's result (mutation: `if: success()`, or drop one part's line from the gate's env → FAILS)", (gate) => {
+    const lines = job(gate);
+    const keys = jobKeys(lines);
+    expect(keys.filter((k) => ["name", "continue-on-error", "strategy"].includes(k))).toEqual([]);
+    expect(jobValue(lines, "if")).toBe("always()");
+    const all = steps(lines);
+    expect(all).toHaveLength(2);
+    expect(all[0]?.uses ?? "").toMatch(/^actions\/checkout@/);
+    const check = all[1]!;
+    expect([...check.keys].sort()).toEqual(["env", "name", "run"]);
+    const env = stepEnv(lines, check.run!);
+    // One variable per part, holding that part's result, and the script
+    // handed exactly those variables.
+    const parts = GATES[gate as keyof typeof GATES];
+    expect(Object.values(env)).toEqual(parts.map((p) => `\${{ needs.${p}.result }}`));
+    expect(check.run).toBe(`${GATE_SCRIPT} ${Object.keys(env).join(" ")}`);
+  });
+
+  it.each(PARTS)("%s runs the target guard straight after checkout, before anything else", (id) => {
     const [first, second] = steps(job(id));
     expect(first?.uses ?? "").toMatch(/^actions\/checkout@/);
-    expect(second?.run).toBe(guard);
+    expect(second?.run).toBe(GUARD_BEFORE_LOCAL);
     // Nothing else on the step: an `if:` could skip it and a
     // `continue-on-error:` could let a refusal pass.
     expect([...(second?.keys ?? [])].sort()).toEqual(["name", "run"]);
   });
 
-  it.each(["verify", "e2e"])("%s lets no step fail quietly, and skips a command on no condition but the docs-only one (mutation: `if: always()` on pnpm check → FAILS)", (id) => {
+  it.each(PARTS)("%s lets no step fail quietly, and skips a command on no condition but the docs-only one (mutation: `if: always()` on the db tests → FAILS)", (id) => {
     const all = steps(job(id));
     expect(all.length).toBeGreaterThan(3);
     expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
@@ -417,82 +494,126 @@ describe("ci.yml's jobs", () => {
   // 2026-10-13: Kong 502s in bursts with keep-alive already off. The dump
   // that tells port exhaustion from a test defect runs only when the job has
   // already failed, as its LAST step, so it reads the stack as the failure
-  // left it and can change no gate's outcome. verify also prints the same
-  // port numbers right after `pnpm check`, pass or fail, so a green run is
-  // the baseline. Neither carries continue-on-error (the script exits 0 by
+  // left it and can change no gate's outcome. verify-db also prints the same
+  // port numbers right after its suites, pass or fail, so a green run is the
+  // baseline. Neither carries continue-on-error (the script exits 0 by
   // itself, which ci-stack-diagnostics.test.ts pins), and each is bounded.
+  // Only the parts that start a stack have one: verify-app and e2e-migrations
+  // have no stack to read.
   it.each([
-    ["verify", [DIAGNOSE_BASELINE, DIAGNOSE_FAILURE]],
-    ["e2e", [DIAGNOSE_FAILURE]],
-  ] as const)("%s's stack diagnostics: the failure dump last, on failure() only; verify's baseline straight after pnpm check, unless cancelled or docs-only; each bounded, nothing else on the step (mutation: drop the failure step, or give it `if: always()` → FAILS)", (id, expected) => {
+    ["verify-db", [DIAGNOSE_BASELINE, DIAGNOSE_FAILURE]],
+    ["e2e-shard", [DIAGNOSE_FAILURE]],
+    ["verify-app", []],
+    ["e2e-migrations", []],
+  ] as const)("%s's stack diagnostics: the failure dump last, on failure() only; verify-db's baseline straight after its last suite, unless cancelled or docs-only; each bounded, nothing else on the step (mutation: drop the failure step, or give it `if: always()` → FAILS)", (id, expected) => {
     const all = steps(job(id));
     expect(all.filter(isDiagnostic).map((s) => s.run)).toEqual(expected);
+    if (expected.length === 0) return;
     const last = all[all.length - 1];
     expect(last?.run).toBe(DIAGNOSE_FAILURE);
     expect(last?.if).toBe(FAILURE_IF);
     for (const s of all.filter(isDiagnostic)) {
       expect([...s.keys].sort(), s.run).toEqual(["if", "name", "run", "timeout-minutes"]);
     }
-    if (id === "verify") {
+    if (id === "verify-db") {
       const runs = all.map((s) => s.run);
       const baseline = all[runs.indexOf(DIAGNOSE_BASELINE)];
-      expect(runs.indexOf(DIAGNOSE_BASELINE)).toBe(runs.indexOf("pnpm check") + 1);
+      expect(runs.indexOf(DIAGNOSE_BASELINE)).toBe(runs.indexOf(WEB_LIVE_TESTS) + 1);
       expect(baseline?.if).toBe(BASELINE_IF);
     }
   });
 
-  it("verify runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, pnpm check, the stack baseline, the build and the failure dump, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
-    // pnpm check and the build are still exactly CLAUDE.md's gates; what is
-    // new is where their database comes from, and that the guard checks it
-    // after it exists and before anything uses it. The two diagnostics are
-    // not gates: read-only, exit 0 always (pinned above and in
-    // ci-stack-diagnostics.test.ts).
-    const runs = steps(job("verify")).flatMap((s) => (s.run ? [s.run] : []));
+  it("verify-db runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, the db suite, the web tests that need a database, the stack baseline and the failure dump, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
+    const runs = steps(job("verify-db")).flatMap((s) => (s.run ? [s.run] : []));
     expect(runs).toEqual([
       GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
       INSTALL_CLI, START_STACK, GUARD_LOCAL,
-      "pnpm check", DIAGNOSE_BASELINE, "pnpm --filter web build", DIAGNOSE_FAILURE,
+      DB_TESTS, WEB_LIVE_TESTS, DIAGNOSE_BASELINE, DIAGNOSE_FAILURE,
     ]);
   });
 
-  // e2e since 2026-10-08: the same stack as verify, started with the one
-  // difference e2e needs (PostgREST trusts the Clerk development instance its
-  // sign-ins come from), checked by the same guard, then seeded and driven.
-  // ORDER IS LOAD-BEARING: Playwright builds the app inside its own step
-  // (`pnpm build && pnpm start`), and NEXT_PUBLIC_SUPABASE_URL is baked in at
-  // build time, so the stack must be up, and its values in GITHUB_ENV, before
-  // that step. The migration check reads bis-ci, read-only, before anything
-  // else costs time. "|" is the Chromium install, a multi-line `run:`.
-  it("e2e runs exactly the guard, the docs-only decision, the migration check on bis-ci, the install, its own Clerk-trusting stack, the guard again on that stack, the seed of THAT stack, Chromium, Playwright and the failure dump, in that order (mutation: start the stack after Playwright, or without --trust-clerk-dev-instance → FAILS)", () => {
-    const runs = steps(job("e2e")).flatMap((s) => (s.run ? [s.run] : []));
+  // verify-app starts no stack and holds no Supabase value at all: its guard
+  // run is the before-local-stack one, and no step after it may start a
+  // stack. The build reads no database (only /_not-found prerenders; every
+  // other route is dynamic), so it needs none.
+  it("verify-app runs exactly the guard, the docs-only decision, the install, typecheck, lint, the web unit suite and the production build, in that order (mutation: move the build to verify-db → FAILS)", () => {
+    const runs = steps(job("verify-app")).flatMap((s) => (s.run ? [s.run] : []));
     expect(runs).toEqual([
-      GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_APPLIED, "pnpm install --frozen-lockfile",
-      INSTALL_CLI, `${START_STACK} --trust-clerk-dev-instance`, GUARD_LOCAL,
-      SEED_LOCAL, "|", "pnpm --filter web test:e2e", DIAGNOSE_FAILURE,
+      GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
+      "pnpm typecheck", "pnpm lint", WEB_UNIT_TESTS, "pnpm --filter web build",
     ]);
   });
 
-  // The docs-only gate. A docs-only push must still END each required job
-  // `success` on the head SHA, so the gate is a step, never a job-level `if:`
-  // (asserted above) and never a workflow path filter (asserted here).
+  // 2026-11-12: the ONE read of bis-ci, in a job of its own so it happens once
+  // per push rather than once per shard. It needs only bash and psql: no
+  // install, no stack.
+  it("e2e-migrations runs exactly the guard, the docs-only decision and the migration check, with the check's two values scoped to its step (mutation: drop the step, or move the check into e2e-shard → FAILS)", () => {
+    const all = steps(job("e2e-migrations"));
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_APPLIED]);
+    expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([expect.stringMatching(/^actions\/checkout@/)]);
+    const check = all.find((s) => s.run === MIGRATIONS_APPLIED);
+    expect(check?.if).toBe(DOCS_ONLY_IF);
+    expect(Object.keys(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED)).sort()).toEqual(["BIS_CI_SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"]);
+    // No other job runs it: verify's parts hold no CI-project value, and the
+    // shards would read bis-ci four times.
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "e2e-migrations")) {
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(MIGRATIONS_APPLIED);
+    }
+  });
+
+  // Each shard is a whole e2e run on its own stack: setup and teardown are
+  // Playwright DEPENDENCY projects, which it runs in every shard (checked
+  // against Playwright 1.62's loader and `--list`, 2026-11-12), and each shard
+  // builds the app with its own stack's URL baked in. ORDER IS LOAD-BEARING:
+  // Playwright builds the app inside its own step, and NEXT_PUBLIC_SUPABASE_URL
+  // is baked in at build time, so the stack must be up, and its values in
+  // GITHUB_ENV, before that step. "|" is the Chromium install, a multi-line
+  // `run:`.
+  it("e2e-shard runs exactly the guard, the docs-only decision, the install, its own Clerk-trusting stack, the guard again on that stack, the seed of THAT stack, Chromium, its shard of Playwright and the failure dump, in that order (mutation: start the stack after Playwright, or without --trust-clerk-dev-instance → FAILS)", () => {
+    const runs = steps(job("e2e-shard")).flatMap((s) => (s.run ? [s.run] : []));
+    expect(runs).toEqual([
+      GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
+      INSTALL_CLI, `${START_STACK} --trust-clerk-dev-instance`, GUARD_LOCAL,
+      SEED_LOCAL, "|", PLAYWRIGHT, DIAGNOSE_FAILURE,
+    ]);
+  });
+
+  // fail-fast OFF: one red shard must not cancel the others, or a run would
+  // name one failing spec and hide the rest. The shard total in the command
+  // is the matrix's length, so a shard cannot be added to one and not the
+  // other (a 4 in a 5-leg matrix is a Playwright error on leg 5; a 5 in a
+  // 4-leg matrix silently never runs the fifth shard's specs).
+  it("e2e-shard is a matrix of shards 1..N with fail-fast off, and each leg runs --shard=<its shard>/N (mutation: `fail-fast: true`, or shard list [1, 2, 3] → FAILS)", () => {
+    const lines = job("e2e-shard");
+    const at = lines.findIndex((l) => /^ {4}strategy:\s*$/.test(l));
+    expect(at).toBeGreaterThanOrEqual(0);
+    const block: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (l.trim() !== "" && !/^ {6}/.test(l)) break;
+      if (l.trim()) block.push(l.trim());
+    }
+    expect(block).toEqual(["fail-fast: false", "matrix:", `shard: [${Array.from({ length: SHARDS }, (_, i) => i + 1).join(", ")}]`]);
+  });
+
+  // The docs-only gate. A docs-only push must still END each required check
+  // `success` on the head SHA, so the decision is a step, never a job-level
+  // `if:` (asserted above) and never a workflow path filter (asserted here).
   // GitHub's docs: a workflow skipped by path filtering leaves its checks
   // "Pending" and a PR that requires them "will be blocked from merging";
-  // a job skipped by `if:` "will report its status as Success" — but its
-  // check run's conclusion reads `skipped`, which is not what this repo's
-  // head-SHA check-run reading expects to see.
+  // a job skipped by `if:` reads `skipped`, which the gate refuses.
   it("the workflow has no path, branch or tag filter, so every push gets both required checks (mutation: `paths-ignore: ['**/*.md']` under push → FAILS)", () => {
     const on = topLevelBlock(ciLines, "on").map((l) => l.trim()).filter(Boolean);
     expect(on).toEqual(["push:", "workflow_dispatch:"]);
   });
 
-  it.each(["verify", "e2e"])("%s decides docs-only third, right after the guard, on no condition of its own (mutation: give the decision step an `if:` → FAILS)", (id) => {
+  it.each(PARTS)("%s decides docs-only third, right after the guard, on no condition of its own (mutation: give the decision step an `if:` → FAILS)", (id) => {
     const third = steps(job(id))[2];
     expect(third?.run).toBe(SCOPE);
     expect(third?.id).toBe("scope");
     expect([...(third?.keys ?? [])].sort()).toEqual(["id", "name", "run"]);
   });
 
-  it.each(["verify", "e2e"])("%s skips nothing up to the decision, and every step after it on exactly the docs-only condition (mutation: drop the `if:` from one later step, or reword it to `== 'false'` → FAILS)", (id) => {
+  it.each(PARTS)("%s skips nothing up to the decision, and every step after it on exactly the docs-only condition (mutation: drop the `if:` from one later step, or reword it to `== 'false'` → FAILS)", (id) => {
     const all = steps(job(id));
     const decision = all.findIndex((s) => s.run === SCOPE);
     expect(decision).toBe(2);
@@ -501,66 +622,44 @@ describe("ci.yml's jobs", () => {
     expect(all.slice(0, decision + 1).filter((s) => s.keys.includes("if"))).toEqual([]);
     // The stack diagnostics carry their own conditions, pinned in their own case.
     const after = all.slice(decision + 1).filter((s) => !isDiagnostic(s));
-    expect(after.length).toBeGreaterThan(3);
+    expect(after.length).toBeGreaterThan(0);
     // `!= 'true'`, never `== 'false'`: when the decision writes nothing (a
     // crash, a renamed output), the condition still holds and the suites RUN.
     // The default is the full run.
     expect(after.map((s) => s.if)).toEqual(after.map(() => DOCS_ONLY_IF));
   });
 
-  it("the docs-only condition guards the Supabase-touching commands themselves: pnpm check, ci:seed and Playwright (mutation: drop the seed step's `if:`, or `if: always()` on pnpm check → FAILS)", () => {
+  it("the docs-only condition guards the Supabase-touching commands themselves: the stacks, the db suite, the live web tests, the migration check, ci:seed and Playwright (mutation: drop the seed step's `if:`, or `if: always()` on the db suite → FAILS)", () => {
     const guarded = (id: string, run: string) => {
       const all = steps(job(id));
       const at = all.findIndex((s) => s.run === run);
       expect(at, `${id}: ${run}`).toBeGreaterThan(all.findIndex((s) => s.run === SCOPE));
       expect(all[at]?.if, `${id}: ${run}`).toBe(DOCS_ONLY_IF);
     };
-    guarded("verify", "pnpm check");
-    guarded("e2e", MIGRATIONS_APPLIED);
-    guarded("e2e", `${START_STACK} --trust-clerk-dev-instance`);
-    guarded("e2e", SEED_LOCAL);
-    guarded("e2e", "pnpm --filter web test:e2e");
+    guarded("verify-db", START_STACK);
+    guarded("verify-db", DB_TESTS);
+    guarded("verify-db", WEB_LIVE_TESTS);
+    guarded("e2e-migrations", MIGRATIONS_APPLIED);
+    guarded("e2e-shard", `${START_STACK} --trust-clerk-dev-instance`);
+    guarded("e2e-shard", SEED_LOCAL);
+    guarded("e2e-shard", PLAYWRIGHT);
   });
 
-  // "Every new migration goes to the CI project FIRST" (CLAUDE.md). Since
-  // verify and then e2e moved onto stacks built from the branch's own files
-  // (2026-10-08), no gate runs on bis-ci, so nothing would notice a migration
-  // that never reached it. This step is that gate. It lives in e2e because e2e
-  // is a required check; verify must hold no CI-project value at all. It is a
-  // step of a required job rather than a job of its own, because a new job is
-  // not a required check until the ruleset is changed.
-  it("e2e checks every branch migration is on the CI project, with its own step-scoped values, before anything else costs time (mutation: drop the step, or move it after the stack → FAILS)", () => {
-    const all = steps(job("e2e"));
-    const runs = all.map((s) => s.run ?? "");
-    const check = runs.indexOf(MIGRATIONS_APPLIED);
-    expect(check, "migration check step").toBe(runs.indexOf(SCOPE) + 1);
-    expect(check).toBeLessThan(runs.indexOf(`${START_STACK} --trust-clerk-dev-instance`));
-    expect(all[check]?.if).toBe(DOCS_ONLY_IF);
-    expect(Object.keys(stepEnv(job("e2e"), MIGRATIONS_APPLIED)).sort()).toEqual(["BIS_CI_SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"]);
-    // verify must not: it holds no CI-project credential to check with.
-    expect(steps(job("verify")).map((s) => s.run)).not.toContain(MIGRATIONS_APPLIED);
+  it("only verify-db and e2e-shard start a stack (mutation: start one in verify-app → FAILS)", () => {
+    const starts = Object.keys(ciJobs).filter((id) =>
+      steps(job(id)).some((s) => s.run?.startsWith(START_STACK)));
+    expect(starts.sort()).toEqual([...STACK_PARTS].sort());
   });
 
-  // e2e left the shared project on 2026-10-08: two e2e runs, on two
-  // branches, now run side by side, each on its own stack. What they still
-  // share is the Clerk development instance, where each mints its own
-  // throwaway users and the sweep deletes only what is 30 minutes old
-  // (e2e/fixtures/stale.ts), so a run never touches another run's users.
-  it("e2e joins no job-level concurrency group, so branches' e2e runs go in parallel (mutation: re-add `group: e2e-ci-supabase` → FAILS)", () => {
-    expect(jobKeys(job("e2e"))).not.toContain("concurrency");
-    expect(job("e2e").filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
+  // e2e left the shared project on 2026-10-08 and verify the same day; since
+  // then no two runs share a database, so no job joins a repo-wide group. The
+  // shards (2026-11-12) are four more runs side by side: each mints its own
+  // Clerk users with Date.now() stamps, and the sweep deletes only what is 30
+  // minutes old (e2e/fixtures/stale.ts), so a shard never touches another's.
+  it.each(Object.keys(ciJobs))("%s joins no job-level concurrency group (mutation: re-add `group: e2e-ci-supabase` → FAILS)", (id) => {
+    expect(jobKeys(job(id))).not.toContain("concurrency");
+    expect(job(id).filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
-
-  // 2026-10-08: verify shares no database with any other run (its stack lives
-  // and dies in its own runner), so it waits for nobody. Its old repo-wide
-  // group, `verify-ci-supabase`, serialized every branch behind one cloud
-  // project. A branch's own stale run is still superseded by the
-  // workflow-level per-branch group, which this does not touch.
-  it("verify joins no job-level concurrency group, so branches' verify runs go in parallel (mutation: re-add `group: verify-ci-supabase` → FAILS)", () => {
-    expect(jobKeys(job("verify"))).not.toContain("concurrency");
-    expect(job("verify").filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
-  });
-
 
   it("a newer push supersedes only ITS OWN branch's older run, and a run on main is never superseded (mutation: group `ci-${{ github.ref }}` → main's runs replace each other → FAILS; cancel-in-progress `true` → FAILS)", () => {
     // Workflow level, one group per branch ref, cancelling: a second push to
@@ -572,6 +671,60 @@ describe("ci.yml's jobs", () => {
     expect(top.group).toBe("ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}");
     expect(top["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
     expect(Object.keys(top).sort()).toEqual(["cancel-in-progress", "group"]);
+  });
+});
+
+// `pnpm check` is CLAUDE.md's first gate, and until 2026-11-12 verify ran it
+// verbatim, so a terminal and CI could not disagree about "green". verify now
+// runs it in two parallel parts, so this pins that the parts together are
+// EXACTLY `pnpm check`: the root's recursive typecheck and lint, and every
+// workspace package's whole test suite, the web suite as its two vitest
+// projects, which partition it (vitest.config.ts). A new package with a
+// `test` script that CI does not run is red here, not silently missing.
+describe("verify's parts run exactly what `pnpm check` runs", () => {
+  const ROOT = new URL("../../../", import.meta.url);
+  const rootPkg = JSON.parse(read("../../../package.json")) as { scripts: Record<string, string> };
+  const verifyRuns = () => GATES.verify.flatMap((id) => steps(job(id)).flatMap((s) => (s.run ? [s.run] : [])));
+
+  /** Every workspace package: each `dir/*` glob in pnpm-workspace.yaml, expanded. */
+  const workspace = read("../../../pnpm-workspace.yaml").split("\n")
+    .flatMap((l) => /^\s*-\s*["']?([^"'\s]+)\/\*["']?\s*$/.exec(l)?.[1] ?? [])
+    .flatMap((dir) => fs.readdirSync(fileURLToPath(new URL(`${dir}/`, ROOT)))
+      .map((name) => fileURLToPath(new URL(`${dir}/${name}/package.json`, ROOT)))
+      .filter((p) => fs.existsSync(p)))
+    .map((p) => JSON.parse(fs.readFileSync(p, "utf8")) as { name: string; scripts?: Record<string, string> });
+
+  it("finds the workspace's packages (the parser is not reading nothing)", () => {
+    expect(workspace.map((p) => p.name)).toEqual(expect.arrayContaining(["@bis/db", "web"]));
+  });
+
+  it("`pnpm check` is still the root's typecheck, lint and test, each recursive over the workspace", () => {
+    expect(rootPkg.scripts.check).toBe("pnpm typecheck && pnpm lint && pnpm test");
+    expect(rootPkg.scripts.typecheck).toBe("pnpm -r --if-present typecheck");
+    expect(rootPkg.scripts.lint).toBe("pnpm -r --if-present lint");
+    expect(rootPkg.scripts.test).toBe("pnpm -r --if-present test");
+  });
+
+  it("verify runs the root's typecheck and lint, which cover every package by themselves (mutation: `pnpm --filter web typecheck` instead → FAILS)", () => {
+    expect(verifyRuns()).toContain("pnpm typecheck");
+    expect(verifyRuns()).toContain("pnpm lint");
+  });
+
+  it("web's test script is plain `vitest run`, so its projects are its whole suite", () => {
+    const web = workspace.find((p) => p.name === "web");
+    expect(web?.scripts?.test).toBe("vitest run");
+  });
+
+  it("verify runs every package's whole test suite, web's as each of its vitest projects, and no test command of any other shape (mutation: drop `pnpm --filter web test --project live`, or add a package with a test script → FAILS)", async () => {
+    const webConfig = (await import("../vitest.config")).default as { test?: { projects?: Array<{ test?: { name?: string } }> } };
+    const webProjects = (webConfig.test?.projects ?? []).map((p) => p.test?.name);
+    expect(webProjects).toEqual(["unit", "live"]);
+    const expected = workspace.filter((p) => p.scripts?.test).flatMap((p) =>
+      p.name === "web"
+        ? webProjects.map((project) => `pnpm --filter web test --project ${project}`)
+        : [`pnpm --filter ${p.name} test`]);
+    const testRuns = verifyRuns().filter((r) => /^pnpm (--filter \S+ )?test(\s|$)/.test(r));
+    expect([...testRuns].sort()).toEqual([...expected].sort());
   });
 });
 
@@ -899,9 +1052,11 @@ describe("production secrets are reachable only from jobs that declare the produ
     expect(needless).toEqual([]);
   });
 
-  it("the CI gates, verify and e2e, declare no environment at all and name no production secret (mutation: add `environment: production` to e2e, or `OPS_HEALTH_SECRET: ${{ secrets.OPS_HEALTH_SECRET }}` to its env → FAILS)", () => {
-    const gates = allJobs.filter((j) => j.where === "ci.yml:verify" || j.where === "ci.yml:e2e");
-    expect(gates).toHaveLength(2);
+  // Every ci.yml job since 2026-11-12: the gates and each of their parts.
+  it("no ci.yml job, the verify and e2e gates and their parts included, declares an environment or names a production secret (mutation: add `environment: production` to e2e-shard, or `OPS_HEALTH_SECRET: ${{ secrets.OPS_HEALTH_SECRET }}` to its env → FAILS)", () => {
+    const gates = allJobs.filter((j) => j.where.startsWith("ci.yml:"));
+    expect(gates.map((j) => j.where)).toEqual(expect.arrayContaining(
+      ["verify", "e2e", ...PARTS].map((id) => `ci.yml:${id}`)));
     expect(gates.filter((j) => j.anyEnvironment || j.production.length > 0).map((j) => j.where)).toEqual([]);
     expect(secretMentions(ciLines).names.filter((n) => PRODUCTION_SECRETS.has(n))).toEqual([]);
   });

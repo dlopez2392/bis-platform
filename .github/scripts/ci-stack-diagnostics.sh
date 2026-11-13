@@ -2,9 +2,10 @@
 # Prints what a CI job's local Supabase stack looked like, so a red run can
 # tell a Kong/PostgREST fault from a test defect. ci.yml runs it twice:
 #
-#   --baseline  in verify, right after `pnpm check`, pass or fail: the
-#               numbers a GREEN run leaves, to compare a red one against;
-#   --failure   the last step of verify and of e2e, on failure only.
+#   --baseline  in verify-db, right after its database tests, pass or fail:
+#               the numbers a GREEN run leaves, to compare a red one against;
+#   --failure   the last step of verify-db and of each e2e-shard, on failure
+#               only. (The two jobs that start a stack, since 2026-11-12.)
 #
 # Why (2026-10-13): bursts of Kong's own 502, "An invalid response was
 # received from the upstream server", came back with Kong's upstream

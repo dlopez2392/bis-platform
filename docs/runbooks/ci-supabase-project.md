@@ -7,7 +7,8 @@ for tests. **Since 2026-10-08 neither does:** each starts a throwaway
 Supabase stack inside its own runner (section 11), so neither shares a
 database with any other run or waits in a repo-wide queue, and e2e starts
 beside verify instead of after it. What CI still does with this project is
-READ it, once per e2e run: the check that it holds every migration of the
+READ it, once per push (the `e2e-migrations` part of the `e2e` check): the
+check that it holds every migration of the
 branch (section 6). Vercel Preview and the demo screenshot capture
 (`screenshots.yml`) still run on it, and so do local runs on danlo's machine
 (section 9). This runbook covers creating the CI project, bringing its schema
@@ -238,10 +239,13 @@ and a migration pushed to the CI project no longer turns other branches'
 
 **What enforces step 2 now.** Until that date, skipping step 2 turned
 `verify` red, because its db suite ran here. Neither job runs here any more,
-so the `e2e` job carries the gate, as a step of a required check: "Check
+so the `e2e` check carries the gate, through its `e2e-migrations` part (a
+job of its own since 2026-11-12: once the migration is pushed here,
+"Re-run failed jobs" re-runs only it and the `e2e` gate, about a minute,
+not the Playwright shards): "Check
 that the CI project has every migration in this branch"
-(`.github/scripts/ci-migrations-applied.sh`), the first step after the
-docs-only decision. It compares every
+(`.github/scripts/ci-migrations-applied.sh`), its step after the docs-only
+decision. It compares every
 `packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
 project's `supabase_migrations.schema_migrations` by version, and fails
 naming each file that is missing, with this section as the fix. A version
@@ -277,7 +281,7 @@ migration applied here by hand) before suspecting the code.
 2026-10-08 it is in the paid one, where projects do not pause. Kept for the
 day it moves back. Free projects pause after about a week without traffic
 [assumption: Supabase's published Free-plan behaviour]. Every CI push is traffic, so this bites only
-after a quiet week. Since 2026-10-08 the symptom in CI is the e2e job's step
+after a quiet week. Since 2026-10-08 the symptom in CI is the e2e-migrations job's step
 "Check that the CI project has every migration in this branch" failing with
 "Could not read the CI project's migration history" (psql's own message
 above it); `screenshots.yml`'s guard says "the project is paused". Nothing
@@ -377,7 +381,10 @@ user, and a trace can contain session cookies. The `playwright-traces` and
 `apps/web/ci/ci-workflow.test.ts` fails `pnpm check` if a workflow uploads
 `test-results/`, a trace, a Playwright report or a `.auth` state again.
 
-1. Read the e2e job's **Playwright** step log. The list reporter prints each
+1. Read the failing shard's **Playwright** step log (the `e2e` gate names
+   the part that failed; each shard's check run is `e2e-shard (N)`, and
+   `pnpm --filter web test:e2e --shard=N/4` replays that shard locally). The
+   list reporter prints each
    failing test, its assertion and the spec line.
 2. To step through it, reproduce locally (section 9's env, and the
    in-progress check above): `pnpm --filter web test:e2e`, or one spec with
@@ -403,7 +410,11 @@ every e2e waited in another, `e2e-ci-supabase`, because all of them shared
 Test Client One here.) A red verify still blocks a merge without `needs`:
 the ruleset requires both checks green on the head commit.
 
-What runs in verify, in order (each script's header has the reasons):
+Since 2026-11-12 `verify` and `e2e` are gate jobs (`.github/scripts/ci-gate.sh`)
+over parts that run in parallel; the parts that start a stack are
+`verify-db` and each of the four `e2e-shard` runners (`verify-app` and
+`e2e-migrations` have none). What runs in verify-db, in order (each script's
+header has the reasons):
 
 1. `ci-target-guard.sh --before-local-stack`: no Supabase value may be in
    scope yet, so verify never holds this project's secret key.
@@ -427,10 +438,11 @@ What runs in verify, in order (each script's header has the reasons):
 4. `ci-target-guard.sh --local-stack`: the API and DB URL must be on the
    runner's loopback, and the stack's REST API must answer.
 
-e2e runs the same steps, with three differences:
+Each e2e-shard runs the same steps, with these differences:
 
-- Its first step after the docs-only decision is the migration check on
-  this project (section 6), the one read of it in `ci.yml`.
+- The migration check on this project (section 6), the one read of it in
+  `ci.yml`, is not among them: it is the `e2e-migrations` job's, once per
+  push.
 - Its stack is started with `--trust-clerk-dev-instance`. e2e signs in
   through the Clerk development instance, and every in-account page reads
   through `userDb()`, which hands PostgREST the Clerk session token. The
@@ -459,7 +471,7 @@ Reading a red one:
   `supabase start` failing is Docker or an image pull on the runner; the
   bootstrap or a migration failing names the SQL error, and since the stack
   is built from the branch's own files, that error is the branch's.
-- **Check that verify (or e2e) targets its local Supabase stack** red with
+- **Check that verify-db (or e2e-shard) targets its local Supabase stack** red with
   404: the migrations did not reach PostgREST; with 403, the bootstrap's
   default privileges did not take effect before the migrations.
 - e2e's **Start a local Supabase stack that trusts the Clerk development
@@ -474,7 +486,9 @@ Reading a red one:
   and an RSA key with a Clerk kid. If the same commit works on Preview, that
   difference is the finding (section 6, "CI and Preview do not run on the
   same thing").
-- **pnpm check** red: as before, except that a db test can no longer fail
+- **packages/db tests** or **apps/web tests that need a database** red
+  (verify-db; `verify-app` runs the rest of `pnpm check` with no stack): as
+  before, except that a db test can no longer fail
   from another branch's run, so a failure that moves between re-runs is not
   contention any more. Read it as a real one.
 
