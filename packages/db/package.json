@@ -25,6 +25,8 @@
     "db:push:ci": "tsx src/ci/push-run.ts push",
     "db:migrations:ci": "tsx src/ci/push-run.ts list",
     "ci:sql": "tsx src/ci/sql-run.ts",
+    "types:gen": "tsx src/types-gen/run.ts write",
+    "types:check": "tsx src/types-gen/run.ts check",
     "ci:seed": "tsx src/ci-seed/run.ts",
     "ci:seed:local": "tsx src/ci-seed/run.ts --local-stack",
     "db:seed-demo": "tsx src/demo/run.ts",

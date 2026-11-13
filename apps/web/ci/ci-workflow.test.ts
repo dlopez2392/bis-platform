@@ -70,6 +70,12 @@ const GATE_SCRIPT = "bash .github/scripts/ci-gate.sh";
 /** verify-db's two suites: the db package's, and the web tests that need a database (vitest project `live`). */
 const DB_TESTS = "pnpm --filter @bis/db test";
 const WEB_LIVE_TESTS = "pnpm --filter web test --project live";
+/**
+ * verify-db's drift check on the generated database types: regenerates them
+ * from its own stack and fails if packages/db/src/database.types.ts differs
+ * (packages/db/src/types-gen). The URL is passed by the variable's NAME.
+ */
+const TYPES_CHECK = "pnpm --filter @bis/db types:check --db-url-env SUPABASE_DB_URL";
 /** verify-app's web suite: everything else (vitest project `unit`). */
 const WEB_UNIT_TESTS = "pnpm --filter web test --project unit";
 const SHARDS = 4;
@@ -523,11 +529,11 @@ describe("ci.yml's jobs", () => {
     }
   });
 
-  it("verify-db runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, the db suite, the web tests that need a database, the stack baseline and the failure dump, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
+  it("verify-db runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, the generated-types drift check, the db suite, the web tests that need a database, the stack baseline and the failure dump, in that order (mutation: drop the --local-stack guard step, or the types check → FAILS)", () => {
     const runs = steps(job("verify-db")).flatMap((s) => (s.run ? [s.run] : []));
     expect(runs).toEqual([
       GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
-      INSTALL_CLI, START_STACK, GUARD_LOCAL,
+      INSTALL_CLI, START_STACK, GUARD_LOCAL, TYPES_CHECK,
       DB_TESTS, WEB_LIVE_TESTS, DIAGNOSE_BASELINE, DIAGNOSE_FAILURE,
     ]);
   });
@@ -629,7 +635,7 @@ describe("ci.yml's jobs", () => {
     expect(after.map((s) => s.if)).toEqual(after.map(() => DOCS_ONLY_IF));
   });
 
-  it("the docs-only condition guards the Supabase-touching commands themselves: the stacks, the db suite, the live web tests, the migration check, ci:seed and Playwright (mutation: drop the seed step's `if:`, or `if: always()` on the db suite → FAILS)", () => {
+  it("the docs-only condition guards the Supabase-touching commands themselves: the stacks, the types check, the db suite, the live web tests, the migration check, ci:seed and Playwright (mutation: drop the seed step's `if:`, or `if: always()` on the db suite → FAILS)", () => {
     const guarded = (id: string, run: string) => {
       const all = steps(job(id));
       const at = all.findIndex((s) => s.run === run);
@@ -639,6 +645,7 @@ describe("ci.yml's jobs", () => {
     guarded("verify-db", START_STACK);
     guarded("verify-db", DB_TESTS);
     guarded("verify-db", WEB_LIVE_TESTS);
+    guarded("verify-db", TYPES_CHECK);
     guarded("e2e-migrations", MIGRATIONS_APPLIED);
     guarded("e2e-shard", `${START_STACK} --trust-clerk-dev-instance`);
     guarded("e2e-shard", SEED_LOCAL);

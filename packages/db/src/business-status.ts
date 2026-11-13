@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Tables } from "./database.types";
 import { emit } from "./events";
 import { readAccountTimezone } from "./automation-settings";
 
@@ -136,9 +137,8 @@ export async function readHoursChain(db: SupabaseClient, accountId: string): Pro
  *  ever book — a caller at the cap should treat its count as "at least this many", never as exact. */
 export const CLOSURE_APPOINTMENTS_LIMIT = 200;
 
-type ClosureAppointmentRow = {
-  id: string; contact_id: string; starts_at: string; ends_at: string; closure_kept_at: string | null;
-  contacts: { first_name: string | null; last_name: string | null } | null;
+type ClosureAppointmentRow = Pick<Tables<"bookings">, "id" | "contact_id" | "starts_at" | "ends_at" | "closure_kept_at"> & {
+  contacts: Pick<Tables<"contacts">, "first_name" | "last_name"> | null;
 };
 
 function mapClosureAppointmentRows(rows: readonly ClosureAppointmentRow[]): ClosureAppointment[] {
@@ -199,7 +199,7 @@ export async function countHeldByBooking(
     .eq("account_id", accountId).eq("status", "held")
     .in("subject_key", bookingIds.map((i) => `booking:${i}`));
   if (error) throw new Error(`countHeldByBooking failed: ${error.message}`);
-  for (const r of (data ?? []) as { subject_key: string }[]) {
+  for (const r of (data ?? []) as Pick<Tables<"automation_log">, "subject_key">[]) {
     const id = r.subject_key.slice("booking:".length);
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
@@ -230,7 +230,7 @@ export async function ensureClosureTask(db: SupabaseClient, accountId: string,
     assigned_to: null, created_by: input.createdBy, closure_kind: input.kind, closure_on: input.on,
   }).select("id").single();
   if (!error && data) {
-    const id = (data as { id: string }).id;
+    const id = (data as Pick<Tables<"tasks">, "id">).id;
     await emit(db, accountId, "task.created", input.createdBy, { taskId: id, contactId: null }, "user");
     return { id, created: true };
   }
@@ -238,7 +238,7 @@ export async function ensureClosureTask(db: SupabaseClient, accountId: string,
   const { data: found, error: readErr } = await db.from("tasks").select("id")
     .eq("account_id", accountId).eq("closure_kind", input.kind).eq("closure_on", input.on).maybeSingle();
   if (readErr || !found) throw new Error(`ensureClosureTask: already there but unreadable: ${readErr?.message ?? "no row"}`);
-  return { id: (found as { id: string }).id, created: false };
+  return { id: (found as Pick<Tables<"tasks">, "id">).id, created: false };
 }
 
 /** service_role. Deletes the task only while it is open (completed_at null) and still a closure To-do. */
@@ -287,7 +287,7 @@ export async function listBusinessStatusChanges(db: SupabaseClient, accountId: s
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
   if (error) throw new Error(`listBusinessStatusChanges failed: ${error.message}`);
-  return ((data ?? []) as { payload: unknown; created_at: string }[]).reverse().map((r) => {
+  return ((data ?? []) as Pick<Tables<"events">, "payload" | "created_at">[]).reverse().map((r) => {
     const p = (r.payload !== null && typeof r.payload === "object" ? r.payload : {}) as Record<string, unknown>;
     const to = str(p.to);
     return { at: r.created_at, from: str(p.from), to: to !== null && STATES.includes(to) ? (to as BusinessState) : null, until: str(p.until) };

@@ -66,7 +66,10 @@ name: CI
 #           "green" means (ci-workflow.test.ts pins that the parts together
 #           are `pnpm check`, package by package).
 #     verify-db   its own stack, then the packages/db suite and the web tests
-#                 that need a database (vitest project `live`).
+#                 that need a database (vitest project `live`). One check
+#                 beyond `pnpm check` (2026-11-13), because it needs the
+#                 stack: the checked-in database types must be what the
+#                 migrations generate (`types:check`).
 #     verify-app  no stack and no Supabase value at all: typecheck, lint, the
 #                 rest of the web suite (vitest project `unit`), the build.
 #           The guard runs and the stack are preflights, not gates; the stack
@@ -241,6 +244,20 @@ jobs:
       - name: Check that verify-db targets its local Supabase stack
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-target-guard.sh --local-stack
+
+      # packages/db/src/database.types.ts must be exactly what this branch's
+      # migrations generate. Regenerates from this part's own stack with the
+      # same generator `pnpm --filter @bis/db types:gen` uses (Supabase's
+      # postgres-meta, pinned; packages/db/src/types-gen/plan.ts) and fails,
+      # naming the first differing line and that command, if they differ.
+      # Before the suites: 8-9s measured (image pull included), against
+      # several minutes. The URL is passed by its variable's name, so pnpm's
+      # failure line cannot print it, and whatever docker or postgres-meta
+      # echoes back (postgres-meta prints a URL it cannot parse whole) is
+      # redacted before it is shown (plan.ts redactSecrets).
+      - name: Check the generated database types against the migrations
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm --filter @bis/db types:check --db-url-env SUPABASE_DB_URL
 
       # `pnpm check`'s test half, the part that needs a database: the whole
       # packages/db suite, then the web tests that need one (vitest project

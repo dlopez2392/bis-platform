@@ -210,7 +210,9 @@ reference for what the files say.
 
 CI first, then production.
 
-1. bis-db-schema writes `NNNN_*.sql` and its tests, as always.
+1. bis-db-schema writes `NNNN_*.sql` and its tests, as always, then
+   regenerates the database types in the same commit:
+   `pnpm --filter @bis/db types:gen` (below).
 2. On the migration's branch, with main merged in: `-f step=push-dry-run`
    dispatched with `--ref <branch>` must list exactly the one new file; then
    `-f step=push` on the same ref.
@@ -274,6 +276,40 @@ Supabase's hosted services. This project and production are hosted. When CI
 and Preview disagree about the same commit, read it as an ENVIRONMENT finding
 first (versions, gateway behaviour, a grant or bootstrap difference, a
 migration applied here by hand) before suspecting the code.
+
+### The generated database types (since 2026-11-13)
+
+`packages/db/src/database.types.ts` is Supabase's `gen types typescript`
+shape (`Database`, `Tables<"x">`, `TablesInsert<"x">`, `TablesUpdate<"x">`)
+for the `public` and `app` schemas, generated from the migrations and
+checked in. Regenerate it with EVERY migration, and whenever a migration on
+main lands in your branch:
+
+    pnpm --filter @bis/db types:gen
+
+It needs Docker and nothing else: it starts a throwaway database from CI's
+own Postgres image (`supabase/postgres:17.6.1.143`, the CLI's), applies the
+bootstrap and every migration in order, runs Supabase's generator
+(`postgres-meta` v0.96.6, the one `supabase gen types` runs in CLI 2.109.1;
+both images pinned by digest in `packages/db/src/types-gen/plan.ts`), writes
+the file and removes the database. About two minutes. It reads no `.env` and
+no Supabase project. `--db-url-env NAME` generates from an existing database
+whose URL is in the variable NAME instead; production's is refused.
+
+verify-db runs `pnpm --filter @bis/db types:check --db-url-env SUPABASE_DB_URL`
+on its own stack (section 11), the same generator, and fails if the file is
+not byte for byte what the branch's migrations produce, quoting the first
+differing line and naming the command above. A red here is fixed by running
+it and committing the result, never by editing the file by hand.
+`types:check` (no flag) runs the same check locally. On drift it saves what it
+generated to a `bis-types-*` folder in the OS temp directory and names it, so
+you can diff it; a passing check writes nothing there. Delete the folder when
+you are done. Anything docker or postgres-meta prints back is shown with URL
+credentials and `password=` values redacted.
+
+Bumping the Supabase CLI (`.github/scripts/ci-supabase-cli.sh`) also moves
+`POSTGRES_IMAGE` and the postgres-meta digest in `plan.ts` to that release's
+images, then `types:gen`.
 
 ## 7. Restore from a pause
 
@@ -486,6 +522,10 @@ Reading a red one:
   and an RSA key with a Clerk kid. If the same commit works on Preview, that
   difference is the finding (section 6, "CI and Preview do not run on the
   same thing").
+- **Check the generated database types against the migrations** red
+  (verify-db): the branch changed the schema without regenerating
+  `database.types.ts`, or main's did and the branch has not caught up.
+  Run `pnpm --filter @bis/db types:gen` and commit (section 6).
 - **packages/db tests** or **apps/web tests that need a database** red
   (verify-db; `verify-app` runs the rest of `pnpm check` with no stack): as
   before, except that a db test can no longer fail

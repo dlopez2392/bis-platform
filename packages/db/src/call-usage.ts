@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { TablesInsert } from "./database.types";
 
 /**
  * One call's OpenAI usage (0116's `call_usage`), recorded once when the call finishes, so BIS can measure what a
@@ -33,18 +34,20 @@ export type CallUsageInput = {
 };
 
 export async function recordCallUsage(db: SupabaseClient, input: CallUsageInput): Promise<"recorded" | "duplicate"> {
+  // Typed from the generated schema: a renamed or retyped call_usage column fails tsc here, not at run time.
+  const row: TablesInsert<"call_usage"> = {
+    call_id: input.callId, account_id: input.accountId, model: input.model, responses: input.responses,
+    input_text_tokens: input.inputTextTokens, input_audio_tokens: input.inputAudioTokens,
+    input_cached_text_tokens: input.inputCachedTextTokens, input_cached_audio_tokens: input.inputCachedAudioTokens,
+    output_text_tokens: input.outputTextTokens, output_audio_tokens: input.outputAudioTokens,
+    transcribe_model: input.transcribeModel ?? null,
+    transcribe_input_tokens: input.transcribeInputTokens ?? null,
+    transcribe_output_tokens: input.transcribeOutputTokens ?? null,
+    transcribe_seconds: input.transcribeSeconds ?? null,
+    est_cost_microusd: input.estCostMicrousd,
+  };
   const { data, error } = await db.from("call_usage")
-    .upsert({
-      call_id: input.callId, account_id: input.accountId, model: input.model, responses: input.responses,
-      input_text_tokens: input.inputTextTokens, input_audio_tokens: input.inputAudioTokens,
-      input_cached_text_tokens: input.inputCachedTextTokens, input_cached_audio_tokens: input.inputCachedAudioTokens,
-      output_text_tokens: input.outputTextTokens, output_audio_tokens: input.outputAudioTokens,
-      transcribe_model: input.transcribeModel ?? null,
-      transcribe_input_tokens: input.transcribeInputTokens ?? null,
-      transcribe_output_tokens: input.transcribeOutputTokens ?? null,
-      transcribe_seconds: input.transcribeSeconds ?? null,
-      est_cost_microusd: input.estCostMicrousd,
-    }, { onConflict: "call_id", ignoreDuplicates: true })
+    .upsert(row, { onConflict: "call_id", ignoreDuplicates: true })
     .select("call_id");
   if (error) throw new Error(`recordCallUsage failed: ${error.message}`);
   return (data ?? []).length === 1 ? "recorded" : "duplicate";

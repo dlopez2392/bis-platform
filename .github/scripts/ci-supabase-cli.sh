@@ -21,6 +21,7 @@
 { set +x; } 2>/dev/null
 set -euo pipefail
 
+# A bump also moves POSTGRES_IMAGE and the postgres-meta digest in packages/db/src/types-gen/plan.ts, then `types:gen`.
 SUPABASE_CLI_VERSION="2.109.1"
 SUPABASE_CLI_SHA256="36d87b7fe6b4bcfe89ac47a4354e526cff22480224de426d7b370f6934556976"
 

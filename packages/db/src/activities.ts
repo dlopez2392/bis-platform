@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Tables } from "./database.types";
 import { emit, type ActorType } from "./events";
 import { readConsentEvent, readConsentHistory, newestDecidingRow } from "./consent";
 import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
@@ -105,7 +106,7 @@ export async function completeTask(
   const { data: linked, error: readError } = await db.from("tasks")
     .select("consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
   if (readError) throw new Error(readError.message);
-  const eventId = (linked as { consent_event_id: string | null } | null)?.consent_event_id ?? null;
+  const eventId = (linked as Pick<Tables<"tasks">, "consent_event_id"> | null)?.consent_event_id ?? null;
   if (eventId && await holdStillOpen(ledger, accountId, eventId)) throw new HoldUndecidedError();
   const { error } = await db.from("tasks")
     .update({ completed_at: new Date().toISOString() })
@@ -178,7 +179,7 @@ export async function ensureConsentTask(
   const { data: found, error: readErr } = await db.from("tasks")
     .select("id").eq("account_id", accountId).eq("consent_event_id", input.consentEventId).maybeSingle();
   if (readErr || !found) throw new Error(`ensureConsentTask: already there but unreadable: ${readErr?.message ?? "no row"}`);
-  return { id: (found as { id: string }).id, created: false };
+  return { id: (found as Pick<Tables<"tasks">, "id">).id, created: false };
 }
 
 /**
@@ -197,7 +198,7 @@ export async function completeTasksForConsentEvents(
     .eq("account_id", accountId).in("consent_event_id", [...eventIds]).is("completed_at", null)
     .select("id");
   if (error) throw new Error(`completeTasksForConsentEvents failed: ${error.message}`);
-  const ids = ((data ?? []) as { id: string }[]).map((r) => r.id);
+  const ids = ((data ?? []) as Pick<Tables<"tasks">, "id">[]).map((r) => r.id);
   for (const taskId of ids) await emit(db, accountId, "task.completed", actorId, { taskId }, actorType);
   return ids;
 }
@@ -213,7 +214,7 @@ export async function reopenTasks(
     .eq("account_id", accountId).in("id", [...ids])
     .select("id");
   if (error) throw new Error(`reopenTasks failed: ${error.message}`);
-  for (const r of (data ?? []) as { id: string }[]) await emit(db, accountId, "task.reopened", actorId, { taskId: r.id }, actorType);
+  for (const r of (data ?? []) as Pick<Tables<"tasks">, "id">[]) await emit(db, accountId, "task.reopened", actorId, { taskId: r.id }, actorType);
 }
 
 /** A hold's To-do is closed by deciding the hold (Confirm stop / Not a stop), never by "Done" (review R3-I1). */
@@ -246,7 +247,7 @@ export async function readTaskContact(
   const { data, error } = await db.from("tasks")
     .select("contact_id, consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
   if (error) throw new Error(`readTaskContact failed: ${error.message}`);
-  const row = data as { contact_id: string | null; consent_event_id: string | null } | null;
+  const row = data as Pick<Tables<"tasks">, "contact_id" | "consent_event_id"> | null;
   return row ? { contactId: row.contact_id, consentEventId: row.consent_event_id } : null;
 }
 
