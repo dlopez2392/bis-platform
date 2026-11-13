@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loggableError } from "./loggable-error";
+import { loggableError, loggablePhone } from "./loggable-error";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -90,5 +90,35 @@ describe("loggableError: phone numbers", () => {
   it("keeps the class, Stripe code and status prefix untouched", () => {
     const e = Object.assign(new Error("No such phone +15551234567"), { type: "StripeInvalidRequestError", code: "resource_missing", statusCode: 404 });
     expect(loggableError(e)).toBe("StripeInvalidRequestError code=resource_missing status=404: No such phone [phone]");
+  });
+});
+
+describe("loggablePhone: a number as a log line may carry it", () => {
+  it("keeps +1 and the last two digits of a US number, one dot per hidden digit", () => {
+    expect(loggablePhone("+19565550999")).toBe("+1••••••••99");
+  });
+
+  it("hides every digit but the last two of a number outside +1, since its country code's length is not known here", () => {
+    expect(loggablePhone("+525512345678")).toBe("+••••••••••78");
+  });
+
+  it("says unknown for no number at all", () => {
+    expect(loggablePhone(null)).toBe("unknown");
+    expect(loggablePhone(undefined)).toBe("unknown");
+    expect(loggablePhone("")).toBe("unknown");
+  });
+
+  it("never echoes a value that is not a plain number (a SIP URI, a forged log line, a short code)", () => {
+    expect(loggablePhone("sip:+19565550999@sip.example")).toBe("[phone]");
+    expect(loggablePhone("+1956\nfake line")).toBe("[phone]");
+    expect(loggablePhone("911")).toBe("[phone]");
+  });
+
+  it("never leaves more than the last two digits of any accepted number in the result", () => {
+    for (const n of ["+19565550999", "19565550999", "+447911123456", "+12345678"]) {
+      const shown = loggablePhone(n).replace(/\D/g, "");
+      expect(shown.length).toBeLessThanOrEqual(n.startsWith("+1") ? 3 : 2);
+      expect(n.endsWith(shown.slice(-2))).toBe(true);
+    }
   });
 });

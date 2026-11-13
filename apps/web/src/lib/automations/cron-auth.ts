@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { readSecret } from "@/lib/fixture-secrets";
 
 /**
  * The one cron auth check (F-196): the dispatcher, both pass routes and
@@ -9,7 +10,8 @@ import { timingSafeEqual } from "node:crypto";
  *  - "denied": the `authorization` header is not exactly `Bearer ${secret}`
  *    (401). Vercel attaches that header to its own cron requests, and the
  *    dispatcher attaches it to every pass request.
- * Both are decided before the caller runs a single query.
+ * Both are decided before the caller runs a single query. In production a
+ * value published in this repo reads as unset (lib/fixture-secrets.ts).
  *
  * Constant-time compare, mirroring guards.ts's verifyRenderToken: a straight
  * `!==` leaks how many leading bytes matched via response timing. Length is
@@ -18,7 +20,7 @@ import { timingSafeEqual } from "node:crypto";
 export type CronAuth = "ok" | "unset" | "denied";
 
 export function cronAuthorized(req: Request, env: NodeJS.ProcessEnv = process.env): CronAuth {
-  const secret = env.CRON_SECRET;
+  const secret = readSecret("CRON_SECRET", env);
   if (!secret) return "unset";
   const got = Buffer.from(req.headers.get("authorization") ?? "");
   const want = Buffer.from(`Bearer ${secret}`);

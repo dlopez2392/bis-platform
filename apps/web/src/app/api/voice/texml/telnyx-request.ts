@@ -8,6 +8,8 @@
 
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
+import { loggablePhone } from "@/lib/loggable-error";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { FIELD_NAME, ATTESTATION_FIELD, MAX_ATTESTATION, shownValue } from "@/lib/voice/attestation-log";
 
@@ -31,10 +33,11 @@ export type TelnyxForm =
  * `tag` prefixes every log line, so the main route's lines read exactly as
  * they always have (`texml: rejected request (missing-headers), …`).
  *
- * `logCaller` (default true) keeps the claimed caller in those refusal lines.
- * The owner-line PIN route passes false (F-032 Task 9 review m-6): its callers
- * are a business's own team, and its logs never carry their numbers. The
- * claimed called number, a business line, stays.
+ * `logCaller` (default true) keeps the claimed caller in those refusal lines,
+ * masked to its last two digits (`loggablePhone`): a caller's number is
+ * personal data. The owner-line PIN route passes false (F-032 Task 9 review
+ * m-6): its callers are a business's own team, and its logs carry not even
+ * that. The claimed called number, a business line, stays whole.
  */
 export async function readTelnyxForm(
   req: Request, tag: string, opts: { logCaller?: boolean } = {},
@@ -46,7 +49,11 @@ export async function readTelnyxForm(
     console.error(`${tag}: failed to read request body: ${String(e)}`);
   }
   const form = new URLSearchParams(rawBody);
-  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
+  // A key whose private half is published in this repo is refused in
+  // production, never read as unset (unset would accept unsigned requests).
+  const telnyx = telnyxPublicKey();
+  if (telnyx.kind === "refused") return { ok: false, response: new NextResponse(null, { status: 403 }) };
+  const publicKey = telnyx.kind === "set" ? telnyx.key : undefined;
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
     const signatureB64 = req.headers.get("telnyx-signature-ed25519");
@@ -55,7 +62,8 @@ export async function readTelnyxForm(
     // unauthenticated here and raw interpolation would let a prober forge log
     // lines. Anything that is not a real phone number is logged as "none".
     const safeTo = e164Of(form.get("To") || null) ?? "none";
-    const safeFrom = e164Of(form.get("From") || null) ?? "none";
+    const claimedFrom = e164Of(form.get("From") || null);
+    const safeFrom = claimedFrom ? loggablePhone(claimedFrom) : "none";
     const claimed = opts.logCaller === false ? `claimedTo ${safeTo}` : `claimedTo ${safeTo}, claimedFrom ${safeFrom}`;
     if (!timestamp || !signatureB64) {
       console.error(`${tag}: rejected request (missing-headers), ${claimed}`);

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST, OWNER_LINE_LOOKUP_DEADLINE_MS } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
 import type { BillingStanding } from "@bis/db";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeySignature } from "@/lib/voice/testing/published-telnyx-key";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -955,7 +956,7 @@ describe("the model-down fallback drill (lib/voice/fallback-drill.ts)", () => {
     const xml = await (await call()).text();
     expect(xml).toContain("<Sip>sip:fallback-drill@fallback-drill.invalid;transport=tls?");
     expect(xml).not.toContain("sip.api.openai.com");
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("texml FALLBACK DRILL on +19565550999 from +19565550111"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("texml FALLBACK DRILL on +19565550999 from +1••••••••11"));
   });
 
   it("everything but the address is what a real call carries: the same token on the SIP URI and the action, and a ticket that verifies for this account (mutation: drop the ticket on a drill → FAILS)", async () => {
@@ -1310,7 +1311,7 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
     expect(xml).not.toContain("<Sip>");
     // No input: a goodbye and a hang-up after the question, never dead air.
     expect(xml).toMatch(/<\/Gather><Say voice=\"Polly.Joanna-Neural\">[^<]+<\/Say><Hangup\/><\/Response>$/);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen asking ${LINE}, caller ${STRANGER} to press 1 (first-time), accountId ${ACCOUNT}`));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen asking ${LINE}, caller +1••••••••44 to press 1 (first-time), accountId ${ACCOUNT}`));
   });
 
   it("the action URL names the profile's languages and the account, both escaped into the attribute", async () => {
@@ -1449,7 +1450,7 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 9, answeredCalls: 9 });
     const xml = await (await call()).text();
     expect(xml).toContain("<Gather");
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen FORCED on ${LINE} from ${STRANGER}`));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen FORCED on ${LINE} from +1••••••••44`));
   });
 
   it("VOICE_SCREEN_ALWAYS_FROM outranks the handset exemption — that is how the owner proves it from his own phone", async () => {
@@ -2350,5 +2351,112 @@ describe("ownerLineStillOffered: today's states re-read before an owner pass is 
     expect(await offered()).toBe(false);
     expect(logged()).toContain(`texml owner line PIN ok but today's states could not be read (Error) — today's path, no owner pass, accountId ${ACCOUNT}`);
     expect(logged()).not.toContain(CELL.slice(2));
+  });
+});
+
+describe("texml route — a caller's number reaches the log masked, never in full", () => {
+  const CALLER = "+19562921696";
+  const MASKED = "+1••••••••96";
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+  const logged = (): string =>
+    [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => c.map(String).join(" ")).join("\n");
+
+  it("refuse-unknown: the caller is masked; the called line, which has no account to name it, stays whole", async () => {
+    lookupMock.mockResolvedValue(null);
+    await texmlXml({ To: LIVE_TO, From: CALLER });
+    expect(logged()).toContain(`texml declined refuse-unknown for ${LIVE_TO}, caller ${MASKED}`);
+    expect(logged()).not.toContain(CALLER);
+  });
+
+  it("refuse-disabled: the caller is masked", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false });
+    await texmlXml({ To: LIVE_TO, From: CALLER });
+    expect(logged()).toContain(`texml declined refuse-disabled for ${LIVE_TO}, caller ${MASKED}, accountId a1`);
+    expect(logged()).not.toContain(CALLER);
+  });
+
+  it("the daily cap: the caller is masked", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    await texmlXml({ To: LIVE_TO, From: CALLER });
+    expect(logged()).toContain("texml declined cap");
+    expect(logged()).toContain(`for ${LIVE_TO}, caller ${MASKED}, accountId a1`);
+    expect(logged()).not.toContain(CALLER);
+  });
+
+  it("a repeat offender: the caller is masked", async () => {
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    await texmlXml({ To: LIVE_TO, From: CALLER });
+    expect(logged()).toContain(`texml declined blocked (repeat-spam) for ${LIVE_TO}, caller ${MASKED}, accountId a1`);
+    expect(logged()).not.toContain(CALLER);
+  });
+
+  it("a refused unsigned request: the claimed caller is masked", async () => {
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const raw = new URLSearchParams({ To: LIVE_TO, From: CALLER }).toString();
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(res.status).toBe(403);
+    expect(logged()).toContain(`texml: rejected request (missing-headers), claimedTo ${LIVE_TO}, claimedFrom ${MASKED}`);
+    expect(logged()).not.toContain(CALLER);
+  });
+
+  it("VOICE_FORWARD_TO: the forward target is masked too (it is usually someone's mobile)", async () => {
+    process.env.VOICE_FORWARD_TO = "+19565550177";
+    try {
+      await texmlXml({ To: LIVE_TO, From: CALLER });
+    } finally {
+      delete process.env.VOICE_FORWARD_TO;
+    }
+    expect(logged()).toContain("texml FORWARDING to +1••••••••77 — Sofía is bypassed");
+    expect(logged()).not.toContain("+19565550177");
+  });
+});
+
+describe("texml route — the Telnyx test key whose private half is in this repo", () => {
+  const raw = new URLSearchParams({ To: LIVE_TO, From: "+19562921696" }).toString();
+  const signedPost = () => POST(new Request("https://x.example/api/voice/texml", {
+    method: "POST", body: raw,
+    headers: { "content-type": "application/x-www-form-urlencoded", ...publishedKeySignature(raw) },
+  }));
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it("in production a request VALIDLY signed with it is refused 403, and nothing is looked up", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const res = await signedPost();
+    expect(res.status).toBe(403);
+    expect(lookupMock).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("TELNYX_PUBLIC_KEY"));
+  });
+
+  it("in production a GET is refused too (403), never answered as if no key were set", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const res = await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}`));
+    expect(res.status).toBe(403);
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("on Preview the same signed request is accepted and dialled", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const res = await signedPost();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<Dial");
   });
 });

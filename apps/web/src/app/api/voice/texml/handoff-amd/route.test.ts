@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { POST } from "./route";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeyFormPost } from "@/lib/voice/testing/published-telnyx-key";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -121,5 +122,22 @@ describe("voice texml handoff-amd route", () => {
     const res = await POST(req("tok_abc", { AnsweredBy: "human" }));
     expect(res.status).toBe(403);
     expect(setTransferAnsweredByMock).not.toHaveBeenCalled();
+  });
+
+  it("the Telnyx test key whose private half is in this repo: refused in production even validly signed, accepted on Preview", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const url = "https://x.example/api/voice/texml/handoff-amd?t=tok_abc";
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+    try {
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect((await POST(publishedKeyFormPost(url, { AnsweredBy: "human" }))).status).toBe(403);
+      expect(getCallByHandoffTokenMock).not.toHaveBeenCalled();
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect((await POST(publishedKeyFormPost(url, { AnsweredBy: "human" }))).status).not.toBe(403);
+      expect(getCallByHandoffTokenMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
   });
 });

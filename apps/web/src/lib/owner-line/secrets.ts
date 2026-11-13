@@ -14,6 +14,7 @@
 // THE CALL-IN CODE: sha256 hex, exactly like the alert-phone code (packages/db/src/alert-phone-verification.ts:68),
 // because a 10-minute, 3-attempt code is defended by its limits.
 import { createHash, createHmac, randomBytes, randomInt, scrypt } from "node:crypto";
+import { readSecret } from "@/lib/fixture-secrets";
 
 const N = 2 ** 17;
 const R = 8;
@@ -39,12 +40,13 @@ export function checkPin(pin: string): { ok: true } | { ok: false; reason: PinRe
 }
 
 export function pinPepperConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.OWNER_LINE_PIN_PEPPER?.trim().length ?? 0) >= PEPPER_MIN;
+  return (readSecret("OWNER_LINE_PIN_PEPPER", env)?.trim().length ?? 0) >= PEPPER_MIN;
 }
 
 function peppered(pin: string, env: NodeJS.ProcessEnv): string {
-  // Two messages, neither carrying the value or its length.
-  const pepper = env.OWNER_LINE_PIN_PEPPER?.trim();
+  // Two messages, neither carrying the value or its length. In production a
+  // value published in this repo reads as unset (lib/fixture-secrets.ts).
+  const pepper = readSecret("OWNER_LINE_PIN_PEPPER", env)?.trim();
   if (!pepper) throw new Error("owner line: OWNER_LINE_PIN_PEPPER is not set");
   if (pepper.length < PEPPER_MIN) {
     throw new Error(`owner line: OWNER_LINE_PIN_PEPPER is too short (it needs at least ${PEPPER_MIN} characters)`);
