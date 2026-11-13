@@ -123,7 +123,7 @@ describe("the AI summary route (spec 4.2)", () => {
     expect(aiGateCheckMock.mock.calls[0]![1]).toMatchObject({ accountId: A, monthKey: expect.stringMatching(/^\d{4}-\d{2}$/), dayKey: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(claimMock).toHaveBeenCalledWith(SERVICE, { accountId: A, contactId: C, language: "en", digest: "a".repeat(64), force: false });
     expect(aiCompleteMock.mock.calls[0]![0]).toBe(SERVICE);
-    expect(aiCompleteMock.mock.calls[0]![1]).toMatchObject({ accountId: A, feature: "record_summary", model: "gpt-4o-mini", maxTokens: 400, timeoutMs: 10_000, timezone: "America/Chicago", language: "en", ref: `contact ${C}` });
+    expect(aiCompleteMock.mock.calls[0]![1]).toMatchObject({ accountId: A, feature: "record_summary", model: "gpt-6-luna", maxTokens: 400, timeoutMs: 10_000, timezone: "America/Chicago", language: "en", ref: `contact ${C}` });
     expect(fx.order.indexOf("getContact request")).toBeGreaterThanOrEqual(0);
     expect(fx.order.indexOf("getContact request")).toBeLessThan(fx.order.indexOf("serviceDb"));
   });

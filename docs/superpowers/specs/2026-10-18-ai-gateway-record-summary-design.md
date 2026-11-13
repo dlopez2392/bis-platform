@@ -270,3 +270,5 @@ On the per-run fixture account, never Test Client One or any live account: open 
   - **8a-1:** a production smoke on the test account (the smoke-identities rule): one real call, then the ledger shows one row per completion with tokens and cost and no text; turn the account's AI off, call again, and the call summary is the fact line; turn it back on.
   - **8a-2:** open an agency-owned customer in English and in Spanish, check both paragraphs and the label, Regenerate once, and read the day's counter on the Settings card.
 - **Tracker:** item 8's S-15 and F-020 (part) rows → `done` after 8a-2; S-14, F-019 and F-022 stay open for 8b and 8c.
+
+**Amended 2026-11-10 (model migration):** every text call named here as `gpt-4o-mini` now uses `gpt-6-luna` through `TEXT_MODEL` in `apps/web/src/lib/ai/models.ts`, with `reasoning_effort: "none"` and `max_completion_tokens` in place of `max_tokens`. OpenAI shuts gpt-4o-mini down on 2027-01-14. Price read 2026-11-10: $0.10 input / $0.50 output per million tokens (`lib/ai/prices.ts`).

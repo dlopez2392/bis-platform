@@ -38,6 +38,7 @@ import { groundedEvidence } from "@/lib/proposals/grounding";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { aiComplete } from "@/lib/ai/gateway";
+import { TEXT_MODEL } from "@/lib/ai/models";
 import { aiSafeError } from "@/lib/ai/log";
 import { ID_RULE } from "./id-mask";
 import type { Locale } from "@/lib/i18n/locale";
@@ -216,7 +217,7 @@ export async function readCallForCard(
     const answer = await aiComplete(opts.db, {
       accountId: opts.accountId,
       feature: "call_card",
-      model: "gpt-4o-mini",
+      model: TEXT_MODEL,
       // JSON mode: generate.ts's reason — without it the model routinely
       // wraps JSON in a code fence, and this parse has no fallback of its
       // own beyond "nothing".

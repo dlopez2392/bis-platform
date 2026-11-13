@@ -444,3 +444,5 @@ PR body, enforced by the agency; there is NO code lock):
 - **LOW:** the Voice page group and call-page line; copy keys and baseline; the corpus files and
   fixtures; the e2e spec.
 - One end-of-PR review (final + design), then one fix round.
+
+**Amended 2026-11-10 (model migration):** every text call named here as `gpt-4o-mini` now uses `gpt-6-luna` through `TEXT_MODEL` in `apps/web/src/lib/ai/models.ts`, with `reasoning_effort: "none"` and `max_completion_tokens` in place of `max_tokens`. OpenAI shuts gpt-4o-mini down on 2027-01-14. Price read 2026-11-10: $0.10 input / $0.50 output per million tokens (`lib/ai/prices.ts`).

@@ -6,6 +6,7 @@ import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
 import { ID_RULE } from "@/lib/voice/id-mask";
 import { aiComplete } from "@/lib/ai/gateway";
+import { TEXT_MODEL } from "@/lib/ai/models";
 import { aiSafeError } from "@/lib/ai/log";
 
 /**
@@ -342,13 +343,13 @@ export async function generateProposals(input: {
     const answer = await aiComplete(input.db, {
       accountId: input.accountId,
       feature: "call_proposals",
-      model: "gpt-4o-mini",
+      model: TEXT_MODEL,
       // Deliberate divergence from summary-service.ts's own completion:
       // that function consumes PROSE and has a deterministic fact-line
       // fallback (`composeSummary`) when the completion is unusable, so a
       // stray code fence in the response costs it nothing. This function
       // parses JSON with no fallback of its own — an empty proposal list
-      // IS the fallback — and `gpt-4o-mini` routinely wraps JSON in a
+      // IS the fallback — and the text model (gpt-4o-mini when this was written) routinely wraps JSON in a
       // ```json fence when asked for JSON without `response_format`,
       // which would silently zero this feature forever. Forcing JSON mode
       // removes that failure instead of tolerating it.

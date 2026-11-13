@@ -4,7 +4,6 @@ import type { SummaryInputs } from "./ai-summary-inputs";
 
 /** Item 8a-2 (spec 4.7; I5). Bump SUMMARY_PROMPT_VERSION with any change here: the digest carries it (plan deviation 12). */
 export const SUMMARY_PROMPT_VERSION = 1;
-export const SUMMARY_MODEL = "gpt-4o-mini";
 export const SUMMARY_MAX_TOKENS = 400;
 export const SUMMARY_TIMEOUT_MS = 10_000;
 export const SUMMARY_MAX_CHARS = 2000;

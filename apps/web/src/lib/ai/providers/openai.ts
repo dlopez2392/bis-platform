@@ -1,4 +1,5 @@
 import { errorName } from "../log";
+import { textModelParams } from "../models";
 import type { Provider, ProviderAnswer } from "./types";
 
 export const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
@@ -10,6 +11,8 @@ const intOrNull = (v: unknown) => (typeof v === "number" && Number.isSafeInteger
  * The one provider until study decision 2 (spec 1). OPENAI_API_KEY is read inside the call, never at module
  * scope (summary-service.ts's rule: a missing key at build time must never break the import). A non-ok answer's
  * BODY IS NEVER READ: a provider's 400 can echo the prompt. A thrown error is reduced to its class name.
+ * The body's effort and token-cap fields come from textModelParams (models.ts): the gateway lets through only
+ * a priced model, and the one priced model is TEXT_MODEL, a reasoning model.
  */
 export const openAiProvider: Provider = {
   async complete(req): Promise<ProviderAnswer> {
@@ -25,7 +28,7 @@ export const openAiProvider: Provider = {
           model: req.model,
           messages: req.messages,
           ...(req.responseFormat ? { response_format: req.responseFormat } : {}),
-          ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+          ...textModelParams(req.maxTokens),
         }),
         signal: AbortSignal.timeout(req.timeoutMs),
       });

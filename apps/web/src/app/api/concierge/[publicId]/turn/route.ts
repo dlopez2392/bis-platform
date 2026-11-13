@@ -42,6 +42,7 @@ import { NextResponse, after } from "next/server";
 // module scope (see the lazy imports in the handler below).
 import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow, BusinessStatusRow } from "@bis/db";
 import { plainText } from "@/lib/concierge/plain-text";
+import { TEXT_MODEL, textModelParams } from "@/lib/ai/models";
 import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
 import {
@@ -52,7 +53,7 @@ import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
   CONCIERGE_IP_WINDOW_MS, CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY,
   CONCIERGE_ACCOUNT_WINDOW_MS, CONCIERGE_MAX_MESSAGE_CHARS,
-  CONCIERGE_MAX_REPLY_TOKENS, CONCIERGE_MODEL,
+  CONCIERGE_MAX_REPLY_TOKENS,
 } from "@/lib/concierge/guards";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
@@ -74,9 +75,10 @@ export const maxDuration = 30;
 
 /** Same model the rest of this repo's text work uses (`summary-service.ts`,
  *  `proposals/generate.ts`) — a receptionist answering questions from a
- *  facts block is not a reasoning workload. One constant (S-47b, SD6), so the
- *  corpus runner plays the model this chat really uses. */
-const MODEL = CONCIERGE_MODEL;
+ *  facts block is not a reasoning workload. One constant (S-47b, SD6; now
+ *  TEXT_MODEL in lib/ai/models.ts), so the corpus runner plays the model this
+ *  chat really uses. */
+const MODEL = TEXT_MODEL;
 const MODEL_TIMEOUT_MS = 20_000;
 /** D-047's second call, the one that hears the capture's result. Shorter
  *  than the first: it writes one sentence from a known outcome. */
@@ -643,14 +645,17 @@ export async function POST(
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: MODEL, messages: msgs, tools: [CAPTURE_LEAD_TOOL],
-          // I2 (whole-branch review): with no bound here, gpt-4o-mini can
-          // emit up to 16,384 output tokens, and every reply is replayed
+          // I2 (whole-branch review): with no bound here, the model can
+          // emit thousands of output tokens, and every reply is replayed
           // into every LATER turn's transcript — unbounded, a single
           // runaway completion multiplies across the rest of the
           // conversation's calls. `concierge/guards.ts` states the
           // arithmetic; `proposals/generate.ts` already answered this same
-          // question for its own OpenAI call.
-          max_tokens: CONCIERGE_MAX_REPLY_TOKENS,
+          // question for its own OpenAI call. textModelParams sends the cap
+          // as `max_completion_tokens` with `reasoning_effort: "none"`: the
+          // text model is a reasoning model, and on Chat Completions it calls
+          // a tool (capture_lead) only at effort "none" (models.ts).
+          ...textModelParams(CONCIERGE_MAX_REPLY_TOKENS),
           ...extra,
         }),
         // A hung connection never rejects and never resolves; without this the
@@ -806,7 +811,7 @@ export async function POST(
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
     const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
-    // I2, second half: `max_tokens: CONCIERGE_MAX_REPLY_TOKENS` (500) above
+    // I2, second half: the CONCIERGE_MAX_REPLY_TOKENS (500) completion cap above
     // already bounds a completion to roughly 2,000-2,500 characters of
     // English, so this slice does not CREATE the bound — it TIGHTENS it,
     // from that ~2,500 ceiling down to the exact CONCIERGE_MAX_MESSAGE_CHARS
