@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 import { emailLedgerAddress } from "@bis/db/email-address";
+import { readSecret } from "@/lib/fixture-secrets";
 
 /**
  * The unsubscribe token (consent chain spec §4.3; decision 6: signed, no
@@ -112,5 +113,6 @@ export function openConsentToken(token: unknown, secrets: readonly (string | nul
 
 export function consentTokenSecrets(env: NodeJS.ProcessEnv = process.env): { current: string | null; previous: string | null } {
   const clean = (v: string | undefined) => (v && v.trim() ? v.trim() : null);
-  return { current: clean(env.CONSENT_TOKEN_SECRET), previous: clean(env.CONSENT_TOKEN_SECRET_PREVIOUS) };
+  // In production, a value published in this repo reads as unset (lib/fixture-secrets.ts).
+  return { current: clean(readSecret("CONSENT_TOKEN_SECRET", env)), previous: clean(readSecret("CONSENT_TOKEN_SECRET_PREVIOUS", env)) };
 }
