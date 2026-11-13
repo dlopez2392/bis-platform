@@ -1,5 +1,4 @@
-import { test, expect, type Page, type Locator } from "./fixtures/test";
-import type { Response as PwResponse } from "@playwright/test";
+import { test, expect, type Page, type Locator, type Response as PwResponse } from "./fixtures/test";
 import { existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, DOCUMENT_BUCKET } from "@bis/db";
