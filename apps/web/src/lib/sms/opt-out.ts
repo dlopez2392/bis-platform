@@ -38,7 +38,7 @@ import { m } from "@/lib/messages";
  *
  * SEGMENTS. This costs 23 characters in English and 29 in Spanish, and this
  * codebase counts septets for good reason (segments.ts). The text-back is the
- * long one and it still fits: `defaultTextbackBody("956 Woodworks", "en")` is
+ * long one and it still fits: `defaultTextbackBody("Valle Cabinet", "en")` is
  * 83 characters, 106 with this, well inside GSM-7's 160. A message carrying a
  * URL can be pushed into a second segment by it — accepted, and visible,
  * because the settings counter renders the real `segmentsFor()` count.

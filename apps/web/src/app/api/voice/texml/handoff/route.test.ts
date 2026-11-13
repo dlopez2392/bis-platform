@@ -106,7 +106,7 @@ beforeEach(() => {
   recordForwardedCallMock.mockReset().mockResolvedValue(undefined);
   afterMock.mockReset();
   getCallByHandoffTokenMock.mockReset().mockResolvedValue(REQUESTED);
-  getTransferPhoneMock.mockReset().mockResolvedValue("+19562921696");
+  getTransferPhoneMock.mockReset().mockResolvedValue("+19565550196");
   // The account's own numbers — the loop guard's input. `testing` on purpose:
   // an account still walking the setup wizard has only a testing number, and
   // that is precisely the account this feature is first tried on.
@@ -124,7 +124,7 @@ describe("voice texml handoff route", () => {
   it("a call that asked to be transferred gets a Dial to the business number", async () => {
     const xml = await post("tok_abc");
     expect(xml).toContain("<Dial");
-    expect(xml).toContain(">+19562921696<");
+    expect(xml).toContain(">+19565550196<");
     expect(xml).toContain('passDiversionHeader="true"');
     expect(xml).toMatch(/timeout="\d+"/);
     expect(xml).toMatch(/action="[^"]*handoff-result\?t=tok_abc"/);
@@ -299,7 +299,7 @@ describe("voice texml handoff route", () => {
     // hand its caller no list at all, so the guard would silently not run on
     // exactly the accounts this ships to first.
     listPhoneNumbersForAccountMock.mockResolvedValue([
-      { id: "pn1", account_id: "acct1", e164: "+19562921696", telnyx_id: null, status: "testing" },
+      { id: "pn1", account_id: "acct1", e164: "+19565550196", telnyx_id: null, status: "testing" },
     ]);
     const xml = await post("tok_abc");
     expect(xml).not.toContain("<Dial");
@@ -310,10 +310,10 @@ describe("voice texml handoff route", () => {
     // differs from the case above.
     listPhoneNumbersForAccountMock.mockResolvedValue([
       { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" },
-      { id: "pn2", account_id: "acct1", e164: "+19562921696", telnyx_id: null, status: "released" },
+      { id: "pn2", account_id: "acct1", e164: "+19565550196", telnyx_id: null, status: "released" },
     ]);
     const xml = await post("tok_abc");
-    expect(xml).toContain(">+19562921696<");
+    expect(xml).toContain(">+19565550196<");
   });
 
   it("a database failure hangs up rather than 500ing at the carrier", async () => {
@@ -375,7 +375,7 @@ describe("voice texml handoff route — the token stops working minutes after th
     expect(xml).not.toContain("<Dial");
     // And the disclosure itself is gone, not just the dial: neither the
     // transfer number nor an owned number appears in the body.
-    expect(xml).not.toContain("+19562921696");
+    expect(xml).not.toContain("+19565550196");
     expect(xml).not.toContain("+19565550999");
   });
 
@@ -466,7 +466,7 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
 
   it.each(["failed", "busy", "no-answer"])("a never-connected leg (%s) with a transfer number rings it, presenting the dialled number, for the ticket's account only", async (status) => {
     const xml = await fall(status);
-    expect(xml).toContain('<Dial callerId="+19565550999" timeout="20" timeLimit="3600" passDiversionHeader="true">+19562921696</Dial>');
+    expect(xml).toContain('<Dial callerId="+19565550999" timeout="20" timeLimit="3600" passDiversionHeader="true">+19565550196</Dial>');
     expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
     expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
   });
@@ -474,7 +474,7 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   it("a fallback forward is recorded as model-down, with the account, number and CALLER from the signed ticket, in after() (mutation: drop the write → FAILS)", async () => {
     const { signFallbackTicket } = await import("@/lib/voice/fallback-ticket");
     const withCaller = signFallbackTicket(TOKEN, ACCOUNT, "+19565550999", Date.now(), process.env, "+19565550111")!;
-    expect(await fall("failed", withCaller)).toContain("+19562921696</Dial>");
+    expect(await fall("failed", withCaller)).toContain("+19565550196</Dial>");
     expect(recordForwardedCallMock).not.toHaveBeenCalled();
     for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
     expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
@@ -503,10 +503,10 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   it("a failed write, or after() throwing, never costs the caller the dial", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     recordForwardedCallMock.mockRejectedValue(new Error("db down"));
-    expect(await fall("failed")).toContain("+19562921696</Dial>");
+    expect(await fall("failed")).toContain("+19565550196</Dial>");
     for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
     afterMock.mockImplementation(() => { throw new Error("no request scope"); });
-    expect(await fall("failed")).toContain("+19562921696</Dial>");
+    expect(await fall("failed")).toContain("+19565550196</Dial>");
   });
 
   it("it emails BIS: a voice.sip_webhook error heartbeat (mutation: drop the stamp → FAILS)", async () => {
@@ -563,9 +563,9 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   });
 
   it("a transfer number that is ANOTHER account's BIS line is refused: two fallbacks would hand the caller back and forth (mutation: drop the platform-number check → FAILS)", async () => {
-    platformNumberMock.mockResolvedValue({ id: "pnX", account_id: "someone-else", e164: "+19562921696", telnyx_id: null, status: "live" });
+    platformNumberMock.mockResolvedValue({ id: "pnX", account_id: "someone-else", e164: "+19565550196", telnyx_id: null, status: "live" });
     expect(await fall("failed")).toContain("<Hangup/>");
-    expect(platformNumberMock).toHaveBeenCalledWith(expect.anything(), "+19562921696");
+    expect(platformNumberMock).toHaveBeenCalledWith(expect.anything(), "+19565550196");
   });
 
   it("a read that throws hangs up rather than dialling, as everything in this route does", async () => {

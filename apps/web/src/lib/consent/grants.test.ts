@@ -24,12 +24,12 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
   it("a ticked field grants the phone as sms and the email as email, normalised, once per field per submission, with the label exactly as shown (mutation: key the source by submission only → the second field collides, FAILS)", async () => {
     await recordFormGrants({} as never, {
       accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "(956) 292-1696" }, { key: "e", value: " Ana@Example.com " }],
+      answers: [{ key: "p", value: "(956) 555-0196" }, { key: "e", value: " Ana@Example.com " }],
       consent: consent({ ok: true, ok2: true }),
     });
     expect(rows()).toEqual([
-      ["sms", "+19562921696", "form_submission:s1:ok", "none"], ["email", "ana@example.com", "form_submission:s1:ok", "none"],
-      ["sms", "+19562921696", "form_submission:s1:ok2", "none"], ["email", "ana@example.com", "form_submission:s1:ok2", "none"],
+      ["sms", "+19565550196", "form_submission:s1:ok", "none"], ["email", "ana@example.com", "form_submission:s1:ok", "none"],
+      ["sms", "+19565550196", "form_submission:s1:ok2", "none"], ["email", "ana@example.com", "form_submission:s1:ok2", "none"],
     ]);
     expect(db.appendConsentEventGuarded.mock.calls[0]![1]).toMatchObject({
       action: "granted", method: "form", evidence: { form_id: "f1", submission_id: "s1", field: "ok", label: "Text me about my job" },
@@ -38,9 +38,9 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
 
   it("an unticked field grants nothing; no consent fields grant nothing (mutation: drop the given filter → FAILS)", async () => {
     await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: consent({ ok: false }) });
+      answers: [{ key: "p", value: "9565550196" }], consent: consent({ ok: false }) });
     await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: null });
+      answers: [{ key: "p", value: "9565550196" }], consent: null });
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
 
@@ -63,7 +63,7 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
       .mockImplementationOnce(() => new Promise((r) => { release = () => r({ outcome: "appended", id: "e1", prior: null }); }))
       .mockResolvedValue({ outcome: "appended", id: "e2", prior: null });
     const done = recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }, { key: "e", value: "ana@example.com" }], consent: consent({ ok: true }) });
+      answers: [{ key: "p", value: "9565550196" }, { key: "e", value: "ana@example.com" }], consent: consent({ ok: true }) });
     await Promise.resolve();
     expect(db.appendConsentEventGuarded).toHaveBeenCalledTimes(2);
     release();
@@ -73,16 +73,16 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
   it("a write that fails is logged and the lead goes on (evidence only; mutation: rethrow → FAILS)", async () => {
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
     await expect(recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: consent({ ok: true }) })).resolves.toBeUndefined();
+      answers: [{ key: "p", value: "9565550196" }], consent: consent({ ok: true }) })).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalled();
   });
 });
 
 describe("recordBookingGrant", () => {
   it("a booking with a phone grants sms, sourced to the booking, with the contact (mutation: source by contact → FAILS)", async () => {
-    await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "956-292-1696" });
+    await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "956-555-0196" });
     expect(db.appendConsentEventGuarded.mock.calls[0]![1]).toMatchObject({
-      channel: "sms", address: "+19562921696", action: "granted", method: "booking", contactId: "c1",
+      channel: "sms", address: "+19565550196", action: "granted", method: "booking", contactId: "c1",
       sourceRef: "booking:b1", evidence: { booking_id: "b1" },
     });
     expect(db.appendConsentEventGuarded.mock.calls[0]![2]).toBe("none");
@@ -92,7 +92,7 @@ describe("recordBookingGrant", () => {
     await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: null });
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
-    await expect(recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "9562921696" })).resolves.toBeUndefined();
+    await expect(recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "9565550196" })).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("booking grant for booking b1"));
   });
 });

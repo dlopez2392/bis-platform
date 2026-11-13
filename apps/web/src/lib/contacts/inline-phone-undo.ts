@@ -14,8 +14,8 @@ import type { Locale } from "@/lib/i18n/locale";
  * after the write (E.164, kept-as-typed, or `null` for a CLEAR), read back
  * rather than assumed to equal the typed text (`normalizeFieldInput` only
  * trims/validates shape; the column can hold something else entirely once
- * `phoneFields` has run on it — a formatted "(956) 292-1696" is stored as
- * "+19562921696"). `editedPhone` is nullable (round 3, the CRITICAL fix):
+ * `phoneFields` has run on it — a formatted "(956) 555-0196" is stored as
+ * "+19565550196"). `editedPhone` is nullable (round 3, the CRITICAL fix):
  * clearing a flagged number to empty must still offer a real Undo, and the
  * cleared column reads back as `null`, never a string.
  */

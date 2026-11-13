@@ -78,7 +78,7 @@ describe("0019 voice schema", () => {
         .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
       expect(num.error, `phone_numbers insert failed: ${num.error?.message}`).toBeNull();
       const call = await db.from("calls")
-        .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })
+        .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19565550196" })
         .select("id, outcome, transcript").single();
       expect(call.error).toBeNull();
       expect(call.data!.outcome).toBe("abandoned");

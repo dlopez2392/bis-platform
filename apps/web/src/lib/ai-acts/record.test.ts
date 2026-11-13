@@ -150,12 +150,12 @@ describe("fieldFillActs", () => {
     const { fieldFillActs, voiceSource } = await import("./record");
     expect(fieldFillActs(voiceSource("call-1"), "ct-1", {
       prior: { firstName: "Caller" },
-      written: { firstName: "Ana", phone: "+19562921696" },
+      written: { firstName: "Ana", phone: "+19565550196" },
     })).toEqual([
       { actor: "voice", callId: "call-1", chatId: null, kind: "contact_field_filled", contactId: "ct-1",
         target: { field: "firstName" }, before: { value: "Caller" }, after: { value: "Ana" } },
       { actor: "voice", callId: "call-1", chatId: null, kind: "contact_field_filled", contactId: "ct-1",
-        target: { field: "phone" }, before: { value: null }, after: { value: "+19562921696" } },
+        target: { field: "phone" }, before: { value: null }, after: { value: "+19565550196" } },
     ]);
   });
 

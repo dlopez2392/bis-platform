@@ -259,7 +259,7 @@ describe("0036 alert_phone_verifications behaviour", () => {
       const good = pending(accountId, testPhoneNumber(), generateAlertCode());
       const at = (mins: number) => new Date(Date.now() + mins * 60_000).toISOString();
       const cases: Record<string, Record<string, unknown>> = {
-        "a number that cannot be dialled": { ...good, phone: "(956) 292-1696" },
+        "a number that cannot be dialled": { ...good, phone: "(956) 555-0196" },
         "a blank number": { ...good, phone: "" },
         // The code stored as written instead of hashed: six digits are not 64
         // hex chars, so the column itself refuses plaintext.

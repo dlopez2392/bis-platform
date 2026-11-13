@@ -119,7 +119,7 @@ answer, and `enableConciergeAction`), not only in the UI:
 
 ### 5.4 Existing companies
 Production has three: Bespoke Intelligent Solutions → `other` ("Marketing and AI receptionist agency"),
-956 Woodworks → `woodworking`, Resaca Air Conditioning & Heating → `hvac`. Set through the app after
+the pilot client → `woodworking`, Resaca Air Conditioning & Heating → `hvac`. Set through the app after
 deploy with the owner's OK (not hard-coded in the migration; bis-ci has different accounts).
 
 ## 6. Out of scope

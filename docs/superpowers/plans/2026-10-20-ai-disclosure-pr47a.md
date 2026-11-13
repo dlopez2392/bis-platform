@@ -975,7 +975,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
   it("off (no setting on the row): no stamp named and the old identity line — the existing shape assertion still holds", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196" });
     expect(acceptedInstructions()).toContain(OLD);
     expect(randomIntMock).not.toHaveBeenCalled();
   });
@@ -985,7 +985,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" } });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", disclosure: { disclosed: true, setting: "on" } });
     expect(acceptedInstructions()).toContain(DISCLOSED);
   });
 
@@ -996,7 +996,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     await POST(req());
     expect(randomIntMock).toHaveBeenCalledWith(2);
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" } });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", disclosure: { disclosed: false, setting: "trial" } });
     expect(acceptedInstructions()).toContain(OLD);
   });
 
@@ -1035,7 +1035,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     const line = logSpy.mock.calls.find((c) => String(c[1]).startsWith("startCallRow failed"));
     expect(line, "the failure is logged").toBeDefined();
     expect(Object.keys(line![2] as object).sort()).toEqual(["accountId", "callId", "error"]);
-    expect(JSON.stringify(line)).not.toContain("+19562921696");
+    expect(JSON.stringify(line)).not.toContain("+19565550196");
     logSpy.mockRestore();
   });
 });

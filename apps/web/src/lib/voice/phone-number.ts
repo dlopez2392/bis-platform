@@ -6,8 +6,8 @@ import { normalisePhone, stripExtension } from "@bis/db/phone";
  * digits become +1 or +52 by which country's plan they are valid in. It
  * replaced `toE164`, which made ANY ten digits into `+1` — so a Reynosa
  * number a caller spoke was stored as a US one. External APIs accept only
- * E.164 (live-verified 2026-07-26: "9562921696", "(956) 292-1696" and
- * "19562921696" are refused; "+19562921696" passes).
+ * E.164 (live-verified 2026-07-26: "9565550196", "(956) 555-0196" and
+ * "19565550196" are refused; "+19565550196" passes).
  *
  * A number valid as both a US and a Mexican one comes back as `+1` here;
  * whether its country is CONFIRMED is `normalisePhone`'s `unconfirmed`,
@@ -54,7 +54,7 @@ export function spokenPhone(said: string | null | undefined, callerNumber: strin
 
 /**
  * Is a contact's stored phone the number this call came from? Contacts keep a
- * phone in whatever shape it was typed ("(956) 292-1696" from a web form), so
+ * phone in whatever shape it was typed ("(956) 555-0196" from a web form), so
  * it is normalized before the compare. Caller ID is what the carrier presents,
  * not an authentication — but it is the one identity a call carries, and the
  * voice tools act on a contact only when it is this number. A withheld caller

@@ -11,10 +11,10 @@ const org = (id: string, name: string, createdAt?: number): ClerkOrgSummary =>
 
 describe("orphanedOrgs", () => {
   it("finds an org with no account row", () => {
-    const orgs = [org("org_woodworks", "956 Woodworks"), org("org_linked", "Test Client One")];
+    const orgs = [org("org_valle", "Valle Cabinet"), org("org_linked", "Test Client One")];
     const accounts = [{ clerk_org_id: "org_linked" }];
 
-    expect(orphanedOrgs(orgs, accounts).map((o) => o.name)).toEqual(["956 Woodworks"]);
+    expect(orphanedOrgs(orgs, accounts).map((o) => o.name)).toEqual(["Valle Cabinet"]);
   });
 
   it("reports nothing when every org is linked", () => {
@@ -30,7 +30,7 @@ describe("orphanedOrgs", () => {
    * must match exactly — never by name, which is not unique and not stable.
    */
   it("matches on org id, not on name", () => {
-    const orgs = [org("org_new", "956 Woodworks")];
+    const orgs = [org("org_new", "Valle Cabinet")];
     // Same display name, different org — a renamed or re-created company.
     const accounts = [{ clerk_org_id: "org_old" }];
 

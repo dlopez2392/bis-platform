@@ -12,22 +12,22 @@ const KINDS = ["consent.stop_confirmation", "consent.start_confirmation", "conse
 
 describe("consentReplyBody — what BIS itself sends", () => {
   it("signs with the business name in the language asked (mutation: always English → FAILS)", () => {
-    expect(consentReplyBody("consent.stop_confirmation", "es", "956 Woodworks"))
-      .toBe("956 Woodworks: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.");
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks"))
-      .toBe("956 Woodworks: For help, email hello@bis-rgv.com or visit bis-rgv.com. Msg & data rates may apply. Reply STOP to opt out.");
+    expect(consentReplyBody("consent.stop_confirmation", "es", "Valle Cabinet"))
+      .toBe("Valle Cabinet: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet"))
+      .toBe("Valle Cabinet: For help, email hello@bis-rgv.com or visit bis-rgv.com. Msg & data rates may apply. Reply STOP to opt out.");
   });
 
   it("the help reply uses the account's own reply-to email over BIS's fallback, in both languages (TCR reason 611: a real contact, not 'this number'; mutation: ignore supportEmail → FAILS)", () => {
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks", "support@956woodworks.com"))
-      .toBe("956 Woodworks: For help, email support@956woodworks.com. Msg & data rates may apply. Reply STOP to opt out.");
-    expect(consentReplyBody("consent.help", "es", "956 Woodworks", "support@956woodworks.com"))
-      .toBe("956 Woodworks: Para ayuda, escriba a support@956woodworks.com. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet", "support@vallecab.example"))
+      .toBe("Valle Cabinet: For help, email support@vallecab.example. Msg & data rates may apply. Reply STOP to opt out.");
+    expect(consentReplyBody("consent.help", "es", "Valle Cabinet", "support@vallecab.example"))
+      .toBe("Valle Cabinet: Para ayuda, escriba a support@vallecab.example. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.");
   });
 
   it("with no reply-to email set, the help reply falls back to BIS's own contact, never bis-rgv.com once the account has its own (mutation: always the fallback → FAILS)", () => {
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks", null)).toContain("hello@bis-rgv.com");
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks", "support@956woodworks.com")).not.toContain("bis-rgv.com");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet", null)).toContain("hello@bis-rgv.com");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet", "support@vallecab.example")).not.toContain("bis-rgv.com");
   });
 
   it("a blank name drops the prefix rather than inventing one (mutation: sign as \"\" → ': You're opted in…', FAILS)", () => {
@@ -41,14 +41,14 @@ describe("consentReplyBody — what BIS itself sends", () => {
   });
 
   it("the opt-in confirmation names the brand, HELP, STOP, frequency and rates (TCR reason 611; mutation: drop any one → FAILS)", () => {
-    const en = consentReplyBody("consent.start_confirmation", "en", "956 Woodworks");
-    expect(en).toContain("956 Woodworks");
+    const en = consentReplyBody("consent.start_confirmation", "en", "Valle Cabinet");
+    expect(en).toContain("Valle Cabinet");
     expect(en).toMatch(/\bHELP\b/);
     expect(en).toMatch(/\bSTOP\b/);
     expect(en).toMatch(/frequency varies/i);
     expect(en).toMatch(/rates may apply/i);
-    const es = consentReplyBody("consent.start_confirmation", "es", "956 Woodworks");
-    expect(es).toContain("956 Woodworks");
+    const es = consentReplyBody("consent.start_confirmation", "es", "Valle Cabinet");
+    expect(es).toContain("Valle Cabinet");
     expect(es).toMatch(/\bAYUDA\b/);
     expect(es).toMatch(/\bPARAR\b/);
     expect(es).toMatch(/frecuencia/i);
@@ -56,25 +56,25 @@ describe("consentReplyBody — what BIS itself sends", () => {
   });
 
   it("the opt-out reply names the brand and says explicitly that no further messages follow, plus how to resubscribe (TCR reason 611; mutation: drop 'no further messages' → FAILS)", () => {
-    const en = consentReplyBody("consent.stop_confirmation", "en", "956 Woodworks");
-    expect(en).toContain("956 Woodworks");
+    const en = consentReplyBody("consent.stop_confirmation", "en", "Valle Cabinet");
+    expect(en).toContain("Valle Cabinet");
     expect(en).toMatch(/no further messages/i);
     expect(en).toMatch(/\bSTART\b/);
-    const es = consentReplyBody("consent.stop_confirmation", "es", "956 Woodworks");
-    expect(es).toContain("956 Woodworks");
+    const es = consentReplyBody("consent.stop_confirmation", "es", "Valle Cabinet");
+    expect(es).toContain("Valle Cabinet");
     expect(es).toMatch(/no le enviaremos mas mensajes/i);
     expect(es).toMatch(/\bSTART\b/);
   });
 
   it("the help reply names the brand, a real contact, rates and STOP (TCR reason 611; mutation: drop the rates sentence → FAILS)", () => {
-    const en = consentReplyBody("consent.help", "en", "956 Woodworks", "support@956woodworks.com");
-    expect(en).toContain("956 Woodworks");
-    expect(en).toContain("support@956woodworks.com");
+    const en = consentReplyBody("consent.help", "en", "Valle Cabinet", "support@vallecab.example");
+    expect(en).toContain("Valle Cabinet");
+    expect(en).toContain("support@vallecab.example");
     expect(en).toMatch(/rates may apply/i);
     expect(en).toMatch(/\bSTOP\b/);
-    const es = consentReplyBody("consent.help", "es", "956 Woodworks", "support@956woodworks.com");
-    expect(es).toContain("956 Woodworks");
-    expect(es).toContain("support@956woodworks.com");
+    const es = consentReplyBody("consent.help", "es", "Valle Cabinet", "support@vallecab.example");
+    expect(es).toContain("Valle Cabinet");
+    expect(es).toContain("support@vallecab.example");
     expect(es).toMatch(/tarifas/i);
     expect(es).toMatch(/\bPARAR\b/);
   });
@@ -82,14 +82,14 @@ describe("consentReplyBody — what BIS itself sends", () => {
   it("a support email over 60 characters falls back to BIS's own contact rather than push the reply past its segment cap (mutation: raise or drop the length check → FAILS)", () => {
     const longEmail = `${"a".repeat(55)}@x.com`;
     expect(longEmail.length).toBeGreaterThan(60);
-    const en = consentReplyBody("consent.help", "en", "956 Woodworks", longEmail);
+    const en = consentReplyBody("consent.help", "en", "Valle Cabinet", longEmail);
     expect(en).toContain("hello@bis-rgv.com");
     expect(en).not.toContain(longEmail);
   });
 
   it("a support email outside GSM-7 falls back to BIS's own contact rather than drop the whole reply to UCS-2 (mutation: skip the GSM-7 check → FAILS)", () => {
     const accented = "sopórte@x.com";
-    const en = consentReplyBody("consent.help", "en", "956 Woodworks", accented);
+    const en = consentReplyBody("consent.help", "en", "Valle Cabinet", accented);
     expect(en).toContain("hello@bis-rgv.com");
     expect(en).not.toContain(accented);
     expect(segmentsFor(en).encoding).toBe("gsm7");
@@ -106,8 +106,8 @@ describe("consentReplyBody — what BIS itself sends", () => {
 
 describe("telnyxReplyText — what each business's Telnyx profile answers (Task 16 step 10; danlo's decision 1)", () => {
   it("is the English line then the Spanish line without its prefix, one bilingual reply (mutation: prefix the Spanish half too → FAILS)", () => {
-    expect(telnyxReplyText("stop", "956 Woodworks")).toBe(
-      "956 Woodworks: You will receive no further messages. Reply START to resubscribe. Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.");
+    expect(telnyxReplyText("stop", "Valle Cabinet")).toBe(
+      "Valle Cabinet: You will receive no further messages. Reply START to resubscribe. Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.");
   });
 
   it("is at least Telnyx's 20 characters and GSM-7 for every op, even nameless (plan F2; mutation: an empty reply → FAILS)", () => {
@@ -127,8 +127,8 @@ describe("telnyxReplyText — what each business's Telnyx profile answers (Task 
   });
 
   it("the help reply's bilingual Telnyx text carries the client's own support email in BOTH halves, not just the English one (mutation: drop supportEmail from the English half → FAILS)", () => {
-    const t = telnyxReplyText("help", "956 Woodworks", "support@956woodworks.com");
-    expect(t.match(/support@956woodworks\.com/g)?.length).toBe(2);
+    const t = telnyxReplyText("help", "Valle Cabinet", "support@vallecab.example");
+    expect(t.match(/support@vallecab.example/g)?.length).toBe(2);
     expect(t).not.toContain("bis-rgv.com");
   });
 
@@ -148,11 +148,11 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
   const plan = { kind: "consent.stop_confirmation" as const, language: "es" as const, answersEventId: "ev_1" };
   beforeEach(() => {
     for (const fn of [...Object.values(db), gate.sendSms]) fn.mockReset();
-    db.getBranding.mockResolvedValue({ brandName: " 956 Woodworks " });
+    db.getBranding.mockResolvedValue({ brandName: " Valle Cabinet " });
     db.createMessage.mockResolvedValue({ id: "msg_out" });
     gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
-      await opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
-      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+      await opts.prepare?.({ body: req.body, to: "+19565550196", from: "+19565550000" });
+      return { kind: "sent", providerMessageId: "p_1", to: "+19565550196", from: "+19565550000", body: req.body, billable: true, segments: 1 };
     });
     // .mockClear() before re-implementing: vi.spyOn on an already-spied
     // method returns the SAME mock instance, so without this its .mock.calls
@@ -166,32 +166,32 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
   });
 
   it("the HELP reply uses the account's own reply-to email, not BIS's fallback (mutation: pass null instead of branding.replyToEmail → FAILS)", async () => {
-    db.getBranding.mockResolvedValue({ brandName: " 956 Woodworks ", replyToEmail: "support@956woodworks.com" });
+    db.getBranding.mockResolvedValue({ brandName: " Valle Cabinet ", replyToEmail: "support@vallecab.example" });
     await sendConsentReply({} as never, {
-      accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1",
+      accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1",
       reply: { kind: "consent.help", language: "en" },
     });
     expect(gate.sendSms.mock.calls[0]![1].body).toBe(
-      "956 Woodworks: For help, email support@956woodworks.com. Msg & data rates may apply. Reply STOP to opt out.");
+      "Valle Cabinet: For help, email support@vallecab.example. Msg & data rates may apply. Reply STOP to opt out.");
   });
 
   it("asks the gate for the kind, the carrier's number, the stop it answers and the business-named line (mutation: numberFromCarrier false → FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(gate.sendSms.mock.calls[0]![1]).toEqual({
-      accountId: "a1", kind: "consent.stop_confirmation", to: "+19562921696", contactId: "ct_1", language: "es",
+      accountId: "a1", kind: "consent.stop_confirmation", to: "+19565550196", contactId: "ct_1", language: "es",
       numberFromCarrier: true, answersEventId: "ev_1",
-      body: "956 Woodworks: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
+      body: "Valle Cabinet: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
     });
   });
 
   it("files the reply in the thread before it leaves, then marks it sent with the provider's id (mutation: skip the sent write → FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(db.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ conversationId: "conv_1", channel: "sms", direction: "outbound" }), "sms-inbound", "system");
     expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "sent", { providerMessageId: "p_1" }, "sms-inbound", "system");
   });
 
   it("the alert phone has no thread: the reply still goes, and nothing is filed (mutation: require a conversation → no send, FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: null, conversationId: null, reply: plan });
     expect(gate.sendSms).toHaveBeenCalledTimes(1);
     expect(db.createMessage).not.toHaveBeenCalled();
     // Prepare skipping the filing must not abort the send itself: the text
@@ -216,11 +216,11 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
     db.createMessage.mockRejectedValue(new Error("createMessage failed"));
     let prepared: Promise<void> | undefined;
     gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
-      prepared = opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
+      prepared = opts.prepare?.({ body: req.body, to: "+19565550196", from: "+19565550000" });
       await prepared;   // a throw here is the gate's "nothing leaves" (gate.ts:191-195)
-      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+      return { kind: "sent", providerMessageId: "p_1", to: "+19565550196", from: "+19565550000", body: req.body, billable: true, segments: 1 };
     });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     await expect(prepared).resolves.toBeUndefined();
     expect(vi.mocked(console.info).mock.calls.map((c) => String(c[0]))).toContain("consent reply consent.stop_confirmation for account a1 sent");
     expect(db.updateMessageStatus).not.toHaveBeenCalled();
@@ -228,7 +228,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
 
   it("a 'sent' status write that fails AFTER the send is logged as that, never as 'not sent' (review R2-m5; mutation: one try around both → 'not sent', FAILS)", async () => {
     db.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => /sent, but its thread row was not marked sent/.test(l))).toBe(true);
     expect(lines.some((l) => /not sent:/.test(l))).toBe(false);
@@ -236,7 +236,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
 
   it("a 40300 on a START confirmation is logged naming the carrier block the gate recorded — the START-then-blocked trace (review R2-I1c; mutation: fall through to the generic 'failed provider' line → FAILS)", async () => {
     gate.sendSms.mockResolvedValue({ kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
     expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/consent\.start_confirmation .* the carrier refused it \(40300\): Telnyx still blocks this number/);
   });
 
@@ -245,7 +245,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
       await opts.prepare?.({ body: req.body, to: "+1", from: "+2" });
       return { kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true };
     });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "failed", { error: "telnyx send failed (403): …" }, "sms-inbound", "system");
   });
 
@@ -255,7 +255,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
       return { kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true };
     });
     db.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
-    await expect(sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: { kind: "consent.start_confirmation", language: "en" } }))
+    await expect(sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: { kind: "consent.start_confirmation", language: "en" } }))
       .resolves.toBeUndefined();
     const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => /the carrier refused it \(40300\)/.test(l))).toBe(true);

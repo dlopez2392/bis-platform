@@ -14,7 +14,7 @@ beforeEach(() => { process.env.OPENAI_API_KEY = "sk-test"; });
 afterEach(() => { vi.restoreAllMocks(); });
 const GATE = { db: openGateDb().db, accountId: "acct", timezone: "America/Chicago" };
 
-const CALLER_ID = "+19562921696";
+const CALLER_ID = "+19565550196";
 const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
   ({ role, text, at: "2027-06-01T17:00:00.000Z" });
 

@@ -141,7 +141,7 @@ type BookingContact = {
  *       confirm_identity, `state.identity.confirmed`) at the rung the trade
  *       pack asks for a change (identity/ladder.ts), AND that contact's
  *       stored phone IS the caller ID. `contacts.phone` is stored as typed
- *       ("(956) 292-1696" from a web form), so it is normalized before the
+ *       ("(956) 555-0196" from a web form), so it is normalized before the
  *       compare (`isCallerIdNumber`) — a raw string compare would refuse the
  *       rightful caller.
  * The decision is identity/flow.ts's `ownsStep`, the one the corpus stub runs.

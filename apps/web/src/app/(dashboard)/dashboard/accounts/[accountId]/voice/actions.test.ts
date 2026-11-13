@@ -620,7 +620,7 @@ describe("disableConciergeAction", () => {
 describe("setForwardCallsAction (operational-floor spec §3)", () => {
   beforeEach(() => {
     guardFixture.isAgency = true;
-    dbMocks.getTransferPhone.mockReset().mockResolvedValue("+19562921696");
+    dbMocks.getTransferPhone.mockReset().mockResolvedValue("+19565550196");
     dbMocks.setForwardCalls.mockReset().mockResolvedValue(undefined);
   });
 
@@ -653,7 +653,7 @@ describe("setForwardCallsAction (operational-floor spec §3)", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.getTransferPhone.mockRejectedValue(new Error("db down"));
     expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.forward.saveFailed"] });
-    dbMocks.getTransferPhone.mockResolvedValue("+19562921696");
+    dbMocks.getTransferPhone.mockResolvedValue("+19565550196");
     dbMocks.setForwardCalls.mockRejectedValue(new Error("no voice profile for this account"));
     expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.forward.saveFailed"] });
     vi.restoreAllMocks();

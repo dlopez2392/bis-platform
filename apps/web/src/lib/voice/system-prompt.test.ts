@@ -15,7 +15,7 @@ const base = {
   services: "Roof repair, full replacement, inspections",
   languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
-  afterHours: "hours_then_message" as const, callerNumber: "+19562921696",
+  afterHours: "hours_then_message" as const, callerNumber: "+19565550196",
   meetingType: "in_person" as const,
 };
 const now = new Date("2027-06-01T15:00:00Z");
@@ -520,7 +520,7 @@ function everyExistingInput(): VoicePromptInput[] {
         for (const bookingEnabled of [true, false])
           for (const afterHours of ["hours_then_message", "message_only"] as const)
             for (const meetingType of ["in_person", "phone", "video"] as const)
-              for (const callerNumber of ["+19562921696", null])
+              for (const callerNumber of ["+19565550196", null])
                 for (const disclosed of [false, true])
                   out.push({
                     ...base, languages, bookingEnabled, afterHours, meetingType, callerNumber, disclosed,
@@ -534,8 +534,13 @@ function digestOf(prompts: string[]): string {
   for (const p of prompts) h.update(`${p}\u0000`);
   return h.digest("hex");
 }
-/** sha256 over all 1728 prompts as they were at 6c123483, BEFORE S-47b touched system-prompt.ts. */
-const PRE_S47B_DIGEST = "222fe52521c0ad6aa22744a03dfb182c11ad06185e1cce8a54cdaa7d027300ba";
+/**
+ * sha256 over all 1728 prompts as they were at 6c123483, BEFORE S-47b touched system-prompt.ts.
+ * Re-pinned 2026-11-13 (with the two below) when `base.callerNumber` moved to a 555 number: the
+ * old fixture still reproduced all three old digests on this code, and every new prompt was that
+ * old prompt with only the number's digits changed, so these are the same commits' prompts.
+ */
+const PRE_S47B_DIGEST = "40c0076bd571fc17f84d732bb5044329d587ff67d1cec86e7cc6d615a8309e3f";
 
 describe("buildSystemPrompt — no trade module is byte-identical to before S-47b", () => {
   it("covers 1728 combinations (guards the digest from an empty loop)", () => {
@@ -645,7 +650,7 @@ function everyS47cBaseInput(): VoicePromptInput[] {
   return out;
 }
 /** sha256 over all 5184 prompts as they were at 044b1ab2, BEFORE S-47c touched system-prompt.ts. */
-const PRE_S47C_DIGEST = "f41acd22cb3282c0c11b9b925d04e53b372e6b3a1fe90f6ee6ed3567743fbfd1";
+const PRE_S47C_DIGEST = "7832e41821847fc52e57d9725512202a92b25dbd8523fd5bb1f87c9714aa2a86";
 
 describe("buildSystemPrompt — no hours and no list is byte-identical to before S-47c (C3)", () => {
   it("covers 5184 combinations (guards the digest from an empty loop)", () => {
@@ -708,7 +713,7 @@ function everyS47dBaseInput(): VoicePromptInput[] {
   return out;
 }
 /** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). */
-const PRE_S47D_DIGEST = "f4ef945b252ea1ee3218c79628c5592108cc37e6975f63ac9cb0abcf118015c9";
+const PRE_S47D_DIGEST = "877233b912801aeda113555a75f49c42a57bd6cf78ad34ac15cb7c88fab8c9d0";
 
 describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
   it("covers 31104 combinations (guards the digest from an empty loop)", () => {

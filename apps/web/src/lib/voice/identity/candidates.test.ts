@@ -6,7 +6,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 import { realCandidates, isShared, readCandidates } from "./candidates";
 import type { NumberContactRow } from "@bis/db";
 
-const E164 = "+19562921696";
+const E164 = "+19565550196";
 
 function row(over: Partial<NumberContactRow>): NumberContactRow {
   return {
@@ -18,10 +18,10 @@ function row(over: Partial<NumberContactRow>): NumberContactRow {
 describe("realCandidates", () => {
   it("keeps the caller-ID contacts, drops the holding record, a different-country twin and a blank phone", () => {
     const rows: NumberContactRow[] = [
-      row({ id: "e164", phone: "+19562921696" }),                 // in: exact E.164
-      row({ id: "legacy", phone: "(956) 292-1696" }),              // in: legacy US format, same number
-      row({ id: "holding", holds_shared_number: true, phone: "+19562921696", first_name: "Caller", last_name: null }), // out: holding record
-      row({ id: "mx-twin", phone: "+529562921696" }),              // out: same ten digits, Mexican reading
+      row({ id: "e164", phone: "+19565550196" }),                 // in: exact E.164
+      row({ id: "legacy", phone: "(956) 555-0196" }),              // in: legacy US format, same number
+      row({ id: "holding", holds_shared_number: true, phone: "+19565550196", first_name: "Caller", last_name: null }), // out: holding record
+      row({ id: "mx-twin", phone: "+529565550196" }),              // out: same ten digits, Mexican reading
       row({ id: "no-phone", phone: null }),                        // out: no phone
     ];
     const out = realCandidates(rows, E164);

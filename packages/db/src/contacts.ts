@@ -186,9 +186,9 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
 /**
  * Comparison key for phone dedupe: digits only, with a leading NANP country
  * code folded off. contacts.phone is only trimmed on write, never reshaped
- * — an operator or a web form routinely leaves it as "(956) 292-1696", while
+ * — an operator or a web form routinely leaves it as "(956) 555-0196", while
  * an inbound SMS sender's number (or anything already run through
- * lib/voice/phone-number.ts's toE164) arrives as "+19562921696". Both are
+ * lib/voice/phone-number.ts's toE164) arrives as "+19565550196". Both are
  * the same ten digits and must resolve to the same contact; an exact string
  * match on the raw column never sees that, and forked a duplicate contact
  * (and, upstream, a second conversation thread) for the majority phone

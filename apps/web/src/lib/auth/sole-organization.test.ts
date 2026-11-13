@@ -15,8 +15,8 @@ describe("soleOrganizationToActivate", () => {
    */
   it("activates the one organization an invited client belongs to", () => {
     expect(
-      soleOrganizationToActivate({ ...base, memberships: [{ organizationId: "org_woodworks" }] }),
-    ).toBe("org_woodworks");
+      soleOrganizationToActivate({ ...base, memberships: [{ organizationId: "org_valle" }] }),
+    ).toBe("org_valle");
   });
 
   it("leaves a session that already has an active organization alone", () => {
@@ -24,7 +24,7 @@ describe("soleOrganizationToActivate", () => {
       soleOrganizationToActivate({
         ...base,
         activeOrgId: "org_already",
-        memberships: [{ organizationId: "org_woodworks" }],
+        memberships: [{ organizationId: "org_valle" }],
       }),
     ).toBeNull();
   });
@@ -60,7 +60,7 @@ describe("soleOrganizationToActivate", () => {
       soleOrganizationToActivate({
         ...base,
         signedIn: false,
-        memberships: [{ organizationId: "org_woodworks" }],
+        memberships: [{ organizationId: "org_valle" }],
       }),
     ).toBeNull();
   });
@@ -72,9 +72,9 @@ describe("soleOrganizationToActivate", () => {
       soleOrganizationToActivate({
         ...base,
         activeOrgId: undefined,
-        memberships: [{ organizationId: "org_woodworks" }],
+        memberships: [{ organizationId: "org_valle" }],
       }),
-    ).toBe("org_woodworks");
+    ).toBe("org_valle");
   });
 
   it("treats an empty-string active org as none rather than as set", () => {
@@ -82,8 +82,8 @@ describe("soleOrganizationToActivate", () => {
       soleOrganizationToActivate({
         ...base,
         activeOrgId: "",
-        memberships: [{ organizationId: "org_woodworks" }],
+        memberships: [{ organizationId: "org_valle" }],
       }),
-    ).toBe("org_woodworks");
+    ).toBe("org_valle");
   });
 });

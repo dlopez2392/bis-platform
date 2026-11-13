@@ -418,7 +418,7 @@ describe("serviceAmountMatches — amounts typed into a name or description", ()
   it("a phone number, a ZIP and \"24/7\" carry no $, dollars or usd, so none of them ever match", () => {
     const rows = [{
       name_en: "Service", name_es: "",
-      description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: "",
+      description_en: "Call (956) 555-0196, open 24/7, McAllen TX 78501", description_es: "",
     }];
     expect(serviceAmountMatches(rows)).toEqual([]);
   });
@@ -467,7 +467,7 @@ describe("ServicesPricesCard — amounts typed into a name or description (S-47c
   it("a description with a phone number, a ZIP and \"24/7\" (none of them $/dollars/usd) shows no amounts notice", () => {
     const row: VoiceServiceInput = {
       name_en: "Service", name_es: null,
-      description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: null,
+      description_en: "Call (956) 555-0196, open 24/7, McAllen TX 78501", description_es: null,
       price_kind: "free", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null,
     };
     const text = renderedText(render({ services: { ok: true, rows: [row] } }));

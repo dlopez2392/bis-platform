@@ -29,7 +29,7 @@ export const ID_RULE = "Never repeat an identification number (SSN, driver's lic
 
 /** Not glued to a longer number. A digit, money sign, decimal or thousands separator or slash right before
  *  blocks a match. A separator blocks it only when a DIGIT precedes that separator, so "SSN-123-45-6789"
- *  still masks while the tail of "95 62 92 16 96" does not. */
+ *  still masks while the tail of "95 65 55 01 96" does not. */
 const NOT_BEFORE = String.raw`(?<![\d$.,/]|\d[-.,/ ])`;
 /** And not followed by more digits (directly or after one separator), nor by "@" (an email's local part). */
 const NOT_AFTER = String.raw`(?![\d.,/ -]?\d|@)`;

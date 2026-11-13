@@ -163,7 +163,7 @@ describe("hasOptOutInstruction", () => {
     // textback-body.ts sets. The text-back is the longest default this
     // platform sends, so if the disclosure fits here it fits everywhere the
     // body is not carrying a URL.
-    const body = withOptOut(defaultTextbackBody("956 Woodworks", "en"), "en");
+    const body = withOptOut(defaultTextbackBody("Valle Cabinet", "en"), "en");
     expect(segmentsFor(body)).toEqual({ encoding: "gsm7", chars: body.length, segments: 1 });
   });
 
@@ -182,7 +182,7 @@ describe("hasOptOutInstruction", () => {
     // segment for a GSM-7 company name. Adding a disclosure must not be what
     // pushes it over — if this ever fails, shorten the disclosure rather than
     // dropping it.
-    const body = withOptOut(defaultTextbackBody("956 Woodworks", "es"), "es");
+    const body = withOptOut(defaultTextbackBody("Valle Cabinet", "es"), "es");
     expect(segmentsFor(body).segments).toBe(1);
   });
 });

@@ -382,14 +382,14 @@ describe("bookingPhoneChangeAlertEmail", () => {
   it("a cancellation names the kind, the old time, the contact and the calling number in both parts", () => {
     const { subject, html, text } = bookingPhoneChangeAlertEmail({
       brand, kind: "cancelled", whenCompanyZone: WHEN_COMPANY, contactName: "Jane Doe",
-      callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+      callerNumber: "+19565550196", contactUrl: CONTACT_URL,
     });
     expect(subject).toBe(`Booking cancelled by phone: ${WHEN_COMPANY} — Jane Doe`);
     for (const part of [html, text]) {
       expect(part).toContain("Booking cancelled by phone");
       expect(part).toContain(WHEN_COMPANY);
       expect(part).toContain("Jane Doe");
-      expect(part).toContain("+19562921696");
+      expect(part).toContain("+19565550196");
     }
     expect(html).toContain(`href="${CONTACT_URL}"`);
     expect(html).toContain("Open this contact");
@@ -399,7 +399,7 @@ describe("bookingPhoneChangeAlertEmail", () => {
   it("a move carries BOTH times, old and new, in the subject and both parts", () => {
     const { subject, html, text } = bookingPhoneChangeAlertEmail({
       brand, kind: "moved", whenCompanyZone: WHEN_COMPANY, newWhenCompanyZone: WHEN_NEW,
-      contactName: "Jane Doe", callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+      contactName: "Jane Doe", callerNumber: "+19565550196", contactUrl: CONTACT_URL,
     });
     expect(subject).toContain("Booking moved by phone");
     expect(subject).toContain(WHEN_COMPANY);
@@ -445,7 +445,7 @@ describe("bookingPhoneChangeAlertEmail", () => {
   it("never returns an empty text part and carries no template syntax", () => {
     const { subject, html, text } = bookingPhoneChangeAlertEmail({
       brand, kind: "moved", whenCompanyZone: WHEN_COMPANY, newWhenCompanyZone: WHEN_NEW,
-      contactName: "Jane Doe", callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+      contactName: "Jane Doe", callerNumber: "+19565550196", contactUrl: CONTACT_URL,
     });
     expect(text.trim().length).toBeGreaterThan(0);
     for (const part of [subject, html, text]) expect(part).not.toContain("{{");
@@ -813,14 +813,14 @@ describe("S-10: the owner's booking alerts in Spanish, and English unchanged", (
   });
 
   describe("bookingPhoneChangeAlertEmail", () => {
-    const base = { brand, contactName: "Ana Ruiz", callerNumber: "+19562921696", contactUrl: CONTACT_URL };
+    const base = { brand, contactName: "Ana Ruiz", callerNumber: "+19565550196", contactUrl: CONTACT_URL };
 
     it("es, cancelled: subject, heading, sentence, labels, date and button in Spanish, both parts (mutation: hard-code \"en\" → FAILS)", () => {
       const { subject, html, text } = bookingPhoneChangeAlertEmail({ ...base, kind: "cancelled", whenCompanyZone: W_ES, locale: "es" });
       expect(subject).toBe(`Cita cancelada por teléfono: ${W_ES} — Ana Ruiz`);
       expect(text).toBe(
         `Cita cancelada por teléfono.\nAna Ruiz canceló su cita por teléfono.\n\nCuándo: ${W_ES}\nQuién: Ana Ruiz\n`
-        + `Llamó desde: +19562921696\n\nAbrir este contacto: ${CONTACT_URL}`,
+        + `Llamó desde: +19565550196\n\nAbrir este contacto: ${CONTACT_URL}`,
       );
       expect(html).toContain(">Cita cancelada por teléfono</p>");
       expect(html).toContain("Ana Ruiz canceló su cita por teléfono.");
@@ -851,7 +851,7 @@ describe("S-10: the owner's booking alerts in Spanish, and English unchanged", (
       expect(cancelled.subject).toBe(`Booking cancelled by phone: ${W_EN} — Ana Ruiz`);
       expect(cancelled.text).toBe(
         `Booking cancelled by phone.\nAna Ruiz cancelled their booking by phone.\n\nWhen: ${W_EN}\nWho: Ana Ruiz\n`
-        + `Called from: +19562921696\n\nOpen this contact: ${CONTACT_URL}`,
+        + `Called from: +19565550196\n\nOpen this contact: ${CONTACT_URL}`,
       );
       const moved = bookingPhoneChangeAlertEmail({ ...base, kind: "moved", whenCompanyZone: W_EN, newWhenCompanyZone: W2_EN, callerNumber: null });
       expect(moved.subject).toBe(`Booking moved by phone: ${W_EN} to ${W2_EN} — Ana Ruiz`);

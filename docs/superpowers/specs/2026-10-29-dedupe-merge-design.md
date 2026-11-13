@@ -698,7 +698,7 @@ adjacent-satisfaction shape).
 | "Juan Carlos García" / "Juan García" are NOT paired | key on the first word of the first name |
 | "Caller" / "Caller" and "Unknown Caller" / "Unknown Caller" are never paired | delete the placeholder list |
 | a contact with no last name gets a NULL `name_key` | coalesce the last name to '' |
-| `phone_national` equals `phoneNational()` for `+19562921696`, `(956) 292-1696`, `+528999221234`, `+5218999221234`, `044 899 922 1234`, `01 899 922 1234`, `+44…`, typed text | drop the `521` branch in SQL only |
+| `phone_national` equals `phoneNational()` for `+19565550196`, `(956) 555-0196`, `+528999221234`, `+5218999221234`, `044 899 922 1234`, `01 899 922 1234`, `+44…`, typed text | drop the `521` branch in SQL only |
 | a legacy `+5218999221234` row and a new `+528999221234` row are paired `same_phone`… | remove the `521` branch |
 | …and `+18999221234` / `+528999221234` are paired `same_digits`, not `same_phone` | classify by `phone_national` alone, with no family test |
 

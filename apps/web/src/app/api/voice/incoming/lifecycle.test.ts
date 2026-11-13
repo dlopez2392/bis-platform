@@ -226,7 +226,7 @@ function callIncomingEvent(callId = "call_abc123", handoffToken: string | null =
     data: {
       call_id: callId,
       sip_headers: [
-        { name: "From", value: "sip:+19562921696@sip.example.com" },
+        { name: "From", value: "sip:+19565550196@sip.example.com" },
         { name: "X-BIS-Called", value: "+19565550999" },
         ...(handoffToken === null ? [] : [{ name: "X-BIS-Handoff", value: handoffToken }]),
       ],
@@ -1550,7 +1550,7 @@ describe("every ending hangs up the leg, not only the handoff", () => {
 });
 
 describe("a recording is hung up on, not conversed with", () => {
-  // 2026-09-17: eight of these reached 956 Woodworks — the only real client on
+  // 2026-09-17: eight of these reached the pilot client — the only real client on
   // the platform, live for one day — roughly hourly, from eight different
   // local numbers. Sofía answered each one helpfully for another forty
   // seconds, and every call was filed as `abandoned`, so the owner's
@@ -1599,7 +1599,7 @@ describe("a recording is hung up on, not conversed with", () => {
       await flushMicrotasks();
       const line = logSpy.mock.calls.find((c: unknown[]) => String(c[1]).startsWith("recorded message detected"));
       expect(line![2]).toEqual({ callId: "call_abc123", caller: "+1••••••••96" });
-      expect(JSON.stringify(logSpy.mock.calls)).not.toContain("+19562921696");
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain("+19565550196");
     } finally {
       logSpy.mockRestore();
     }

@@ -38,7 +38,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js/max";
  * Validity comes from libphonenumber-js's MAX metadata. The default MIN
  * metadata validates by LENGTH only, so every ten digits is "valid" as a
  * Mexican number and every US number would read as ambiguous (measured
- * 2026-09-26 on libphonenumber-js 1.13.14: 956-292-1696 is MX-valid under
+ * 2026-09-26 on libphonenumber-js 1.13.14: 956-555-0196 is MX-valid under
  * min and MX-invalid under max).
  *
  * Numbers that arrive from the CARRIER (an inbound caller, an inbound
@@ -77,7 +77,7 @@ function validUnder(tenDigits: string, country: PhoneCountry): boolean {
 /**
  * A trailing extension ("x2", "ext 12", "ext. 3", "#4"), any case, stripped
  * before anything else reads the string — including the `+` branch (review
- * I1). Without this, "(415) 555-0100 x2" or "(956) 292-1696 ext 12" read
+ * I1). Without this, "(415) 555-0100 x2" or "(956) 555-0196 ext 12" read
  * their extension digits as PART of the phone number, turning a US number
  * with an extension into a confirmed Swiss or Myanmar one.
  *

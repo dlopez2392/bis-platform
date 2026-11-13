@@ -1484,7 +1484,7 @@ Sofía's in-call booking ends with outcome `booked`, which `isMeaningful` (`:166
 ```ts
 it("a lead call on an archived contact restores it with the call sign (ruling Q1; mutation: drop the restore -> FAILS)", async () => {
   const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19565550196" } });
   await finishCall(s, ctx, meta);
   // The contact id is whatever this file's createContact mock resolves in beforeEach: read it and put it here.
   expect(dbMocks.restoreContactOnSign).toHaveBeenCalledWith({}, "a1", CREATED_CONTACT_ID, "call");
@@ -1496,7 +1496,7 @@ it("an abandoned call restores nobody (mutation: restore outside `if (contactId)
 it("a failed restore never costs the call its alert (mutation: let it throw -> FAILS)", async () => {
   dbMocks.restoreContactOnSign.mockRejectedValueOnce(new Error("boom"));
   const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19565550196" } });
   expect(await finishCall(s, ctx, meta)).toMatchObject({ notified: true });
 });
 ```

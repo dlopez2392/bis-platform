@@ -702,11 +702,11 @@ describe("applyImportBatch", () => {
     expect(ada!.first_name).toBe("Ada"); // untouched: the CSV had no first name
   });
 
-  it("matches on phone across formatting — (956) 292-1696 is +19562921696", async () => {
-    const existing = await createContact(db, accountId, { phone: "+19562921696" }, actorId);
+  it("matches on phone across formatting — (956) 555-0196 is +19565550196", async () => {
+    const existing = await createContact(db, accountId, { phone: "+19565550196" }, actorId);
     const index = await buildMatchIndex(db, accountId);
     const r = await applyImportBatch(db, accountId,
-      [{ input: { phone: "(956) 292-1696", firstName: "Dan" }, tags: [] }],
+      [{ input: { phone: "(956) 555-0196", firstName: "Dan" }, tags: [] }],
       index, actorId, { createTags: false });
     expect(r).toEqual({ created: 0, updated: 1 });
     expect((await getContact(db, accountId, existing.id))!.first_name).toBe("Dan");

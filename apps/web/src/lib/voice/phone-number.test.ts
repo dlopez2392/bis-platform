@@ -3,10 +3,10 @@ import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 
 describe("e164Of — normalisePhone's E.164 (F-009)", () => {
   it.each([
-    ["9562921696", "+19562921696"],
-    ["(956) 292-1696", "+19562921696"],
-    ["19562921696", "+19562921696"],
-    ["+19562921696", "+19562921696"],
+    ["9565550196", "+19565550196"],
+    ["(956) 555-0196", "+19565550196"],
+    ["19565550196", "+19565550196"],
+    ["+19565550196", "+19565550196"],
     ["525512345678", "+525512345678"],
     // THE F-009 case: ten digits valid only in Mexico are +52, never +1
     // (mutation: e164Of = old toE164, any ten digits → +1 → FAILS).
@@ -22,20 +22,20 @@ describe("e164Of — normalisePhone's E.164 (F-009)", () => {
 // before the compare; a call with no caller ID matches nothing at all.
 describe("isCallerIdNumber", () => {
   it.each([
-    ["+19562921696", true],
-    ["(956) 292-1696", true],
-    ["956-292-1696", true],
+    ["+19565550196", true],
+    ["(956) 555-0196", true],
+    ["956-555-0196", true],
     ["+19565550100", false],
     ["", false],
     [null, false],
     [undefined, false],
-  ])("stored %s against caller ID +19562921696 → %s", (stored, want) =>
-    expect(isCallerIdNumber(stored, "+19562921696")).toBe(want));
+  ])("stored %s against caller ID +19565550196 → %s", (stored, want) =>
+    expect(isCallerIdNumber(stored, "+19565550196")).toBe(want));
 
   it("a withheld caller ID matches nothing — not even a blank stored phone", () => {
     expect(isCallerIdNumber(null, null)).toBe(false);
     expect(isCallerIdNumber("", null)).toBe(false);
-    expect(isCallerIdNumber("+19562921696", null)).toBe(false);
+    expect(isCallerIdNumber("+19565550196", null)).toBe(false);
   });
 });
 

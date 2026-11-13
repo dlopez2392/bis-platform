@@ -40,7 +40,7 @@ vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMo
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const RAW_PUBLIC_KEY = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64");
 const OUR_NUMBER = "+19565550000";
-const CUSTOMER = "+19562921696";
+const CUSTOMER = "+19565550196";
 
 function signed(payload: object, key = privateKey): Request {
   const raw = JSON.stringify({ data: { event_type: "message.received", payload } });

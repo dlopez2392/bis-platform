@@ -79,7 +79,7 @@ echo "replica up: pre (without $NEW) and post (with it) on :$PORT"
 Verified on 2026-09-26:
 - **E1. libphonenumber-js.** Installed `libphonenumber-js@1.13.14`, licence MIT (`package.json`). `metadata.max.json` is 157,416 bytes, `metadata.min.json` 83,892. Measured with node against the installed package (scratch script):
   - MIN metadata validates by LENGTH only: every ten digits is "valid" as a Mexican number, so every US number would read as ambiguous. MAX (and mobile) tell them apart. The plan imports `libphonenumber-js/max`.
-  - Under max: `956 292 1696` (McAllen) is valid as US only; `899 922 1234` (Reynosa), `81 8123 4567` (Monterrey), `656 123 4567` (Juárez) as Mexican only; `868 812 3456` (Matamoros) is valid under +52 and INVALID under +1 (868 is Trinidad in the NANP, and this number is not valid there); `55 1234 5678` is valid under both (CDMX 55; New Jersey 551); `956 123 4567` is valid under neither.
+  - Under max: `956 555 0196` (McAllen) is valid as US only; `899 922 1234` (Reynosa), `81 8123 4567` (Monterrey), `656 123 4567` (Juárez) as Mexican only; `868 812 3456` (Matamoros) is valid under +52 and INVALID under +1 (868 is Trinidad in the NANP, and this number is not valid there); `55 1234 5678` is valid under both (CDMX 55; New Jersey 551); `956 123 4567` is valid under neither.
   - `+52 1 …` (the retired mobile `1`) is INVALID until the `1` is dropped. With a default country of US, the library mis-parses `00 52 …`, so `phone.ts` strips `00` and `011` itself before asking.
 - **E2. It stays on the server.** Only `packages/db/src/phone.ts` imports the library. In `apps/web` no `"use client"` module imports `@bis/db/phone` or `lib/voice/phone-number` at run time; `phone-country-row.tsx` and `lib/contacts/phone-country.ts` import the `PhoneCountry` TYPE only (erased at compile). Checked by grep over every `"use client"` file on the finished tree. **Imprecise, as the review found (R1-M7):** `packages/db/src/contacts.ts` imports `./phone`, so the `@bis/db` BARREL reaches libphonenumber, and four `"use client"` files import runtime values from that barrel (`quote-followup-card.tsx`, `reactivation-card.tsx`, `plan-dialog.tsx`, `quiet-hours-card.tsx`). Only tree-shaking keeps it out of the browser today (E8 measured it: 0 files under `.next/static`). Task 17 step 1 re-measures it on the branch head, so a regression is caught before merge.
 - **E3. Telnyx's refusal for a number that texted STOP** (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out, read 2026-09-26): code `40300`, title "Blocked due to STOP message", body `{"errors":[{"code":"40300","title":"Blocked due to STOP message","detail":"Messages cannot be sent from '{from}' to '{to}' due to an existing block rule."}]}`. The same page: "block rules operate at the **messaging profile level**. If a user opts out from one number on your profile, they're opted out from all numbers on that profile" (the reason spec §5 makes one profile per texting account a go-live precondition).
@@ -93,7 +93,7 @@ Assumptions (not verified; each names what settles it):
 - **A1.** Telnyx answers the `40300` refusal with a non-2xx HTTP status (the docs give the body, not the status). The code never depends on the status: `SmsProviderError` is thrown for every non-2xx and the gate keys on the CODE. Settled the first time a real send to an opted-out number fails (PR-2's reconciliation checks it).
 - **A2.** Tex. Bus. & Com. Code §301.051's hours reach texts (danlo's reading; spec §10). The code applies them to the four marketing kinds either way. Counsel settles it (spec §5, go-live item 3).
 - **A3.** The CI project (Postgres 17) runs referential actions as the owner exactly as the PG18 replica does (E4). Task 17 settles it: `consent-ledger-schema.test.ts` runs in CI's `verify` job against the CI project once 0054 is there.
-- **A4. SETTLED (small), 2026-09-26.** The orchestrator read production (counts only): 26 candidates across 4 accounts (956 Woodworks 1, Bespoke Intelligent Solutions 4, Resaca 19, Test Client One 2); none is a valid Mexican number (a regex built from libphonenumber-js@1.13.14's max metadata for MX, which matched `isValidPhoneNumber(n, "MX")` on 300,000 random numbers with 0 mismatches); of all production contacts with a ten-digit `phone_key`, 46 are stored with `+` and 5 bare. So the backfill can flag at most 5 contacts, likely 0. Task 17 still reads after the deploy and writes only after danlo sees the count.
+- **A4. SETTLED (small), 2026-09-26.** The orchestrator read production (counts only): 26 candidates across 4 accounts (the pilot client 1, Bespoke Intelligent Solutions 4, Resaca 19, Test Client One 2); none is a valid Mexican number (a regex built from libphonenumber-js@1.13.14's max metadata for MX, which matched `isValidPhoneNumber(n, "MX")` on 300,000 random numbers with 0 mismatches); of all production contacts with a ten-digit `phone_key`, 46 are stored with `+` and 5 bare. So the backfill can flag at most 5 contacts, likely 0. Task 17 still reads after the deploy and writes only after danlo sees the count.
 - **A5.** `pnpm install --frozen-lockfile --prefer-offline` succeeds on a clean runner with Task 2's lock change (it did on this machine after the change; CI's `verify` settles it).
 - **A6. SETTLED, 2026-09-26.** The Supabase MCP connector reaches the CI project read-only (the orchestrator ran the `dnd` count there: 0 rows).
 
@@ -114,7 +114,7 @@ Assumptions (not verified; each names what settles it):
 - **G11. Where `normalisePhone` lives, and `phone_key` on a `+52` pick.** `packages/db/src/phone.ts`, because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) must store what it says and lives in `packages/db`; the web app's `e164Of` wraps it. Every contact write passes the number AS TYPED or AS SAID, never `e164Of`'s output (review R2-C1: a pre-read `+1` reads as a code the person gave, so an ambiguous number was stored confirmed). Dedupe keys the number AS IT WILL BE STORED (`phoneKeyOf`), so a Reynosa number no longer collides with its mis-stored `+1` copy; and when a `+52` ten-digit key misses, it also looks up the bare ten digits: a contact stored as those bare digits is the same contact, and a `+1` contact with them is recorded as a pair, reason `phone_country_twin` (review R1-I3). A drawer pick that moves a number onto another contact's key still writes (the operator's answer is the truth about that row; `phone_key` is not unique) and records the pair in `contact_duplicate_flags` with reason `phone_country_pick`, the queue a merge tool reads (0033); a repeat is a no-op (23505, the unique `contact_duplicate_flags_pair` index). A flag that cannot be written after the pick's write is logged, never reported as a failed pick (R3-M11). Undo restores the phone and the flag; the duplicate flag stays for the merge tool to re-check.
 - **G12. The A2P read.** Spec §4.1 item 3 step 3 runs `resolveSmsSender` in the gate. Its own read error THROWS, as it always has, into each caller's existing catch (a failed tick, an error line in the composer); only the ledger and flag reads become `blocked: ledger_unavailable`. That keeps every caller's current handling of an A2P outage unchanged.
 - **G13. Retiring the quiet-hours form.** The switch, the two pickers, `saveQuietHoursAction`, `readQuietSettings`/`saveQuietSettings`/`DEFAULT_QUIET_SETTINGS`/`isClock` and the ten form lines go (Task 10). The card stays at `#quiet-hours`, read-only, in the spec's words (§6). `automation_settings` and its columns stay until a later migration drops them after parity (spec §3); nothing reads them (scan 5).
-- **G14. The drawer in PR-1.** The Messages block "lands in parts" (spec §6); PR-1 ships the Texts row's Check number state only. So the row renders NOTHING unless the number could be Mexican or US, sits above the existing "No marketing emails" switch (which PR-3 replaces), and uses the drawer's own summary states for loading (the skeleton) and error ("Couldn't load"); the block's own two-row skeleton and error line apply from PR-2 (spec §6, corrected). It renders in the drawer and on the full contact page, like the switch. The summary API reports `phone_country_unconfirmed` as the flag OR "the stored number reads both ways" (a number saved before the backfill ran is ambiguous too, and the gate refuses it either way); the drawer's parser tolerates the field missing (a server from before this PR). The pick rewrites the stored number's ten digits under the chosen country and clears the flag (spec §4.2, "The number's country"), compare-and-set on the phone the action read, and ONLY while the stored number is still ambiguous (flagged, or reading both ways): the row that asked may be stale, so a corrected `+19562921696` must not be re-coded `+529562921696` (review R3-I2). The row is keyed by the contact and the flag it was built from, and the drawer re-reads its summary after a phone save, so a number edited into an ambiguous one shows the row, and one corrected hides it, without a reload. The undo only ever restores the SAME ten digits (its arguments come off the wire), in the normaliser's form, and never clears the flag for a number the normaliser still calls ambiguous (R3-M12).
+- **G14. The drawer in PR-1.** The Messages block "lands in parts" (spec §6); PR-1 ships the Texts row's Check number state only. So the row renders NOTHING unless the number could be Mexican or US, sits above the existing "No marketing emails" switch (which PR-3 replaces), and uses the drawer's own summary states for loading (the skeleton) and error ("Couldn't load"); the block's own two-row skeleton and error line apply from PR-2 (spec §6, corrected). It renders in the drawer and on the full contact page, like the switch. The summary API reports `phone_country_unconfirmed` as the flag OR "the stored number reads both ways" (a number saved before the backfill ran is ambiguous too, and the gate refuses it either way); the drawer's parser tolerates the field missing (a server from before this PR). The pick rewrites the stored number's ten digits under the chosen country and clears the flag (spec §4.2, "The number's country"), compare-and-set on the phone the action read, and ONLY while the stored number is still ambiguous (flagged, or reading both ways): the row that asked may be stale, so a corrected `+19565550196` must not be re-coded `+529565550196` (review R3-I2). The row is keyed by the contact and the flag it was built from, and the drawer re-reads its summary after a phone save, so a number edited into an ambiguous one shows the row, and one corrected hides it, without a reload. The undo only ever restores the SAME ten digits (its arguments come off the wire), in the normaliser's form, and never clears the flag for a number the normaliser still calls ambiguous (R3-M12).
 - **G15. Copy the spec does not give** (the voice rule applies; each is pinned where it renders): the row's word "Check number" (§6 names the state) and label "Texts" under "Messages"; toasts "Saved as a Mexican number" / "Saved as a US number" with Undo; "Their number changed while you were choosing. Reload to see it."; "That number can't be read as a US or Mexican number. Edit it instead."; the composer's held, unconfirmed and unreadable lines (G10); the alert phone's legend "Country of this number" and its country-mismatch line (G10); the Activity source title "Missed-call text-back"; the automation-log reasons (G3, including the 15-minute retry); the held text-back's default bodies without "just now" (G6). **Both places say "Mexico (+52)"** (orchestrator, 2026-09-26; spec §6 and §4.1 corrected at the source; `copy.test.ts` pins both, equal). The quiet card's last sentence is "Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment." (the spec's first wording promised the late reminder choice 21 skips; corrected in spec §6 and pinned).
 - **G16. The ledger's actor column.** Spec §3 named `actor_user_id uuid` FK `users` (now corrected to `actor_id text`). Staff actions know the Clerk user id (`requireAccountAccess` → `userId`, a string like `user_…`), which is what `events.actor_id` already stores; a uuid FK would need a lookup and would fail for the ids this codebase actually carries. 0054 has `actor_id text`, required (non-blank) for `staff` and `staff_undo` by a CHECK. PR-2 writes it.
 - **G17. Grants.** Spec §3 said "revoke all from anon and authenticated; grant select to authenticated" AND "No role, `service_role` included, holds update or delete" (now corrected to the following). 0054 revokes ALL from `anon`, `authenticated` AND `service_role` (the default ACL hands all three ALL, `MAINTAIN` included), then grants `SELECT` to `authenticated` and `SELECT, INSERT` to `service_role`. The contact reference is composite (`(account_id, contact_id)` → `contacts(account_id, id)`, 0050's pattern), `on delete set null (contact_id)`, so a row can never name another account's contact; the set-null finds rows through `consent_events_contact_idx` (review R1-M5).
@@ -470,10 +470,10 @@ index 61c2e0d7..bf75aa4c 100644
 -  it("asks for the newest deciding row of that address, newest first by time then id, one row", async () => {
 +  it("asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)", async () => {
      const f = fakeDb({ read: { data: [], error: null } });
-     expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+     expect(await readConsentState(f.db, "a1", "sms", "+19565550196")).toEqual({ state: "allowed" });
      expect(f.calls).toEqual(expect.arrayContaining([
 @@ -86,7 +96,7 @@ describe("readConsentState", () => {
-       ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+       ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19565550196"],
        ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
        ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
 -      ["limit", 1],
@@ -964,10 +964,10 @@ function fakeDb(o: { read?: { data: unknown; error: unknown }; insert?: { data: 
 describe("readConsentState", () => {
   it("asks for the newest deciding row of that address, newest first by time then id, one row", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+    expect(await readConsentState(f.db, "a1", "sms", "+19565550196")).toEqual({ state: "allowed" });
     expect(f.calls).toEqual(expect.arrayContaining([
       ["from", "consent_events"],
-      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19565550196"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
       ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
       ["limit", 1],
@@ -976,22 +976,22 @@ describe("readConsentState", () => {
 
   it("THROWS on a read error (the gate fails closed on it; mutation: return allowed → FAILS)", async () => {
     const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
-    await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
+    await expect(readConsentState(f.db, "a1", "sms", "+19565550196")).rejects.toThrow("readConsentState failed: permission denied");
   });
 });
 
 describe("recordCarrierBlock", () => {
   it("appends revoked / carrier_block with the kind as evidence", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: "c1", kind: "voice.textback" })).toBe("appended");
     const insert = f.calls.find((c) => c[0] === "insert")?.[1];
-    expect(insert).toMatchObject({ account_id: "a1", channel: "sms", address: "+19562921696", action: "revoked",
+    expect(insert).toMatchObject({ account_id: "a1", channel: "sms", address: "+19565550196", action: "revoked",
       method: "carrier_block", contact_id: "c1", evidence: { kind: "voice.textback" } });
   });
 
   it("an address already stopped gets NO second row (spec §4.3 idempotency; mutation: always append → FAILS)", async () => {
     const f = fakeDb({ read: { data: [row("revoked", "2026-10-03T15:00:00Z")], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
     expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
   });
 });
@@ -1570,7 +1570,7 @@ index e7d2e49b..08d3cb27 100644
 +  it("digits that begin with a country code are that country's, never re-read under the other (mutation: strip 52/1 and take the chosen country → a stranger's number, FAILS)", () => {
 +    expect(phoneForCountry("52 55 1234 5678", "US")).toBeNull();
 +    expect(phoneForCountry("52 899 922 1234", "US")).toBeNull();
-+    expect(phoneForCountry("1 956 292 1696", "MX")).toBeNull();
++    expect(phoneForCountry("1 956 555 0196", "MX")).toBeNull();
 +    expect(phoneForCountry("52 55 1234 5678", "MX")).toBe("+525512345678");
 +  });
 +
@@ -1794,8 +1794,8 @@ index 8aa91901..991c530c 100644
 +
 +  it("a +1 number never takes the +52 fallback (mutation: drop the /^52\\d{10}$/ guard → a second phone_key read, FAILS)", async () => {
 +    const n = memoryDb([]);
-+    expect(await createContact(n.db, "a1", { phone: "(956) 292-1696" }, "user_test")).toMatchObject({ existing: false, flagged: false });
-+    expect(n.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["9562921696"]);
++    expect(await createContact(n.db, "a1", { phone: "(956) 555-0196" }, "user_test")).toMatchObject({ existing: false, flagged: false });
++    expect(n.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["9565550196"]);
 +  });
 +
 +  it("an EMAIL match still queues the country twin its +52 number found (re-review minor 12; mutation: return the email match without the flag → FAILS)", async () => {
@@ -1864,7 +1864,7 @@ import { normalisePhone, phoneForCountry, repickPhoneCountry, couldBeMexican } f
 describe("normalisePhone: ten digits, judged by country", () => {
   it.each([
     // [label, input, e164, unconfirmed]
-    ["McAllen, US only (956)", "(956) 292-1696", "+19562921696", false],
+    ["McAllen, US only (956)", "(956) 555-0196", "+19565550196", false],
     ["El Paso, US only (915)", "915-234-5678", "+19152345678", false],
     ["Toronto, NANP only (416)", "416 555 0199", "+14165550199", false],
     ["Reynosa, MX only (899)", "899 922 1234", "+528999221234", false],
@@ -1881,14 +1881,14 @@ describe("normalisePhone: ten digits, judged by country", () => {
 
 describe("normalisePhone: a number with a country code is kept as given", () => {
   it.each([
-    ["+1, as a carrier sends it", "+19562921696", "+19562921696"],
+    ["+1, as a carrier sends it", "+19565550196", "+19565550196"],
     ["+1 of an ambiguous number is NOT flagged: the code is the confirmation", "+15512345678", "+15512345678"],
     ["+52, as a carrier sends it", "+528999221234", "+528999221234"],
     ["+52 1 drops the retired mobile 1", "+52 1 899 922 1234", "+528999221234"],
     ["00 52 (dialled from Mexico)", "00 52 899 922 1234", "+528999221234"],
     ["00 52 1 drops the 1 too", "0052 1 899 922 1234", "+528999221234"],
     ["011 52 (dialled from the US)", "011 52 899 922 1234", "+528999221234"],
-    ["1 + ten digits is the NANP trunk prefix", "1 (956) 292-1696", "+19562921696"],
+    ["1 + ten digits is the NANP trunk prefix", "1 (956) 555-0196", "+19565550196"],
     ["a UK number typed with +", "+44 20 7946 0958", "+442079460958"],
   ])("%s", (_label, input, e164) => {
     expect(normalisePhone(input)).toEqual({ e164, unconfirmed: false });
@@ -1903,16 +1903,16 @@ describe("normalisePhone: nothing to text", () => {
 
 describe("phoneForCountry: a number typed beside a country choice", () => {
   it("ten national digits take the chosen country", () => {
-    expect(phoneForCountry("956 292 1696", "US")).toBe("+19562921696");
-    expect(phoneForCountry("956 292 1696", "MX")).toBe("+529562921696");
-    expect(phoneForCountry("1 956 292 1696", "US")).toBe("+19562921696");
+    expect(phoneForCountry("956 555 0196", "US")).toBe("+19565550196");
+    expect(phoneForCountry("956 555 0196", "MX")).toBe("+529565550196");
+    expect(phoneForCountry("1 956 555 0196", "US")).toBe("+19565550196");
     expect(phoneForCountry("52 1 899 922 1234", "MX")).toBe("+528999221234");
   });
 
   it("a typed country code must agree with the choice (mutation: return the typed E.164 regardless → FAILS)", () => {
     expect(phoneForCountry("+52 899 922 1234", "MX")).toBe("+528999221234");
     expect(phoneForCountry("+52 899 922 1234", "US")).toBeNull();
-    expect(phoneForCountry("+1 956 292 1696", "MX")).toBeNull();
+    expect(phoneForCountry("+1 956 555 0196", "MX")).toBeNull();
     expect(phoneForCountry("011 52 899 922 1234", "MX")).toBe("+528999221234");
     expect(phoneForCountry("+44 20 7946 0958", "US")).toBeNull();
   });
@@ -1942,11 +1942,11 @@ describe("couldBeMexican: the 0054 backfill's test", () => {
     ["+1 and ten digits valid under +52 (CDMX 55, also NJ 551)", "+15512345678", true],
     ["+1 and a Reynosa number the old toE164 made American", "+18999221234", true],
     ["1 and ten digits, no plus, valid under +52", "1 (899) 922-1234", true],
-    ["+1 McAllen, not a Mexican number", "+19562921696", false],
+    ["+1 McAllen, not a Mexican number", "+19565550196", false],
     ["bare ten digits valid under both", "55 1234 5678", true],
     ["bare ten digits valid under neither (a write would flag it too)", "956 123 4567", true],
     ["bare Reynosa: the gate already reads it as +52, no flag", "899 922 1234", false],
-    ["bare McAllen", "(956) 292-1696", false],
+    ["bare McAllen", "(956) 555-0196", false],
     ["already +52", "+528999221234", false],
     ["a UK number", "+44 20 7946 0958", false],
     ["blank", "", false],
@@ -1970,7 +1970,7 @@ import { phoneFields, phoneKeyOf } from "./contacts";
  */
 describe("phoneFields", () => {
   it("a US number is stored as E.164, unflagged", () => {
-    expect(phoneFields("(956) 292-1696")).toEqual({ phone: "+19562921696", phone_country_unconfirmed: false });
+    expect(phoneFields("(956) 555-0196")).toEqual({ phone: "+19565550196", phone_country_unconfirmed: false });
   });
 
   it("a plainly Mexican ten digits is stored as +52, unflagged (mutation: always +1 → FAILS)", () => {
@@ -1998,7 +1998,7 @@ describe("phoneKeyOf — the dedupe key of the number as it will be stored", () 
   });
 
   it("the same US number spelled two ways keys the same", () => {
-    expect(phoneKeyOf("(956) 292-1696")).toBe(phoneKeyOf("+19562921696"));
+    expect(phoneKeyOf("(956) 555-0196")).toBe(phoneKeyOf("+19565550196"));
   });
 
   it("blank is the empty key", () => {
@@ -2214,7 +2214,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js/max";
  * Validity comes from libphonenumber-js's MAX metadata. The default MIN
  * metadata validates by LENGTH only, so every ten digits is "valid" as a
  * Mexican number and every US number would read as ambiguous (measured
- * 2026-09-26 on libphonenumber-js 1.13.14: 956-292-1696 is MX-valid under
+ * 2026-09-26 on libphonenumber-js 1.13.14: 956-555-0196 is MX-valid under
  * min and MX-invalid under max).
  *
  * Numbers that arrive from the CARRIER (an inbound caller, an inbound
@@ -2549,9 +2549,9 @@ Expected (the staged replay's GREEN run):
     - normalisePhone: ten digits, judged by country Toronto, NANP only (416)
     - normalisePhone: ten digits, judged by country Matamoros, MX only (868; +1 868 is Trinidad and invalid here)
     - normalisePhone: ten digits, judged by country an invalid exchange in 956: NEITHER
-    - couldBeMexican: the 0054 backfill's test +1 McAllen, not a Mexican number → +19562921696
+    - couldBeMexican: the 0054 backfill's test +1 McAllen, not a Mexican number → +19565550196
     - couldBeMexican: the 0054 backfill's test bare ten digits valid under neither (a write would flag it too) → 956 123 4567
-    - couldBeMexican: the 0054 backfill's test bare McAllen → (956) 292-1696
+    - couldBeMexican: the 0054 backfill's test bare McAllen → (956) 555-0196
 2. **keep the retired Mexican 1** — in `src/phone.ts`: ``return /^\+521\d{10}$/.test(e164) ? `+52${e164.slice(4)}` : e164;`` → `return e164;`; turns red 2 tests:
     - normalisePhone: a number with a country code is kept as given +52 1 drops the retired mobile 1
     - normalisePhone: a number with a country code is kept as given 00 52 1 drops the 1 too
@@ -3025,7 +3025,7 @@ describe("rowsToFlag", () => {
   it("keeps exactly the numbers that could be Mexican (mutation: keep every candidate → FAILS)", () => {
     const rows = [
       row(1, "+15512345678", "5512345678"),   // +1, valid under +52: flag
-      row(2, "+19562921696", "9562921696"),   // McAllen: no
+      row(2, "+19565550196", "9565550196"),   // McAllen: no
       row(3, "55 1234 5678", "5512345678"),   // bare, both: flag
       row(4, "899 922 1234", "8999221234"),   // bare Reynosa: the gate reads +52 already
     ];
@@ -3109,7 +3109,7 @@ async function seed(c: Client) {
   const ids = {
     plusOne: await contact("plus one, could be Mexican", "+15512345678"),
     legacy: await contact("bare ten digits, both", "55 1234 5679"),
-    mcallen: await contact("McAllen", "+19562921696"),
+    mcallen: await contact("McAllen", "+19565550196"),
     caller: await contact("called in", "+15512349999"),
     texter: await contact("texted in", "(551) 234-8888"),
     mexican: await contact("already +52", "+528999221234"),
@@ -3152,7 +3152,7 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
     withRollback(async (c) => {
       const { account, ids } = await seed(c);
       const flag = rowsToFlag(await candidates(c, account));
-      await c.query("update contacts set phone = '+19562921697' where id = $1", [ids.plusOne]);
+      await c.query("update contacts set phone = '+19565550197' where id = $1", [ids.plusOne]);
       const res = await c.query(flagSql(flag));
       expect(res.rows.map((r: { id: string }) => r.id)).toEqual([ids.legacy]);
     }));
@@ -4567,7 +4567,7 @@ Findings: R2-C1 (CRITICAL), R1-I4, R2 minor (sip-headers); re-review minors 3, 4
 - `app/b/[publicId]/actions.test.ts`: an ambiguous number reaches createContact as typed, never pre-read as +1 (mutation: phone: e164Of(phone) → "+15512345678", FAILS)
 - `app/b/[publicId]/actions.test.ts`: a plainly US number reaches it as typed too: the one normaliser is the contact write's
 - `app/f/[publicId]/actions.test.ts`: the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → "+19565551234", FAILS)
-- `lib/proposals/generate.test.ts`: stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19562921696", FAILS)
+- `lib/proposals/generate.test.ts`: stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19565550196", FAILS)
 - `lib/voice/finish-call.test.ts`: a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → "+15512345678", FAILS)
 - `lib/voice/phone-number.test.ts`: a number said as ten digits is stored as said, never pre-read as +1 (mutation: return e164Of(said) → a confirmed +1, FAILS)
 - `lib/voice/phone-number.test.ts`: a leading 1 or +1 the model added is dropped, so the ten digits are judged (mutation: keep the +1 → FAILS)
@@ -4585,7 +4585,7 @@ Findings: R2-C1 (CRITICAL), R1-I4, R2 minor (sip-headers); re-review minors 3, 4
 - **a form pre-normalises to +1** in `apps/web/src/lib/forms/enrich.ts`: ``       phone: rawPhone || undefined, `` → ``       phone: rawPhone ? (e164Of(rawPhone) ?? rawPhone) : undefined, ``. KILLED, red: "submitFormAction — the phone reaches createContact AS TYPED (create path; consent chain F-009) the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → "+19565551234", FAILS)".
 - **Sofia's lead pre-normalised** in `apps/web/src/lib/voice/finish-call.ts`: `` phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined, `` → `` phone: (spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? "").replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1") || undefined, ``. KILLED, red: "finishCall a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → "+15512345678", FAILS)"; "finishCall a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row".
 - **book_appointment keeps the model's +1** in `apps/web/src/lib/voice/tools/registry.ts`: `` const phone = spokenPhone(String(args?.phone ?? ""), ctx.callerNumber); `` → `` const phone = String(args?.phone ?? "") || ctx.callerNumber; ``. KILLED, red: "book_appointment stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → "+15512345678", FAILS)".
-- **a proposal stores +1** in `apps/web/src/lib/proposals/generate.ts`: ``           storedValue = said; `` → ``           storedValue = said.replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1"); ``. KILLED, red: "generateProposals stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19562921696", FAILS)".
+- **a proposal stores +1** in `apps/web/src/lib/proposals/generate.ts`: ``           storedValue = said; `` → ``           storedValue = said.replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1"); ``. KILLED, red: "generateProposals stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19565550196", FAILS)".
 - **no format instruction on callbackNumber** in `apps/web/src/lib/voice/tools/schemas.ts`: `` callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." } `` → `` callbackNumber: { type: "string" } ``. KILLED, red: "phone parameters say how to write a number (review R1-I4) book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)".
 - **strip the carrier's +** in `apps/web/src/lib/voice/sip-headers.ts`: `` const NUMBER_RE = /(?:tel:|sip:)(\+?[0-9]{7,15})/i; `` → `` const NUMBER_RE = /(?:tel:|sip:)\+?([0-9]{7,15})/i; ``. KILLED, red: "extractCallerNumber parses tel:, sip:, display names, bare 10/11 digits".
 - **minor 4: only a +1 caller ID** in `apps/web/src/lib/voice/phone-number.ts`: ``     : callerDigits.length === 12 && callerDigits.startsWith("52") ? callerDigits.slice(2) ⏎     : callerDigits.length === 13 && callerDigits.startsWith("521") ? callerDigits.slice(3) ⏎  `` → (nothing). KILLED, red: "spokenPhone — the number a voice contact write stores a Mexican caller reciting their own ten digits is the caller ID, never a second +1-flagged contact (re-review minor 4; mutation: compare only a +1 caller ID → "55 1234 5678", FAILS)".
@@ -4769,7 +4769,7 @@ index c51bf5c9..fcfe929c 100644
    // it reaches the database, not stored as the digits the model happened to
    // return (mutation target: storing `value` raw instead of `toE164(value)`).
 -  it("normalizes a valid phone value to E.164 before it reaches the database (mutation: store the raw value instead of toE164(value) -> FAILS)", async () => {
-+  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19562921696\", FAILS)", async () => {
++  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19565550196\", FAILS)", async () => {
      const db = fakeDb();
      const n = await generateProposals({
        ...base, db, contactId: "c1", blankFields: ["phone"],
@@ -4777,8 +4777,8 @@ index c51bf5c9..fcfe929c 100644
        }),
      });
      expect(n).toBe(1);
--    expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19562921696" });
-+    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9562921696" });
+-    expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19565550196" });
++    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9565550196" });
    });
  
    // Fix-wave Minor: `fillContactBlanks` (the accept-time write) lowercases
@@ -4826,14 +4826,14 @@ index 6215c082..a1bff8f3 100644
 +    await finishCall(said, ctx, meta);
 +    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "55 1234 5678" }), "voice", "ai");
 +    const repeated = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } });
++      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 555 0196" } });
 +    await finishCall(repeated, ctx, meta);
-+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "+19562921696" }), "voice", "ai");
++    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "+19565550196" }), "voice", "ai");
 +  });
 +
    it("a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row", async () => {
      const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19565550196" } });
 ```
 
 ```diff
@@ -4877,7 +4877,7 @@ index ae71859c..25a070c9 100644
 +
  /**
   * Is a contact's stored phone the number this call came from? Contacts keep a
-  * phone in whatever shape it was typed ("(956) 292-1696" from a web form), so
+  * phone in whatever shape it was typed ("(956) 555-0196" from a web form), so
 ```
 
 ```diff
@@ -4893,7 +4893,7 @@ index 81279425..52e98b68 100644
  describe("e164Of — normalisePhone's E.164 (F-009)", () => {
    it.each([
 @@ -38,3 +38,34 @@ describe("isCallerIdNumber", () => {
-     expect(isCallerIdNumber("+19562921696", null)).toBe(false);
+     expect(isCallerIdNumber("+19565550196", null)).toBe(false);
    });
  });
 +
@@ -5101,10 +5101,10 @@ import { e164Of, isCallerIdNumber } from "./phone-number";
 
 describe("e164Of — normalisePhone's E.164 (F-009)", () => {
   it.each([
-    ["9562921696", "+19562921696"],
-    ["(956) 292-1696", "+19562921696"],
-    ["19562921696", "+19562921696"],
-    ["+19562921696", "+19562921696"],
+    ["9565550196", "+19565550196"],
+    ["(956) 555-0196", "+19565550196"],
+    ["19565550196", "+19565550196"],
+    ["+19565550196", "+19565550196"],
     ["525512345678", "+525512345678"],
     // THE F-009 case: ten digits valid only in Mexico are +52, never +1
     // (mutation: e164Of = old toE164, any ten digits → +1 → FAILS).
@@ -5120,20 +5120,20 @@ describe("e164Of — normalisePhone's E.164 (F-009)", () => {
 // before the compare; a call with no caller ID matches nothing at all.
 describe("isCallerIdNumber", () => {
   it.each([
-    ["+19562921696", true],
-    ["(956) 292-1696", true],
-    ["956-292-1696", true],
+    ["+19565550196", true],
+    ["(956) 555-0196", true],
+    ["956-555-0196", true],
     ["+19565550100", false],
     ["", false],
     [null, false],
     [undefined, false],
-  ])("stored %s against caller ID +19562921696 → %s", (stored, want) =>
-    expect(isCallerIdNumber(stored, "+19562921696")).toBe(want));
+  ])("stored %s against caller ID +19565550196 → %s", (stored, want) =>
+    expect(isCallerIdNumber(stored, "+19565550196")).toBe(want));
 
   it("a withheld caller ID matches nothing — not even a blank stored phone", () => {
     expect(isCallerIdNumber(null, null)).toBe(false);
     expect(isCallerIdNumber("", null)).toBe(false);
-    expect(isCallerIdNumber("+19562921696", null)).toBe(false);
+    expect(isCallerIdNumber("+19565550196", null)).toBe(false);
   });
 });
 ```
@@ -5147,10 +5147,10 @@ pnpm exec vitest run src/lib/voice/phone-number.test.ts
 
 Expected (the staged replay's RED run):
 - `src/lib/voice/phone-number.test.ts`: **11 failing** that Step 4 turns green; 8 already pass:
-  - e164Of — normalisePhone's E.164 (F-009) 9562921696 → +19562921696
-  - e164Of — normalisePhone's E.164 (F-009) (956) 292-1696 → +19562921696
-  - e164Of — normalisePhone's E.164 (F-009) 19562921696 → +19562921696
-  - e164Of — normalisePhone's E.164 (F-009) +19562921696 → +19562921696
+  - e164Of — normalisePhone's E.164 (F-009) 9565550196 → +19565550196
+  - e164Of — normalisePhone's E.164 (F-009) (956) 555-0196 → +19565550196
+  - e164Of — normalisePhone's E.164 (F-009) 19565550196 → +19565550196
+  - e164Of — normalisePhone's E.164 (F-009) +19565550196 → +19565550196
   - e164Of — normalisePhone's E.164 (F-009) 525512345678 → +525512345678
   - e164Of — normalisePhone's E.164 (F-009) (899) 922-1234 → +528999221234
   - e164Of — normalisePhone's E.164 (F-009) invalid  → null
@@ -5172,8 +5172,8 @@ import { normalisePhone } from "@bis/db/phone";
  * digits become +1 or +52 by which country's plan they are valid in. It
  * replaced `toE164`, which made ANY ten digits +1 — so a Reynosa number a
  * caller spoke was stored as a US one. External APIs accept only E.164
- * (live-verified 2026-07-26: "9562921696", "(956) 292-1696" and
- * "19562921696" are refused; "+19562921696" passes).
+ * (live-verified 2026-07-26: "9565550196", "(956) 555-0196" and
+ * "19565550196" are refused; "+19565550196" passes).
  *
  * A number valid as both a US and a Mexican one comes back as `+1` here;
  * whether its country is CONFIRMED is `normalisePhone`'s `unconfirmed`,
@@ -5186,7 +5186,7 @@ export function e164Of(raw: string | null | undefined): string | null {
 
 /**
  * Is a contact's stored phone the number this call came from? Contacts keep a
- * phone in whatever shape it was typed ("(956) 292-1696" from a web form), so
+ * phone in whatever shape it was typed ("(956) 555-0196" from a web form), so
  * it is normalized before the compare. Caller ID is what the carrier presents,
  * not an authentication — but it is the one identity a call carries, and the
  * voice tools act on a contact only when it is this number. A withheld caller
@@ -5467,7 +5467,7 @@ Apply to `apps/web/src/lib/voice/tools/registry.ts` (against the task's parent c
 @@ -91,7 +91,7 @@ type BookingContact = {
   *       returned, never from anything the model passes; OR
   *   (b) the call shows a caller ID and the booking's contact's phone IS it.
-  *       `contacts.phone` is stored as typed ("(956) 292-1696" from a web
+  *       `contacts.phone` is stored as typed ("(956) 555-0196" from a web
 - *       form), so it is normalized with `toE164` before the compare — a raw
 + *       form), so it is normalized with `e164Of` before the compare — a raw
   *       string compare would refuse the rightful caller.
@@ -5760,13 +5760,13 @@ index ad4d5e79..67dad85e 100644
  
 +  it("a number from the CARRIER is not held on the contact's stored flag, at decide or at deliver (mutation: check the flag anyway → unconfirmed_number, FAILS)", async () => {
 +    db.readPhoneCountryFlag.mockResolvedValue(true);
-+    const d = await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true }));
++    const d = await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196", numberFromCarrier: true }));
 +    expect(d.kind).toBe("clear");
 +    expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
 +    if (d.kind !== "clear") throw new Error("expected clear");
 +    expect((await deliverSms(DB, d.send)).kind).toBe("sent");
 +    expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
-+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
++    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
 +  });
 +
    it("a bare ten-digit number valid as both +1 and +52 is blocked even with no flag stored (mutation: ignore normalisePhone's unconfirmed → clear, FAILS)", async () => {
@@ -5842,7 +5842,7 @@ const FROM = "+19565550000";
 // Tue 2026-10-06 15:00 in Chicago (CDT): inside every window.
 const DAY = new Date("2026-10-06T20:00:00Z");
 const base = (over: Partial<SmsRequest> = {}): SmsRequest => ({
-  accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 292-1696", body: "See you at 3",
+  accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 555-0196", body: "See you at 3",
   contactId: "ct_1", accountZone: "America/Chicago", now: DAY, ...over,
 });
 const send = vi.fn();
@@ -5885,7 +5885,7 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
     async (kind) => {
       db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e1" });
       expect(await decideSms(DB, base({ kind }))).toEqual({ kind: "blocked", reason: "stopped" });
-      expect(db.readConsentState).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");
+      expect(db.readConsentState).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19565550196");
     });
 
   it("a hold blocks as held, not as stopped (mutation: map held to stopped → FAILS)", async () => {
@@ -5970,8 +5970,8 @@ describe("sendSms: steps 8-9", () => {
     const prepare = vi.fn(async () => { order.push("prepare"); });
     const r = await sendSms(DB, base(), { prepare });
     expect(order).toEqual(["provider", "prepare", "send"]);
-    expect(prepare).toHaveBeenCalledWith({ body: `See you at 3 ${m["sms.optOut.en"]}`, to: "+19562921696", from: FROM });
-    expect(r).toEqual({ kind: "sent", providerMessageId: "p_9", to: "+19562921696", from: FROM,
+    expect(prepare).toHaveBeenCalledWith({ body: `See you at 3 ${m["sms.optOut.en"]}`, to: "+19565550196", from: FROM });
+    expect(r).toEqual({ kind: "sent", providerMessageId: "p_9", to: "+19565550196", from: FROM,
       body: `See you at 3 ${m["sms.optOut.en"]}`, billable: false, segments: 1 });
   });
 
@@ -5993,7 +5993,7 @@ describe("sendSms: steps 8-9", () => {
     const r = await sendSms(DB, base());
     expect(r).toMatchObject({ kind: "failed", stage: "provider", carrierBlocked: true });
     expect(db.recordCarrierBlock).toHaveBeenCalledWith(DB, {
-      accountId: "acct_1", address: "+19562921696", contactId: "ct_1", kind: "automation.sms_reminder" });
+      accountId: "acct_1", address: "+19565550196", contactId: "ct_1", kind: "automation.sms_reminder" });
   });
 
   it("another code, or a provider redirected to a developer's phone, appends nothing (mutation: drop the redirect guard → FAILS)", async () => {
@@ -11887,8 +11887,8 @@ index d5f71736..8d6f8610 100644
      expect(dbMocks.createMessage).not.toHaveBeenCalled();
      expect(logWrites()).toEqual([{
        accountId: "a1", source: "textback", channel: "sms", subjectKey: "call:call1", contactId: "ct_1",
--      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es" },
-+      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es", missedAt: TEN_PM.toISOString() },
+-      payload: { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "es" },
++      payload: { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "es", missedAt: TEN_PM.toISOString() },
        status: "held", heldUntil: EIGHT_AM, reason: "Held until 8:00 AM — quiet hours",
      }]);
    });
@@ -11965,7 +11965,7 @@ index d5f71736..8d6f8610 100644
 + * sends at 08:00 no longer says "just now".
 + */
 +describe("releaseTextback — the caller may have been served since", () => {
-+  const PAYLOAD = { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "en", missedAt: TEN_PM.toISOString() };
++  const PAYLOAD = { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "en", missedAt: TEN_PM.toISOString() };
 +  const held = (): AutomationLogRow => ({
 +    id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
 +    subject_key: "call:call1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: EIGHT_AM,
@@ -11983,7 +11983,7 @@ index d5f71736..8d6f8610 100644
 +    dbMocks.callerInTouchSince.mockResolvedValue(true);
 +    expect(await releaseTextback(ctx(), held())).toBe("skipped");
 +    expect(sms.send).not.toHaveBeenCalled();
-+    expect(dbMocks.callerInTouchSince).toHaveBeenCalledWith(DB, "a1", "+19562921696", "cv1", TEN_PM.toISOString());
++    expect(dbMocks.callerInTouchSince).toHaveBeenCalledWith(DB, "a1", "+19565550196", "cv1", TEN_PM.toISOString());
 +    expect(logWrites().at(-1)).toMatchObject({ status: "skipped", reason: "They've been in touch since" });
 +  });
 +
@@ -12008,7 +12008,7 @@ index d5f71736..8d6f8610 100644
 + * an outage never sends "Sorry we missed your call" days later.
 + */
 +describe("releaseTextback — the re-hold age cap", () => {
-+  const PAYLOAD = { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "en", missedAt: TEN_PM.toISOString() };
++  const PAYLOAD = { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "en", missedAt: TEN_PM.toISOString() };
 +  const held = (payload: Record<string, unknown> = PAYLOAD): AutomationLogRow => ({
 +    id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
 +    subject_key: "call:call1", status: "held", reason: "Waiting a few minutes: couldn't check whether they can get texts",
@@ -12233,7 +12233,7 @@ index bf2d3763..d905de9b 100644
 @@ -241,6 +241,10 @@ describe("voice texml handoff-result route", () => {
      expect(prepareTextbackMock.mock.calls[0]![1]).toBe("acct1");
      expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({
-       callerNumber: "+19562921696",
+       callerNumber: "+19565550196",
 +      // The call's row: the held row's subject when this lands overnight
 +      // (review R2-I3; mutation: callId: null → FAILS).
 +      callId: "c1",
@@ -12313,7 +12313,7 @@ const LONG = "Sorry we missed you. ".repeat(9).trim();
 const STOP_EN = m["sms.optOut.en"];
 
 const request = (over: Partial<TextbackRequest> = {}): TextbackRequest => ({
-  callerNumber: "+19562921696", contactId: "ct_1", language: "en", brandName: "Rio Roofing",
+  callerNumber: "+19565550196", contactId: "ct_1", language: "en", brandName: "Rio Roofing",
   textbackBody: "", label: "finishCall call1", callId: "call1", now: NOON, ...over,
 });
 const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
@@ -12349,7 +12349,7 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(dbMocks.createMessage).toHaveBeenCalledWith(DB, "a1",
       expect.objectContaining({ conversationId: "cv1", channel: "sms", direction: "outbound", body: expect.stringContaining(STOP_EN) }), "voice", "ai");
     expect(pending.cleared.body).toBe((dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body);
-    expect(pending.cleared.to).toBe("+19562921696");
+    expect(pending.cleared.to).toBe("+19565550196");
     expect(pending.cleared.kind).toBe("voice.textback");
   });
 
@@ -12359,7 +12359,7 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(logWrites()).toEqual([{
       accountId: "a1", source: "textback", channel: "sms", subjectKey: "call:call1", contactId: "ct_1",
-      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es" },
+      payload: { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "es" },
       status: "held", heldUntil: EIGHT_AM, reason: "Held until 8:00 AM — quiet hours",
     }]);
   });
@@ -12454,7 +12454,7 @@ describe("deliverTextback — the send, and usage (client billing)", () => {
 });
 
 describe("releaseTextback — the 08:00 send of a call missed overnight", () => {
-  const PAYLOAD = { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "en" };
+  const PAYLOAD = { callerNumber: "+19565550196", contactId: "ct_1", conversationId: "cv1", language: "en" };
   const held = (over: Partial<AutomationLogRow> = {}): AutomationLogRow => ({
     id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
     subject_key: "call:call1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: EIGHT_AM,
@@ -12472,7 +12472,7 @@ describe("releaseTextback — the 08:00 send of a call missed overnight", () => 
   it("at 08:00 it re-runs prepare and sends through the same path: message row, send, sent row (mutation: release without delivering → FAILS)", async () => {
     expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held())).toBe("sent");
     expect(sms.send).toHaveBeenCalledTimes(1);
-    expect(sms.send.mock.calls[0]![0]).toMatchObject({ to: "+19562921696" });
+    expect(sms.send.mock.calls[0]![0]).toMatchObject({ to: "+19565550196" });
     expect(logWrites().at(-1)).toMatchObject({ source: "textback", subjectKey: "call:call1", status: "sent" });
   });
 
@@ -13284,7 +13284,7 @@ index 9e1fd4c1..066aeb3b 100644
 +  });
 +
    it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
-     contactRow.phone = "(956) 292-1696";
+     contactRow.phone = "(956) 555-0196";
      await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
 ```
 
@@ -13400,9 +13400,9 @@ Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversati
 +  });
 +
 +  it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
-+    contactRow.phone = "(956) 292-1696";
++    contactRow.phone = "(956) 555-0196";
 +    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
-+    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
++    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19565550196");
 +  });
 +});
 ```
@@ -13474,16 +13474,16 @@ describe("smsRecipientState", () => {
   });
 
   it("reads the ledger on the NORMALISED number, sms channel (mutation: pass the raw phone → FAILS)", async () => {
-    await smsRecipientState(DB, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false });
-    expect(readConsentState).toHaveBeenCalledWith(DB, "a1", "sms", "+19562921696");
+    await smsRecipientState(DB, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: false });
+    expect(readConsentState).toHaveBeenCalledWith(DB, "a1", "sms", "+19565550196");
   });
 
   it("stopped and held carry the deciding row's time", async () => {
     readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" }))
       .toEqual({ kind: "stopped", since: "2026-10-03T15:00:00Z" });
     readConsentState.mockResolvedValueOnce({ state: "held", since: "2026-10-03T16:00:00Z", method: "keyword_ambiguous", eventId: "e2" });
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" }))
       .toEqual({ kind: "held", since: "2026-10-03T16:00:00Z" });
   });
 
@@ -13500,8 +13500,8 @@ describe("smsRecipientState", () => {
   it("a read that fails is 'unknown', logged without the number, never thrown (it fails closed)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     readConsentState.mockRejectedValueOnce(new Error("permission denied for table consent_events"));
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" })).toEqual({ kind: "unknown" });
-    expect(err.mock.calls.flat().join(" ")).not.toContain("9562921696");
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" })).toEqual({ kind: "unknown" });
+    expect(err.mock.calls.flat().join(" ")).not.toContain("9565550196");
     err.mockRestore();
   });
 
@@ -14115,7 +14115,7 @@ Findings: R3-I1 (the three rows), R3-I3 (the code half), R3-M3, R3-M4, R3-M6 (th
 - **R3-I3.** `(result.kind === "blocked" && result.reason === "stopped") || (result.kind === "failed" && result.carrierBlocked)` → spec §6's stopped line, on the FIRST attempt too.
 - **R3-M3.** `sendSms` is wrapped: a throw discards the verification row (the rate-limit slot comes back), is logged, and answers the send-failed line.
 - **R3-M4.** When `phoneForCountry` refuses the number, the action asks the OTHER country: if the number reads there, it carried its own code and the answer is `settings.alertPhoneCountryMismatch` ("That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits."); otherwise `settings.alertPhoneBad`.
-- **R3-I1's three rows** as tests: "52 55 1234 5678" under US, "52 899 922 1234" under US, "1 956 292 1696" under MX → the mismatch line, no verification opened, nothing sent. "+44 20 7946 0958" under US stays the bad-number line.
+- **R3-I1's three rows** as tests: "52 55 1234 5678" under US, "52 899 922 1234" under US, "1 956 555 0196" under MX → the mismatch line, no verification opened, nothing sent. "+44 20 7946 0958" under US stays the bad-number line.
 - **R3-M6.** The card's Resend names the pending number's own country (`pendingPhone.startsWith("+52") ? "MX" : "US"`): pinned by source (this card has no render harness).
 
 **Tests added or rewritten** (each title names the mutation that turns it red):
@@ -14130,12 +14130,12 @@ Findings: R3-I1 (the three rows), R3-I3 (the code half), R3-M3, R3-M4, R3-M6 (th
 **Counts this block supersedes** (read off the corrected tree's runs): `settings/actions.test.ts` 24 → 30 tests; `components/alert-phone-card.test.ts` 26 → 27 tests.
 
 **Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
-- **the mismatch reads as a bad number** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `` m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] `` → `` m["settings.alertPhoneBad"] ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 292 1696 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
+- **the mismatch reads as a bad number** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `` m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] `` → `` m["settings.alertPhoneBad"] ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 555 0196 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
 - **always the mismatch line** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `` m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] `` → `` m["settings.alertPhoneCountryMismatch"] ``. KILLED, red: "startAlertPhoneVerificationAction — normalization is F-009's (phoneForCountry), not a second dialect refuses a value the normaliser cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)"; "startAlertPhoneVerificationAction — the country beside the number a number that reads under neither country is still the bad-number line (mutation: always answer the mismatch line → FAILS)".
 - **only blocked:stopped maps** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: ``  || (result.kind === "failed" && result.carrierBlocked) `` → (nothing). KILLED, red: "startAlertPhoneVerificationAction — a phone that texted STOP gets no code the FIRST attempt, refused by the carrier with 40300, already says the stopped line (review R3-I3; mutation: only blocked:stopped maps → alertPhoneSendFailed, FAILS)".
 - **a throwing gate keeps the row** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: ``     await discardAlertPhoneVerification(db, id); ⏎     console.error(`alert phone verification send threw `` → ``     throw e; ⏎     console.error(`alert phone verification send threw ``. KILLED, red: "startAlertPhoneVerificationAction — a phone that texted STOP gets no code a gate that THROWS still gives the rate-limit slot back (review R3-M3; mutation: drop the try/catch → rejects, FAILS)".
 - **resend always US** in `apps/web/src/components/alert-phone-card.tsx`: `` pendingPhone.startsWith("+52") ? "MX" : "US" `` → `` "US" ``. KILLED, red: "AlertPhoneCard — Resend names the pending number's own country (review R3-M6) a +52 pending number is resent under MX, anything else under US (mutation: always "US" → the start action answers the mismatch line on every Mexican resend, FAILS)".
-- **R3-I1 at the alert phone: the old reading** in `packages/db/src/phone.ts`: ``     : (digits.length === 11 && digits.startsWith("1")) ⏎       || (digits.length === 12 && digits.startsWith("52")) ⏎       || (digits.length === 13 && digits.startsWith("521")) ? digits ⏎     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   return digits.length === 10 ? `+${CODE[country]}${digits}` : null; `` → ``     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   const n = nationalTen(text); ⏎   return n === null ? null : `+${CODE[country]}${n}`; ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 292 1696 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
+- **R3-I1 at the alert phone: the old reading** in `packages/db/src/phone.ts`: ``     : (digits.length === 11 && digits.startsWith("1")) ⏎       || (digits.length === 12 && digits.startsWith("52")) ⏎       || (digits.length === 13 && digits.startsWith("521")) ? digits ⏎     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   return digits.length === 10 ? `+${CODE[country]}${digits}` : null; `` → ``     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   const n = nationalTen(text); ⏎   return n === null ? null : `+${CODE[country]}${n}`; ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 555 0196 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
 
 **Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
 
@@ -14238,7 +14238,7 @@ index 39bb67f5..6f27007f 100644
 +  it.each([
 +    ["52 55 1234 5678", "US"],
 +    ["52 899 922 1234", "US"],
-+    ["1 956 292 1696", "MX"],
++    ["1 956 555 0196", "MX"],
 +  ])("%s under %s is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)", async (typed, country) => {
 +    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: typed, alertPhoneCountry: country })))
 +      .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });
@@ -14614,7 +14614,7 @@ Apply to `apps/web/src/app/(dashboard)/dashboard/styleguide/settings-field-cards
 @@ -69,14 +71,14 @@ export function SettingsFieldCards() {
          <div onClickCapture={(e) => e.preventDefault()}>
            <AlertPhoneCard
-             isAgency accountId="demo" alertPhone="+19562921696" smsNotReady
+             isAgency accountId="demo" alertPhone="+19565550196" smsNotReady
 -            clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
 +            clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
            />
@@ -14682,14 +14682,14 @@ git commit -m "feat(settings): the alert phone's country, and its code through t
 
 Findings: R3-I2, R3-M6 (access), R3-M12; re-review minor 1 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** yes, on the corrected tree after both review rounds: its tests pass inside the full suites (web 4,519 passed and 0 failed tests; db 828 passed on the replica's `post`; no test goes from passed to failed; Self-review), and both typechecks exit 0. The drawer's behaviour in a browser is proved only by Task 16's new e2e test, which is not replayed.
 
-- **R3-I2, the server.** `setPhoneCountryAction` answers `contact.phoneCountry.changed` and writes nothing unless the stored number is still ambiguous: `contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true`. A stale row can no longer re-code a corrected `+19562921696` as `+529562921696`.
+- **R3-I2, the server.** `setPhoneCountryAction` answers `contact.phoneCountry.changed` and writes nothing unless the stored number is still ambiguous: `contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true`. A stale row can no longer re-code a corrected `+19565550196` as `+529565550196`.
 - **R3-I2, the row.** It is keyed by the contact AND the flag it was built from: the drawer `` key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`} ``, the full page `` key={`phone-${contactId}-${phoneUnconfirmed}`} ``. The drawer's phone save bumps `retryNonce` (`if (field === "phone") setRetryNonce((n) => n + 1);`), so the summary is re-read and the row follows: a number edited into an ambiguous one shows it, one corrected hides it. The full page re-renders with the new flag after `revalidatePath`. Keying by the flag, not `row.phone`, matters in the drawer: the pick itself changes `row.phone` while the summary still says "ambiguous", and a phone key would bring the row straight back.
 - **R3-M12.** The undo writes `normalisePhone(previous.phone)?.e164 ?? previous.phone` and `previous.unconfirmed || normalisePhone(previous.phone)?.unconfirmed === true`: the normaliser's form, and never a flag cleared off the wire for a number it still calls ambiguous.
 - **R3-M6.** Both actions refuse (the guard throws) before any read or write when access is refused.
 - **Re-review minor 1.** `pickPhoneCountry` takes `onChanged` (last parameter, a no-op by default) and calls it after a pick and after an Undo the server took; `PhoneCountryRow` passes its optional `onChanged` prop through, and the drawer gives it `() => setRetryNonce((n) => n + 1)`. Without it, a pick followed by an edit to another ambiguous number showed no row until a reload (the summary still held the flag from before the pick, so the key never changed). The full page needs no prop: both actions revalidate it. The wiring pin is anchored on the row's own `unconfirmed=` prop, because `TagsRow` carries the identical `onChanged` text and an unanchored pin would pass with the row's prop deleted.
 
 **Tests added or rewritten** (each title names the mutation that turns it red):
-- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529565550196 written, FAILS)
 - `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)
 - `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)
 - `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)
@@ -14701,7 +14701,7 @@ Findings: R3-I2, R3-M6 (access), R3-M12; re-review minor 1 (the plan review of 7
 **Counts this block supersedes** (read off the corrected tree's runs): `contacts/actions.test.ts` 25 → 29 tests; `contacts/contact-drawer.wiring.test.ts` 9 → 13 tests; `lib/contacts/phone-country.test.ts` 9 → 10 tests.
 
 **Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
-- **no still-ambiguous check** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `` if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) { `` → `` if (false) { ``. KILLED, red: "setPhoneCountryAction a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)".
+- **no still-ambiguous check** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `` if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) { `` → `` if (false) { ``. KILLED, red: "setPhoneCountryAction a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529565550196 written, FAILS)".
 - **undo writes the wire as sent** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `` { expectedPhone: picked, phone, unconfirmed } `` → `` { expectedPhone: picked, phone: previous.phone, unconfirmed: previous.unconfirmed } ``. KILLED, red: "undoPhoneCountryAction restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)".
 - **pick without the guard** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: ``   const { userId } = await requireAccountAccess(accountId); ⏎   if (!COUNTRIES.includes(country)) `` → ``   const { userId } = { userId: "user_1" }; ⏎   if (!COUNTRIES.includes(country)) ``. KILLED, red: "setPhoneCountryAction refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)"; "undoPhoneCountryAction puts back the previous phone and flag while the stored phone is the one the pick wrote".
 - **undo without the guard** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: ``   const { userId } = await requireAccountAccess(accountId); ⏎   const sameNumber `` → ``   const { userId } = { userId: "user_1" }; ⏎   const sameNumber ``. KILLED, red: "undoPhoneCountryAction refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)".
@@ -14779,8 +14779,8 @@ index 88d96911..ed0281d3 100644
      expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
    });
  
-+  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)", async () => {
-+    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
++  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529565550196 written, FAILS)", async () => {
++    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
 +    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
 +    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
 +  });
@@ -15154,7 +15154,7 @@ Apply to `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary
 +    });
 +
 +    it("is false for a plainly US number, a plainly Mexican one, and no number", async () => {
-+      expect(await flagOf({ phone: "(956) 292-1696", phone_country_unconfirmed: false })).toBe(false);
++      expect(await flagOf({ phone: "(956) 555-0196", phone_country_unconfirmed: false })).toBe(false);
 +      expect(await flagOf({ phone: "+528999221234", phone_country_unconfirmed: false })).toBe(false);
 +      expect(await flagOf({ phone: null, phone_country_unconfirmed: false })).toBe(false);
 +    });
@@ -15254,7 +15254,7 @@ Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/a
 +  });
 +
 +  it("refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)", async () => {
-+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false });
++    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19565550196", unconfirmed: false });
 +    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
 +    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
 +  });
@@ -15329,7 +15329,7 @@ Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[
 +  });
 +
 +  it("a plainly US number does not", async () => {
-+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "(956) 292-1696", phone_country_unconfirmed: false });
++    getContactMock.mockResolvedValue({ ...CONTACT, phone: "(956) 555-0196", phone_country_unconfirmed: false });
 +    await render();
 +    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ unconfirmed: false });
 +  });

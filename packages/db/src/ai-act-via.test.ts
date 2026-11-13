@@ -53,7 +53,7 @@ const header = (s: Sent | undefined) => JSON.parse(s?.headers[AUTHOR_HEADER] ?? 
 describe("F-115: Sofía's contact writes carry their act id", () => {
   it("createContact sends input.via on the insert's author header (mutation: drop input.via from withAuthor -> FAILS)", async () => {
     const { db, sent } = recordingDb(null);
-    await createContact(db, "a1", { firstName: "Caller", phone: "+19562921696", source: "voice", via: "ai_act:act-1" }, "voice", "ai");
+    await createContact(db, "a1", { firstName: "Caller", phone: "+19565550196", source: "voice", via: "ai_act:act-1" }, "voice", "ai");
     const insert = sent.find((s) => s.table === "contacts" && s.op === "insert");
     expect(header(insert)).toEqual({ kind: "ai", via: "ai_act:act-1" });
     // The via is a header, never a column.
@@ -61,7 +61,7 @@ describe("F-115: Sofía's contact writes carry their act id", () => {
   });
 
   it("fillContactBlanksReport sends its via on the update's author header (mutation: drop via from withAuthor -> FAILS)", async () => {
-    const { db, sent } = recordingDb({ id: "c1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696", merged_into: null });
+    const { db, sent } = recordingDb({ id: "c1", first_name: "Caller", last_name: null, email: null, phone: "+19565550196", merged_into: null });
     const filled = await fillContactBlanksReport(db, "a1", "c1", { firstName: "Ana" }, AI, "ai_act:act-2");
     expect(filled.written).toEqual({ firstName: "Ana" });
     expect(header(sent.find((s) => s.table === "contacts" && s.op === "update"))).toEqual({ kind: "ai", via: "ai_act:act-2" });

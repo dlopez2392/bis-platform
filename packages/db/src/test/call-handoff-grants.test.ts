@@ -57,13 +57,13 @@ const ACCOUNTS_UPDATE_COLUMNS = [
  * and a switch needs one position for "off".
  */
 const REFUSED = [
-  "(956) 292-1696",     // the majority operator-entered shape in this database
-  "956-292-1696",
-  "9562921696",         // ten bare digits
-  "19562921696",        // eleven, no plus
-  "+1 956 292 1696",    // spaced, the way a number is read aloud
-  " +19562921696",      // a paste that brought its leading space
-  "+19562921696 ",      // ...and its trailing one
+  "(956) 555-0196",     // the majority operator-entered shape in this database
+  "956-555-0196",
+  "9565550196",         // ten bare digits
+  "19565550196",        // eleven, no plus
+  "+1 956 555 0196",    // spaced, the way a number is read aloud
+  " +19565550196",      // a paste that brought its leading space
+  "+19565550196 ",      // ...and its trailing one
   "+1234567",           // seven digits: under E.164's floor
   "+1234567890123456",  // sixteen: over E.164's ceiling
   "not a phone",
@@ -295,7 +295,7 @@ describe("0037 calls.outcome admits a sixth value", () => {
       const call = await db.from("calls")
         .insert({
           account_id: accountId, phone_number_id: num.data!.id,
-          caller_e164: "+19562921696", outcome: "transferred",
+          caller_e164: "+19565550196", outcome: "transferred",
         })
         .select("outcome").single();
       expect(call.error, `calls insert rejected 'transferred': ${call.error?.message}`).toBeNull();
@@ -315,7 +315,7 @@ describe("0037 calls.outcome admits a sixth value", () => {
       for (const outcome of NEAR_MISS_OUTCOMES) {
         const res = await db.from("calls").insert({
           account_id: accountId, phone_number_id: num.data!.id,
-          caller_e164: "+19562921696", outcome,
+          caller_e164: "+19565550196", outcome,
         }).select("id");
         verdicts[outcome] = res.error?.code;
       }
@@ -381,7 +381,7 @@ describe("0037 calls.handoff_token / handoff_requested_at", () => {
       const token = `test_handoff_${Math.random().toString(36).slice(2, 12)}`;
       const insert = (t: string | null) => db.from("calls").insert({
         account_id: accountId, phone_number_id: num.data!.id,
-        caller_e164: "+19562921696", handoff_token: t,
+        caller_e164: "+19565550196", handoff_token: t,
       }).select("id");
 
       const first = await insert(token);

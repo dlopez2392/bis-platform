@@ -286,7 +286,7 @@ platform was told about, and the ONLY thing that picks the tenant:
   one is still a portal job at whoever owns the number.
 
 A worked example, 2026-09-16: `+19567055146` had just been moved to
-956 Woodworks and still answered as Bespoke Intelligent Solutions. The log
+the pilot client and still answered as Bespoke Intelligent Solutions. The log
 read `calledNumber: '+19565061545'` — BIS's own number. The call never
 arrived as `+19567055146` at all, so every layer behaved correctly; the
 number simply was not pointed at the platform. Both calls were also billed
@@ -878,7 +878,7 @@ Beyond Step 2's three, these are the ones worth knowing by name:
   real bookings.
 
   Format is exact-string, unvalidated, and silent when wrong:
-  `+19562921696`, never `9562921696` or `(956) 292-1696`. A malformed value
+  `+19565550196`, never `9565550196` or `(956) 555-0196`. A malformed value
   exempts NOBODY — the safe direction, but it means a typo looks identical
   to leaving it unset and you will not find out until the guard refuses
   you. Check the string before saving.

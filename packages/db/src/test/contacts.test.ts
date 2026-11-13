@@ -235,13 +235,13 @@ describe("contacts service", () => {
 
       // Same fixture cycle, extended: the review finding this fixes.
       // contacts.phone is only trimmed on write, so an operator-typed
-      // "(956) 292-1696" and an inbound SMS sender's E.164
-      // "+19562921696" are the same ten digits but never the same STRING —
+      // "(956) 555-0196" and an inbound SMS sender's E.164
+      // "+19565550196" are the same ten digits but never the same STRING —
       // before the fix, an exact-match dedupe forked a second contact (and,
       // upstream, a second conversation thread) for the same customer.
-      const c = await createContact(db, accountId, { phone: "(956) 292-1696" }, "user_test");
+      const c = await createContact(db, accountId, { phone: "(956) 555-0196" }, "user_test");
       expect(c.existing).toBe(false);
-      const d = await createContact(db, accountId, { phone: "+19562921696" }, "user_test");
+      const d = await createContact(db, accountId, { phone: "+19565550196" }, "user_test");
       expect(d.existing).toBe(true);
       expect(d.id).toBe(c.id);
     }));
@@ -327,13 +327,13 @@ describe("updateContact dedupe on edit (D-012)", () => {
   it("flags the pair when an edit lands this contact's phone on another contact's, any formatting (0106: the database files the pair at once, reason same_phone)", () =>
     withTestAccount(async (db, accountId) => {
       const held = await createContact(db, accountId,
-        { firstName: "Held", phone: "(956) 292-1696" }, "user_test");
+        { firstName: "Held", phone: "(956) 555-0196" }, "user_test");
       const other = await createContact(db, accountId,
         { firstName: "Other", phone: "956-555-0101" }, "user_test");
 
       // Different punctuation, same ten digits — the dedupe key, not an
       // exact string match, is what must catch this.
-      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, { authorKind: "person", authorId: "user_test" }))
+      expect(await updateContact(db, accountId, other.id, { phone: "+19565550196" }, { authorKind: "person", authorId: "user_test" }))
         .toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
@@ -347,7 +347,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
   it("does not flag an edit that leaves the phone unchanged (re-saving the same number)", () =>
     withTestAccount(async (db, accountId) => {
       await createContact(db, accountId,
-        { firstName: "Held", phone: "(956) 292-1696" }, "user_test");
+        { firstName: "Held", phone: "(956) 555-0196" }, "user_test");
       const other = await createContact(db, accountId,
         { firstName: "Other", phone: "956-555-0101" }, "user_test");
 
@@ -494,11 +494,11 @@ describe("fillContactBlanks", () => {
   it("flags the pair when a proposal-approval fill lands a blank phone on another contact's key", () =>
     withTestAccount(async (db, accountId) => {
       const held = await createContact(db, accountId,
-        { firstName: "Held", phone: "(956) 292-1696" }, "t");
+        { firstName: "Held", phone: "(956) 555-0196" }, "t");
       const blank = await createContact(db, accountId, { firstName: "Blank" }, "t");
 
       const filled = await fillContactBlanks(db, accountId, blank.id,
-        { phone: "+19562921696" }, { authorKind: "person", authorId: "t" });
+        { phone: "+19565550196" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
 
       const [lo, hi] = [held.id, blank.id].sort();
@@ -858,11 +858,11 @@ describe("dedupe after the key columns (spec §5)", () => {
       const a = await createContact(db, accountId,
         { firstName: "Email", email: "shared@example.com" }, "test");
       const b = await createContact(db, accountId,
-        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+        { firstName: "Phone", phone: "(956) 555-0196" }, "test");
 
       // Incoming row carries BOTH — it matches a by email and b by phone.
       const got = await createContact(db, accountId,
-        { firstName: "Both", email: "shared@example.com", phone: "+19562921696" }, "test");
+        { firstName: "Both", email: "shared@example.com", phone: "+19565550196" }, "test");
 
       // Email wins, unchanged. This is deliberate: a phone-wins rule is
       // defensible but would shift every existing caller for no present gain.
@@ -884,9 +884,9 @@ describe("dedupe after the key columns (spec §5)", () => {
   it("matches a reformatted phone through the key", () =>
     withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId,
-        { firstName: "Formatted", phone: "(956) 292-1696" }, "test");
+        { firstName: "Formatted", phone: "(956) 555-0196" }, "test");
       const got = await createContact(db, accountId,
-        { firstName: "E164", phone: "+19562921696" }, "test");
+        { firstName: "E164", phone: "+19565550196" }, "test");
       expect(got.existing).toBe(true);
       expect(got.id).toBe(a.id);
     }));
@@ -921,16 +921,16 @@ describe("dedupe after the key columns (spec §5)", () => {
       const a = await createContact(db, accountId,
         { firstName: "Email", email: "clash@example.com" }, "test");
       const b = await createContact(db, accountId,
-        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+        { firstName: "Phone", phone: "(956) 555-0196" }, "test");
 
       const first = await createContact(db, accountId,
-        { firstName: "Both", email: "clash@example.com", phone: "+19562921696" }, "test");
+        { firstName: "Both", email: "clash@example.com", phone: "+19565550196" }, "test");
       expect(first.flagged, "the conflicting pair should be flagged").toBe(true);
 
       // The same conflict seen again must not accumulate rows — the queue shows
       // a duplicate pair once, however many times an import re-encounters it.
       await createContact(db, accountId,
-        { firstName: "Again", email: "clash@example.com", phone: "956-292-1696" }, "test");
+        { firstName: "Again", email: "clash@example.com", phone: "956-555-0196" }, "test");
 
       const [lo, hi] = [a.id, b.id].sort();
       const { data } = await db.from("contact_duplicate_flags")
@@ -943,9 +943,9 @@ describe("dedupe after the key columns (spec §5)", () => {
   it("does not flag when both matches are the same contact", () =>
     withTestAccount(async (db, accountId) => {
       await createContact(db, accountId,
-        { firstName: "Same", email: "same@example.com", phone: "(956) 292-1696" }, "test");
+        { firstName: "Same", email: "same@example.com", phone: "(956) 555-0196" }, "test");
       const again = await createContact(db, accountId,
-        { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
+        { firstName: "Same", email: "same@example.com", phone: "+19565550196" }, "test");
       expect(again.existing).toBe(true);
       expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
     }));

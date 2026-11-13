@@ -85,7 +85,7 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
 - **S1 Who the candidates are.** The contacts of THIS account whose stored phone is the caller ID by
   `isCallerIdNumber`, the rule the ownership check already uses. They are read through the indexed
   `phone_key` (0033, `contacts_account_phone_key`) and then filtered by that rule in code, so a phone typed
-  before F-009 ("(956) 292-1696") is a candidate as it is an owner today (5.2, SD4). At most 20 are read; a
+  before F-009 ("(956) 555-0196") is a candidate as it is an owner today (5.2, SD4). At most 20 are read; a
   number with more cannot be narrowed by name on a call (S6).
 - **S2 The name rule** (amended, R2 ruling a): first and last name, case- and accent-insensitive, whitespace
   collapsed. A spoken name is the record's person when the first words are equal and EITHER every spoken word
@@ -1103,7 +1103,7 @@ Unit, route and db; no e2e (phone calls are tested by real calls, section 8).
 - **Prompt:** `system-prompt.test.ts` untouched and green (all three digests).
 - **db (`packages/db/src/test/voice.test.ts`, `withTestAccount` nested for the second account, as
   `booking.test.ts:922` does):** `listContactsOnNumber` finds an E.164 phone, a legacy typed "(956)
-  292-1696" phone (red first: today's `findUpcomingBookingForPhone` misses it) and a Mexican number stored
+  555-0196" phone (red first: today's `findUpcomingBookingForPhone` misses it) and a Mexican number stored
   with and without its code; returns `email_key`, never `email`; account B's contact with the same phone and
   the same name is never returned for account A (mutation: drop the `account_id` filter → FAILS); 21 rows set
   `truncated`. `findUpcomingBookingForContact` returns that contact's soonest booked future booking only,

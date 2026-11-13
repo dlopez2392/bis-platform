@@ -4,17 +4,17 @@ import { withTestAccount } from "./fixtures";
 import { SEED_AUTHOR, SEED_VIA } from "./db";
 import { withAuthor } from "../row-author";
 
-// Real shapes this database actually holds. "(956) 292-1696" is the majority
-// operator-entered shape; "+19562921696" is what toE164 and inbound SMS
+// Real shapes this database actually holds. "(956) 555-0196" is the majority
+// operator-entered shape; "+19565550196" is what toE164 and inbound SMS
 // produce. They are the same ten digits and MUST produce the same key — that
 // equivalence is the entire reason phoneDigits exists.
 const PHONES = [
-  "(956) 292-1696",
-  "+19562921696",
-  "956-292-1696",
-  "19562921696",
-  "9562921696",
-  "956.292.1696 x12",
+  "(956) 555-0196",
+  "+19565550196",
+  "956-555-0196",
+  "19565550196",
+  "9565550196",
+  "956.555.0196 x12",
   "",
 ];
 

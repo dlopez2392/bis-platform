@@ -653,10 +653,10 @@ const rpcArgs = (calls: Array<[string, ...unknown[]]>) => calls.find((c) => c[0]
 describe("readConsentState", () => {
   it("asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+    expect(await readConsentState(f.db, "a1", "sms", "+19565550196")).toEqual({ state: "allowed" });
     expect(f.calls).toEqual(expect.arrayContaining([
       ["from", "consent_events"],
-      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19565550196"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
       ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
       ["limit", 20],
@@ -665,12 +665,12 @@ describe("readConsentState", () => {
 
   it("THROWS on a read error (the gate fails closed on it; mutation: return allowed → FAILS)", async () => {
     const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
-    await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
+    await expect(readConsentState(f.db, "a1", "sms", "+19565550196")).rejects.toThrow("readConsentState failed: permission denied");
   });
 
   it("orders by occurred_at BEFORE id, both descending, in exactly that sequence (review I2a; mutation: swap the two .order() calls → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    await readConsentState(f.db, "a1", "sms", "+19562921696");
+    await readConsentState(f.db, "a1", "sms", "+19565550196");
     expect(f.calls.filter((c) => c[0] === "order")).toEqual([
       ["order", "occurred_at", { ascending: false }],
       ["order", "id", { ascending: false }],
@@ -691,7 +691,7 @@ describe("newestDecidingRow — consentStateOf's own order, exported for the Tex
 describe("readConsentHistory / readConsentEvent / readConsentActions", () => {
   it("history reads the same 20 newest deciding rows WITH evidence, note and actor (mutation: drop evidence from the select → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    await readConsentHistory(f.db, "a1", "sms", "+19562921696");
+    await readConsentHistory(f.db, "a1", "sms", "+19565550196");
     expect(f.calls).toEqual(expect.arrayContaining([
       ["select", "id, action, method, occurred_at, evidence, note, actor_id"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]], ["limit", 20],
@@ -785,14 +785,14 @@ describe("CUSTOMER_STOP_METHODS", () => {
 describe("recordCarrierBlock", () => {
   it("appends revoked / carrier_block with the kind as evidence, guarded unless_customer_stopped (mutation: guard 'none' → FAILS)", async () => {
     const f = fakeDb();
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
-    expect(rpcArgs(f.calls)).toMatchObject({ p_account_id: "a1", p_channel: "sms", p_address: "+19562921696", p_action: "revoked",
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: "c1", kind: "voice.textback" })).toBe("appended");
+    expect(rpcArgs(f.calls)).toMatchObject({ p_account_id: "a1", p_channel: "sms", p_address: "+19565550196", p_action: "revoked",
       p_method: "carrier_block", p_contact_id: "c1", p_evidence: { kind: "voice.textback" }, p_guard: "unless_customer_stopped" });
   });
 
   it("an address already stopped is 'already_stopped', decided inside the function's lock (spec §4.3 idempotency; mutation: map refused to appended → FAILS)", async () => {
     const f = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: "p", prior_action: "revoked", prior_method: "keyword", prior_evidence: {} }], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
   });
 });
 
@@ -1520,7 +1520,7 @@ describe("nextBookedStart — for the CANCEL To-do", () => {
 });
 
 /** A hold on the contact's number, as readConsentEvent answers it. */
-const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19562921696", contact_id: "c1",
+const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19565550196", contact_id: "c1",
   occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null };
 
 describe("completeTask — a hold's To-do closes by deciding the hold, never by Done (review R3-I1, R3-N3; G21)", () => {
@@ -2930,7 +2930,7 @@ git commit -m "feat(consent): the stop, start and help keywords and the free-tex
 
 **What the help line's contact sentence costs** (measured with `segmentsFor`'s own rules, `apps/web/src/lib/sms/segments.ts` on `76c6acfb`; septets for GSM-7, UTF-16 units for UCS-2):
 
-| Line | "956 Woodworks" | 20-character GSM-7 name | no name |
+| Line | "Valle Cabinet" | 20-character GSM-7 name | no name |
 |---|---|---|---|
 | BIS help, English (new) | GSM-7 83 → 1 segment | 90 → 1 | 68 → 1 |
 | BIS help, Spanish, "numero" (chosen) | GSM-7 111 → 1 | 118 → 1 | 96 → 1 |
@@ -3016,14 +3016,14 @@ const KINDS = ["consent.stop_confirmation", "consent.start_confirmation", "conse
 
 describe("consentReplyBody — what BIS itself sends", () => {
   it("signs with the business name in the language asked (mutation: always English → FAILS)", () => {
-    expect(consentReplyBody("consent.stop_confirmation", "es", "956 Woodworks"))
-      .toBe("956 Woodworks: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks")).toBe("956 Woodworks: Reply STOP to stop texts from us. Call or text this number for help.");
+    expect(consentReplyBody("consent.stop_confirmation", "es", "Valle Cabinet"))
+      .toBe("Valle Cabinet: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet")).toBe("Valle Cabinet: Reply STOP to stop texts from us. Call or text this number for help.");
   });
 
   it("the help reply names a way to reach the business, in both languages — the A2P campaign's promise (a2p-registration.md:197-199; danlo 2026-09-28; mutation: drop the contact sentence → FAILS)", () => {
-    expect(consentReplyBody("consent.help", "en", "956 Woodworks")).toContain("Call or text this number for help.");
-    expect(consentReplyBody("consent.help", "es", "956 Woodworks")).toContain("Llame o escriba a este numero para recibir ayuda.");
+    expect(consentReplyBody("consent.help", "en", "Valle Cabinet")).toContain("Call or text this number for help.");
+    expect(consentReplyBody("consent.help", "es", "Valle Cabinet")).toContain("Llame o escriba a este numero para recibir ayuda.");
   });
 
   it("a blank name drops the prefix rather than inventing one (mutation: sign as \"\" → ': You won't…', FAILS)", () => {
@@ -3045,8 +3045,8 @@ describe("consentReplyBody — what BIS itself sends", () => {
 
 describe("telnyxReplyText — what each business's Telnyx profile answers (Task 16 step 10; danlo's decision 1)", () => {
   it("is the English line then the Spanish line without its prefix, one bilingual reply (mutation: prefix the Spanish half too → FAILS)", () => {
-    expect(telnyxReplyText("stop", "956 Woodworks")).toBe(
-      "956 Woodworks: You won't get any more texts from us. Reply START to get them again. Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
+    expect(telnyxReplyText("stop", "Valle Cabinet")).toBe(
+      "Valle Cabinet: You won't get any more texts from us. Reply START to get them again. Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
   });
 
   it("is at least Telnyx's 20 characters and GSM-7 for every op, even nameless (plan F2; mutation: an empty reply → FAILS)", () => {
@@ -3335,12 +3335,12 @@ Append at the end of the file:
 describe("the stop confirmation: the only send to a stopped address (spec §4.2, plan G5)", () => {
   const STOPPED_AT = new Date(DAY.getTime() - 2 * 60_000).toISOString();
   const stopped = (eventId = "rev_1", since = STOPPED_AT) => ({ state: "stopped" as const, since, method: "keyword" as const, eventId });
-  const confirm = (over: Partial<SmsRequest> = {}) => base({ kind: "consent.stop_confirmation", body: "956 Woodworks: You won't…", answersEventId: "rev_1", numberFromCarrier: true, ...over });
+  const confirm = (over: Partial<SmsRequest> = {}) => base({ kind: "consent.stop_confirmation", body: "Valle Cabinet: You won't…", answersEventId: "rev_1", numberFromCarrier: true, ...over });
 
   it("goes through when it answers the NEWEST revoked row, under five minutes old, and is sent as written, no footer (mutation: drop the exception → blocked stopped, FAILS)", async () => {
     db.readConsentState.mockResolvedValue(stopped());
     const r = await sendSms(DB, confirm());
-    expect(r).toMatchObject({ kind: "sent", body: "956 Woodworks: You won't…" });
+    expect(r).toMatchObject({ kind: "sent", body: "Valle Cabinet: You won't…" });
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -3398,8 +3398,8 @@ describe("the stop confirmation: the only send to a stopped address (spec §4.2,
 
   it("the consent kinds go at 03:00 (choice 18) and carry no footer (mutation: give consent.help automated hours → deferred, FAILS)", async () => {
     const night = new Date("2026-10-07T08:00:00Z"); // 03:00 in Chicago
-    const d = await decideSms(DB, base({ kind: "consent.help", body: "956 Woodworks: Reply STOP to stop texts from us.", now: night }));
-    expect(d.kind === "clear" && d.send.body).toBe("956 Woodworks: Reply STOP to stop texts from us.");
+    const d = await decideSms(DB, base({ kind: "consent.help", body: "Valle Cabinet: Reply STOP to stop texts from us.", now: night }));
+    expect(d.kind === "clear" && d.send.body).toBe("Valle Cabinet: Reply STOP to stop texts from us.");
   });
 
   it("answersStop, pure: an unparseable 'since' is never within the window (mutation: treat NaN as 0 → true, FAILS)", () => {
@@ -4332,7 +4332,7 @@ import { m } from "@/lib/messages";
 const DB = {} as never;
 const NOW = new Date("2026-10-06T20:00:00Z");
 const input = (over: Partial<InboundConsentInput> = {}): InboundConsentInput => ({
-  accountId: "acct_1", address: "+19562921696", text: "STOP", autoresponse: null,
+  accountId: "acct_1", address: "+19565550196", text: "STOP", autoresponse: null,
   providerMessageId: "msg_1", messagingProfileId: "prof_1", contactId: "ct_1", firstFiling: true, now: NOW, ...over,
 });
 const appended = (id: string, prior: object | null = null) => ({ outcome: "appended", id, prior });
@@ -4400,7 +4400,7 @@ describe("recordInboundConsent — a stop", () => {
     await run(input({ text: "Stop!" }), classifyInbound("Stop!", null));
     const e = db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "revoked")!;
     expect(e[1]).toEqual({
-      accountId: "acct_1", channel: "sms", address: "+19562921696", contactId: "ct_1", sourceRef: "msg_1",
+      accountId: "acct_1", channel: "sms", address: "+19565550196", contactId: "ct_1", sourceRef: "msg_1",
       action: "revoked", method: "keyword",
       evidence: { keyword: "STOP", language: "en", autoresponse_type: null, messaging_profile_id: "prof_1", excerpt: "Stop!" },
     });
@@ -4450,7 +4450,7 @@ describe("recordInboundConsent — a stop", () => {
       { id: "ev_hold_0", action: "held", method: "free_text", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
     ]);
     await run(input({ text: "STOP" }), classifyInbound("STOP", null));
-    expect(db.readConsentHistory).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");   // this number's holds, not another's (review M8)
+    expect(db.readConsentHistory).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19565550196");   // this number's holds, not another's (review M8)
     expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold", "ev_hold_0"], "sms-inbound", "system");
     db.completeTasksForConsentEvents.mockClear();
     await run(input({ text: "START", providerMessageId: "msg_2" }), classifyInbound("START", null));
@@ -4567,7 +4567,7 @@ describe("recordInboundConsent — a phrase, the grant, the alert phone", () => 
   it("a nameless contact is named by their number in the To-do (mutation: print '(no name)' → FAILS)", async () => {
     db.getContact.mockResolvedValue({ id: "ct_1", first_name: null, last_name: null });
     await run(input({ text: "remove me" }), classifyInbound("remove me", null));
-    expect(db.ensureConsentTask.mock.calls[0]![2].title).toMatch(/^\+19562921696 may have asked/);
+    expect(db.ensureConsentTask.mock.calls[0]![2].title).toMatch(/^\+19565550196 may have asked/);
   });
 
   it("the first-text grant is written FIRST, if_empty, and its failure is only logged — the stop still lands (decision 8, plan G2; mutation: let the grant's failure throw → FAILS)", async () => {
@@ -4626,33 +4626,33 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
   const plan = { kind: "consent.stop_confirmation" as const, language: "es" as const, answersEventId: "ev_1" };
   beforeEach(() => {
     for (const fn of [...Object.values(db), gate.sendSms]) fn.mockReset();
-    db.getBranding.mockResolvedValue({ brandName: " 956 Woodworks " });
+    db.getBranding.mockResolvedValue({ brandName: " Valle Cabinet " });
     db.createMessage.mockResolvedValue({ id: "msg_out" });
     gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
-      await opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
-      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+      await opts.prepare?.({ body: req.body, to: "+19565550196", from: "+19565550000" });
+      return { kind: "sent", providerMessageId: "p_1", to: "+19565550196", from: "+19565550000", body: req.body, billable: true, segments: 1 };
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "info").mockImplementation(() => {});
   });
 
   it("asks the gate for the kind, the carrier's number, the stop it answers and the business-named line (mutation: numberFromCarrier false → FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(gate.sendSms.mock.calls[0]![1]).toEqual({
-      accountId: "a1", kind: "consent.stop_confirmation", to: "+19562921696", contactId: "ct_1", language: "es",
+      accountId: "a1", kind: "consent.stop_confirmation", to: "+19565550196", contactId: "ct_1", language: "es",
       numberFromCarrier: true, answersEventId: "ev_1",
-      body: "956 Woodworks: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
+      body: "Valle Cabinet: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
     });
   });
 
   it("files the reply in the thread before it leaves, then marks it sent with the provider's id (mutation: skip the sent write → FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(db.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ conversationId: "conv_1", channel: "sms", direction: "outbound" }), "sms-inbound", "system");
     expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "sent", { providerMessageId: "p_1" }, "sms-inbound", "system");
   });
 
   it("the alert phone has no thread: the reply still goes, and nothing is filed (mutation: require a conversation → no send, FAILS)", async () => {
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: null, conversationId: null, reply: plan });
     expect(gate.sendSms).toHaveBeenCalledTimes(1);
     expect(db.createMessage).not.toHaveBeenCalled();
   });
@@ -4669,11 +4669,11 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
     db.createMessage.mockRejectedValue(new Error("createMessage failed"));
     let prepared: Promise<void> | undefined;
     gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
-      prepared = opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
+      prepared = opts.prepare?.({ body: req.body, to: "+19565550196", from: "+19565550000" });
       await prepared;   // a throw here is the gate's "nothing leaves" (gate.ts:191-195)
-      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+      return { kind: "sent", providerMessageId: "p_1", to: "+19565550196", from: "+19565550000", body: req.body, billable: true, segments: 1 };
     });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     await expect(prepared).resolves.toBeUndefined();
     expect(vi.mocked(console.info).mock.calls.map((c) => String(c[0]))).toContain("consent reply consent.stop_confirmation for account a1 sent");
     expect(db.updateMessageStatus).not.toHaveBeenCalled();
@@ -4681,7 +4681,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
 
   it("a 'sent' status write that fails AFTER the send is logged as that, never as 'not sent' (review R2-m5; mutation: one try around both → 'not sent', FAILS)", async () => {
     db.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => /sent, but its thread row was not marked sent/.test(l))).toBe(true);
     expect(lines.some((l) => /not sent:/.test(l))).toBe(false);
@@ -4689,7 +4689,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
 
   it("a 40300 on a START confirmation is logged naming the carrier block the gate recorded — the START-then-blocked trace (review R2-I1c; mutation: fall through to the generic 'failed provider' line → FAILS)", async () => {
     gate.sendSms.mockResolvedValue({ kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
     expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/consent\.start_confirmation .* the carrier refused it \(40300\): Telnyx still blocks this number/);
   });
 
@@ -4698,7 +4698,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
       await opts.prepare?.({ body: req.body, to: "+1", from: "+2" });
       return { kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true };
     });
-    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19565550196", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "failed", { error: "telnyx send failed (403): …" }, "sms-inbound", "system");
   });
 });
@@ -5141,7 +5141,7 @@ import { POST } from "./route";
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const RAW_PUBLIC_KEY = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64");
 const OUR_NUMBER = "+19565550000";
-const CUSTOMER = "+19562921696";
+const CUSTOMER = "+19565550196";
 
 function signed(payload: object, key = privateKey): Request {
   const raw = JSON.stringify({ data: { event_type: "message.received", payload } });
@@ -5902,12 +5902,12 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
   it("a ticked field grants the phone as sms and the email as email, normalised, once per field per submission, with the label exactly as shown (mutation: key the source by submission only → the second field collides, FAILS)", async () => {
     await recordFormGrants({} as never, {
       accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "(956) 292-1696" }, { key: "e", value: " Ana@Example.com " }],
+      answers: [{ key: "p", value: "(956) 555-0196" }, { key: "e", value: " Ana@Example.com " }],
       consent: consent({ ok: true, ok2: true }),
     });
     expect(rows()).toEqual([
-      ["sms", "+19562921696", "form_submission:s1:ok", "none"], ["email", "ana@example.com", "form_submission:s1:ok", "none"],
-      ["sms", "+19562921696", "form_submission:s1:ok2", "none"], ["email", "ana@example.com", "form_submission:s1:ok2", "none"],
+      ["sms", "+19565550196", "form_submission:s1:ok", "none"], ["email", "ana@example.com", "form_submission:s1:ok", "none"],
+      ["sms", "+19565550196", "form_submission:s1:ok2", "none"], ["email", "ana@example.com", "form_submission:s1:ok2", "none"],
     ]);
     expect(db.appendConsentEventGuarded.mock.calls[0]![1]).toMatchObject({
       action: "granted", method: "form", evidence: { form_id: "f1", submission_id: "s1", field: "ok", label: "Text me about my job" },
@@ -5916,9 +5916,9 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
 
   it("an unticked field grants nothing; no consent fields grant nothing (mutation: drop the given filter → FAILS)", async () => {
     await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: consent({ ok: false }) });
+      answers: [{ key: "p", value: "9565550196" }], consent: consent({ ok: false }) });
     await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: null });
+      answers: [{ key: "p", value: "9565550196" }], consent: null });
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
 
@@ -5934,7 +5934,7 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
       .mockImplementationOnce(() => new Promise((r) => { release = () => r({ outcome: "appended", id: "e1", prior: null }); }))
       .mockResolvedValue({ outcome: "appended", id: "e2", prior: null });
     const done = recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }, { key: "e", value: "ana@example.com" }], consent: consent({ ok: true }) });
+      answers: [{ key: "p", value: "9565550196" }, { key: "e", value: "ana@example.com" }], consent: consent({ ok: true }) });
     await Promise.resolve();
     expect(db.appendConsentEventGuarded).toHaveBeenCalledTimes(2);
     release();
@@ -5944,16 +5944,16 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
   it("a write that fails is logged and the lead goes on (evidence only; mutation: rethrow → FAILS)", async () => {
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
     await expect(recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
-      answers: [{ key: "p", value: "9562921696" }], consent: consent({ ok: true }) })).resolves.toBeUndefined();
+      answers: [{ key: "p", value: "9565550196" }], consent: consent({ ok: true }) })).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalled();
   });
 });
 
 describe("recordBookingGrant", () => {
   it("a booking with a phone grants sms, sourced to the booking, with the contact (mutation: source by contact → FAILS)", async () => {
-    await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "956-292-1696" });
+    await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "956-555-0196" });
     expect(db.appendConsentEventGuarded.mock.calls[0]![1]).toMatchObject({
-      channel: "sms", address: "+19562921696", action: "granted", method: "booking", contactId: "c1",
+      channel: "sms", address: "+19565550196", action: "granted", method: "booking", contactId: "c1",
       sourceRef: "booking:b1", evidence: { booking_id: "b1" },
     });
   });
@@ -5962,7 +5962,7 @@ describe("recordBookingGrant", () => {
     await recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: null });
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
-    await expect(recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "9562921696" })).resolves.toBeUndefined();
+    await expect(recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "9565550196" })).resolves.toBeUndefined();
   });
 });
 ```
@@ -6009,12 +6009,12 @@ describe("submitFormAction — the consent grant (consent chain PR-2, plan Task 
   it("a saved submission hands its fields, answers and consent record to recordFormGrants (mutation: drop the call → FAILS)", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields: CONSENT_FORM }));
     const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
-    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9562921696", sms_ok: "on" }));
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9565550196", sms_ok: "on" }));
     expect(result.status).toBe("success");
     expect(formGrantsMock).toHaveBeenCalledTimes(1);
     expect(formGrantsMock.mock.calls[0]![1]).toMatchObject({
       accountId: "acct_1", formId: "form_row_1", submissionId: "sub_1", fields: CONSENT_FORM,
-      answers: [{ key: "phone", value: "9562921696" }],
+      answers: [{ key: "phone", value: "9565550196" }],
       consent: [{ key: "sms_ok", given: true, text: "Text me about my request" }],
     });
   });
@@ -6022,7 +6022,7 @@ describe("submitFormAction — the consent grant (consent chain PR-2, plan Task 
   it("a submission caught as spam grants nothing (mutation: record grants before the guards → FAILS)", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields: CONSENT_FORM }));
     const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
-    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9562921696", sms_ok: "on", [HONEYPOT_FIELD]: "bot" }));
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9565550196", sms_ok: "on", [HONEYPOT_FIELD]: "bot" }));
     expect(formGrantsMock).not.toHaveBeenCalled();
   });
 });
@@ -6403,9 +6403,9 @@ describe("readTextsView — the Check number rule PR-1's page tests pinned, now 
   });
 
   it("the flag alone raises it too; a plainly US number with no flag is Allowed, read under its E.164 key (mutation: ignore the flag → FAILS; key the read by the phone as stored → FAILS)", async () => {
-    expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: true })).toEqual({ kind: "check_number" });
-    expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false })).toEqual({ kind: "allowed", newestId: null });
-    expect(db.readConsentHistory).toHaveBeenLastCalledWith({}, "a1", "sms", "+19562921696");
+    expect(await readTextsView({} as never, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: true })).toEqual({ kind: "check_number" });
+    expect(await readTextsView({} as never, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: false })).toEqual({ kind: "allowed", newestId: null });
+    expect(db.readConsentHistory).toHaveBeenLastCalledWith({}, "a1", "sms", "+19565550196");
   });
 });
 ```
@@ -6455,7 +6455,7 @@ const NOW = new Date("2026-10-06T20:00:00Z");
 const FRESH = "2026-10-06T19:59:30Z";
 const ctx: TextsContext = {
   db: READER, writer: WRITER, accountId: "a1", contactId: "c1", userId: "user_1", actorName: "Ana",
-  address: "+19562921696", unconfirmed: false, now: NOW,
+  address: "+19565550196", unconfirmed: false, now: NOW,
 };
 let n = 0;
 const row = (action: string, method: string, evidence: Record<string, unknown> = {}, at = `2026-10-0${++n}T10:00:00Z`) =>
@@ -6476,7 +6476,7 @@ describe("stopTexts", () => {
   it("writes revoked / staff through the SERVICE client, compare-and-set on the row the operator saw, with the actor and their name (plan G6, G14; mutation: guard 'none' → FAILS)", async () => {
     const r = await stopTexts(ctx, null);
     expect(db.appendConsentEventGuarded.mock.calls[0]![0]).toBe(WRITER);
-    expect(eventOf()).toMatchObject({ action: "revoked", method: "staff", actorId: "user_1", address: "+19562921696", contactId: "c1", evidence: { actorName: "Ana" } });
+    expect(eventOf()).toMatchObject({ action: "revoked", method: "staff", actorId: "user_1", address: "+19565550196", contactId: "c1", evidence: { actorName: "Ana" } });
     expect(guardOf()).toEqual({ ifNewest: null });
     expect(r).toMatchObject({ ok: true, undo: { kind: "stop", eventId: "new_1" } });
   });
@@ -6505,17 +6505,17 @@ describe("stopTexts", () => {
 
 describe("undoStopTexts", () => {
   it("undoes only a STAFF stop, compare-and-set on it (mutation: skip the method check → a keyword stop is undone, FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoStopTexts(ctx, "ev_kw")).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "staff"), id: "ev_staff", actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "staff"), id: "ev_staff", actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoStopTexts(ctx, "ev_staff")).ok).toBe(true);
     expect(eventOf()).toMatchObject({ action: "resubscribed", method: "staff_undo" });
     expect(guardOf()).toEqual({ ifNewest: "ev_staff" });
   });
 
   it("an Undo is the SAME person's, inside the window: another user's stop, or one older than UNDO_WINDOW_MS, is refused with the undo-expired line — otherwise Undo is a note-free Resume (review R3-I6; mutation: drop the actor check → FAILS; mutation: drop the age check → FAILS)", async () => {
-    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19565550196", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoStopTexts(ctx, "ev_staff")).toEqual({ ok: false, error: m["contact.texts.undoExpired"] });
     const old = new Date(NOW.getTime() - UNDO_WINDOW_MS).toISOString();
@@ -6582,7 +6582,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("the Undo of either puts the hold back (held / staff_undo) with what they wrote, and reopens exactly the To-dos it closed (mutation: reopen none → FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("hold_released", "staff", { excerpt: "wrong number" }), id: "ev_rel", actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("hold_released", "staff", { excerpt: "wrong number" }), id: "ev_rel", actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     const r = await undoHoldDecision(ctx, "ev_rel", ["task_1"]);
     expect(eventOf()).toMatchObject({ action: "held", method: "staff_undo", evidence: { undoes: "ev_rel", excerpt: "wrong number" } });
     expect(guardOf()).toEqual({ ifNewest: "ev_rel" });
@@ -6591,7 +6591,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("the Undo of a hold decision is bound the same way: another user's, or an old one, is refused (review R3-I6; mutation: drop the bound from undoHoldDecision → a confirmed stop is lifted back to a hold with no note, FAILS)", async () => {
-    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden mensajes" }), id: "ev_conf", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden mensajes" }), id: "ev_conf", address: "+19565550196", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoHoldDecision(ctx, "ev_conf", [])).toEqual({ ok: false, error: m["contact.texts.undoExpired"] });
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_1", occurred_at: "2026-10-06T19:00:00Z" });
@@ -6600,7 +6600,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("an Undo pointed at anything but a hold decision is refused (mutation: accept any row → a keyword stop is 'undone' into a hold, FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoHoldDecision(ctx, "ev_kw", [])).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
@@ -6633,7 +6633,7 @@ const params = { params: Promise.resolve({ accountId: "a1", contactId: "c1" }) }
 
 beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false });
-  getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+  getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
   readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
   maybeSingle.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago" }, error: null });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -6643,7 +6643,7 @@ describe("GET …/texts — the Texts row's own read (spec §6: its own loading 
   it("answers the view, the account's zone and the stored phone, read under the request's own client (mutation: drop the zone → FAILS)", async () => {
     const res = await GET(new Request("https://x.test"), params);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19562921696" });
+    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19565550196" });
   });
 
   it("404 without access, and 404 for a contact that is not this account's (mutation: skip the contact read → FAILS)", async () => {
@@ -7323,7 +7323,7 @@ describe("the Texts row's lines (spec §6)", () => {
 
 describe("parseTextsResponse / textsLoadFrom — the drawer's read is parsed, not cast", () => {
   it("a good body is ready; a non-OK response or a malformed body is the error state (mutation: cast the body → the bad one is ready, FAILS)", async () => {
-    const good = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19562921696" };
+    const good = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19565550196" };
     expect(await textsLoadFrom({ ok: true, json: async () => good })).toEqual({ status: "ready", ...good });
     expect(await textsLoadFrom({ ok: false, json: async () => good })).toEqual({ status: "error" });
     expect(parseTextsResponse({ view: { kind: "maybe" }, zone: "UTC", phone: null })).toBeNull();
@@ -8580,7 +8580,7 @@ and ensure the file's `@bis/db` mock factory also defines `readTaskContact`, `re
 
 ```ts
 describe("the consent To-do's buttons (consent chain PR-2)", () => {
-  const CTX = { db: {}, writer: {}, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19562921696", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
+  const CTX = { db: {}, writer: {}, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19565550196", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
   beforeEach(() => {
     for (const fn of Object.values(texts)) fn.mockReset();
     texts.textsContextFor.mockResolvedValue(CTX);
@@ -9626,7 +9626,7 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 
 - [ ] **Step 9: Merge, under danlo's go.** Squash-merge through GitHub only after steps 4–6 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 4, merge `main` in, re-run, and re-read the head SHA's check runs). After the deploy: the Vercel deployment is READY and error-free; open any contact on production as the agency (the Texts row reads Allowed for a textable number); the cron's next tick is 200.
 
-- [ ] **Step 10: Telnyx step 0, per texting business — danlo's go, never an implementer** (spec §5 go-live item 1 as corrected by S2 and S11; brief item c). Only after step 8 (or step 7's zero). For each business about to text (BIS's own line and 956 Woodworks first, `crm-features.md:1099`), after danlo has created its own messaging profile and moved its number onto it (an operational step, spec §9):
+- [ ] **Step 10: Telnyx step 0, per texting business — danlo's go, never an implementer** (spec §5 go-live item 1 as corrected by S2 and S11; brief item c). Only after step 8 (or step 7's zero). For each business about to text (BIS's own line and the pilot client first, `crm-features.md:1099`), after danlo has created its own messaging profile and moved its number onto it (an operational step, spec §9):
   1. **Preconditions and read before** (Telnyx API reads, as in step 7.1):
      - The account's `brand_name` (read through the MCP, `select brand_name from accounts where id = …`) is not blank: every reply below is signed with it. Blank: STOP until it is set (review R1-M6).
      - `GET /v2/messaging_profiles/{id}`: its `features.ai_opt_out_detection_enabled` must be `false` (F8). **If it is `true`: STOP and report to danlo.** Turning it off is itself a Telnyx write, done only under danlo's go and read back like the configs. **If the field is absent, that is unknown, not off:** check the profile in the Telnyx portal (Messaging → the profile → opt-out settings) and record what it shows (review R1-I6).

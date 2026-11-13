@@ -25,8 +25,8 @@ describe("forwardTarget", () => {
   });
 
   it("normalises a number typed the way a human types it", () => {
-    expect(forwardTarget(env({ VOICE_FORWARD_TO: "(956) 292-1696" }))).toBe("+19562921696");
-    expect(forwardTarget(env({ VOICE_FORWARD_TO: "+19562921696" }))).toBe("+19562921696");
+    expect(forwardTarget(env({ VOICE_FORWARD_TO: "(956) 555-0196" }))).toBe("+19565550196");
+    expect(forwardTarget(env({ VOICE_FORWARD_TO: "+19565550196" }))).toBe("+19565550196");
   });
 
   it("is off for something that is not a phone number at all", () => {
@@ -36,25 +36,25 @@ describe("forwardTarget", () => {
 
 describe("forwardXml", () => {
   it("dials the target over the PSTN, not over SIP", () => {
-    const xml = forwardXml("+19562921696", "+19565061545");
+    const xml = forwardXml("+19565550196", "+19565061545");
     expect(xml).toContain("<Dial");
-    expect(xml).toContain(">+19562921696</Dial>");
+    expect(xml).toContain(">+19565550196</Dial>");
     expect(xml).not.toContain("<Sip>");
     expect(xml).not.toContain("sip.api.openai.com");
   });
 
   it("presents OUR number as the caller id — Telnyx requires an owned number", () => {
-    expect(forwardXml("+19562921696", "+19565061545")).toContain('callerId="+19565061545"');
+    expect(forwardXml("+19565550196", "+19565061545")).toContain('callerId="+19565061545"');
   });
 
   it("omits callerId rather than emitting an empty one when we do not know it", () => {
-    const xml = forwardXml("+19562921696", null);
+    const xml = forwardXml("+19565550196", null);
     expect(xml).not.toContain("callerId");
-    expect(xml).toContain(">+19562921696</Dial>");
+    expect(xml).toContain(">+19565550196</Dial>");
   });
 
   it("is well-formed TeXML with a timeout", () => {
-    const xml = forwardXml("+19562921696", "+19565061545");
+    const xml = forwardXml("+19565550196", "+19565061545");
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
     expect(xml).toContain("<Response>");
     expect(xml).toContain("</Response>");
@@ -62,7 +62,7 @@ describe("forwardXml", () => {
   });
 
   it("carries a one-hour timeLimit, the handoff dial's billing ceiling: once answered, a forward is an open per-minute leg (mutation: drop it → FAILS)", () => {
-    expect(forwardXml("+19562921696", "+19565061545")).toContain('timeLimit="3600"');
+    expect(forwardXml("+19565550196", "+19565061545")).toContain('timeLimit="3600"');
   });
 
   it("escapes what it interpolates, per ./xml's rule", () => {

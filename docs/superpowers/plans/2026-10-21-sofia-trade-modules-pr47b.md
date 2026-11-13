@@ -1015,7 +1015,7 @@ function everyExistingInput(): VoicePromptInput[] {
         for (const bookingEnabled of [true, false])
           for (const afterHours of ["hours_then_message", "message_only"] as const)
             for (const meetingType of ["in_person", "phone", "video"] as const)
-              for (const callerNumber of ["+19562921696", null])
+              for (const callerNumber of ["+19565550196", null])
                 for (const disclosed of [false, true])
                   out.push({
                     ...base, languages, bookingEnabled, afterHours, meetingType, callerNumber, disclosed,
@@ -1771,7 +1771,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
   it("no module: the row is written exactly as before and the prompt carries no trade rules (mutation: always pass tradeModule, even null -> FAILS)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -1780,7 +1780,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 } });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", tradeModule: { module: "events", version: 7 } });
     expect(acceptedInstructions()).toContain(EVT);
     expect(acceptedInstructions()).not.toContain(INS);
   });
@@ -1801,7 +1801,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "law" });
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -2018,7 +2018,7 @@ export const ID_RULE = "Never repeat an identification number (SSN, driver's lic
 
 /** Not glued to a longer number. A digit, money sign, decimal or thousands separator or slash right before
  *  blocks a match. A separator blocks it only when a DIGIT precedes that separator, so "SSN-123-45-6789"
- *  still masks while the tail of "95 62 92 16 96" does not. */
+ *  still masks while the tail of "95 65 55 01 96" does not. */
 const NOT_BEFORE = String.raw`(?<![\d$.,/]|\d[-.,/ ])`;
 /** And not followed by more digits (directly or after one separator), nor by "@" (an email's local part). */
 const NOT_AFTER = String.raw`(?![\d.,/ -]?\d|@)`;
@@ -2083,12 +2083,12 @@ Must not mask (27; the output is the normalised input):
 
 | Input | Why |
 |---|---|
-| `call me at 956-292-1696` | phone 3-3-4 |
-| `mi número es 956 292 1696` | phone spaced, Spanish |
-| `(956) 292-1696` | phone |
-| `+19562921696` | E.164, 11 digits |
-| `9562921696` | 10 digits |
-| `nueve: 9 5 6 2 9 2 1 6 9 6` | a phone read digit by digit (10) |
+| `call me at 956-555-0196` | phone 3-3-4 |
+| `mi número es 956 555 0196` | phone spaced, Spanish |
+| `(956) 555-0196` | phone |
+| `+19565550196` | E.164, 11 digits |
+| `9565550196` | 10 digits |
+| `nueve: 9 5 6 5 5 5 0 1 9 6` | a phone read digit by digit (10) |
 | `ZIP 78501` | ZIP |
 | `el código postal es 78501-1234` | ZIP+4 (5-4 left out) |
 | `the quote was $1,250.00` | amount |
@@ -2101,10 +2101,10 @@ Must not mask (27; the output is the normalised input):
 | `14 03 2027` | date (2-2-4 left out) |
 | `at 10:30` | time |
 | `a las 10 30` | time, Spanish |
-| `1-956-292-1696` | phone with country code |
-| `1 956 292 1696` | phone with country code, spaced |
-| `95 62 92 16 96` | a phone read in pairs (the not-after space guard) |
-| `956 29 21 696` | a phone read 3-2-2-3 |
+| `1-956-555-0196` | phone with country code |
+| `1 956 555 0196` | phone with country code, spaced |
+| `95 65 55 01 96` | a phone read in pairs (the not-after space guard) |
+| `956 55 50 196` | a phone read 3-2-2-3 |
 | `juan12345678@gmail.com` | an email's local part (the `@` guard) |
 | `9, 5, 6, 2, 9, 2, 1, 6, 9, 6` | a phone read digit by digit with commas |
 | `+52 1 899 123 4567` | a Mexican mobile |
@@ -2122,11 +2122,11 @@ Must not mask (27; the output is the normalised input):
 | drop 2-2-2-2 | `12 34 56 78` |
 | drop `NOT_YEAR_PAIR` | `between 2025 2026` |
 | drop `@` from `NOT_AFTER` | `juan12345678@gmail.com` |
-| drop the space from `NOT_AFTER`'s class | `95 62 92 16 96` |
-| `NOT_BEFORE` back to `(?<![\d$.,/-])` (any separator glues) | `SSN-123-45-6789` and `95 62 92 16 96` |
-| `NOT_BEFORE` without the `\d[-.,/ ]` branch | `95 62 92 16 96` |
+| drop the space from `NOT_AFTER`'s class | `95 65 55 01 96` |
+| `NOT_BEFORE` back to `(?<![\d$.,/-])` (any separator glues) | `SSN-123-45-6789` and `95 65 55 01 96` |
+| `NOT_BEFORE` without the `\d[-.,/ ]` branch | `95 65 55 01 96` |
 | remove `normalise` | `123–45–6789`, `123 45 6789` |
-| widen `{7,8}` to `{7,9}` | `nueve: 9 5 6 2 9 2 1 6 9 6` |
+| widen `{7,8}` to `{7,9}` | `nueve: 9 5 6 5 5 5 0 1 9 6` |
 | drop `$` from `NOT_BEFORE` | `$12345678` |
 
 Known limits, stated in the file's doc comment and in the PR body:

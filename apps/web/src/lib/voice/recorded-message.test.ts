@@ -1,5 +1,5 @@
-// The positives here are VERBATIM from production — nine calls to 956
-// Woodworks on 2026-09-17, the only real client on the platform. Every one was
+// The positives here are VERBATIM from production — nine calls to the
+// pilot client on 2026-09-17, the only real client on the platform. Every one was
 // recorded as `abandoned`, which told the owner he had lost nine customers in
 // one day.
 //
@@ -87,7 +87,7 @@ function mostCountedAtAnyPrefix(text: string): number {
 }
 
 describe("looksLikeRecordedMessage — the positives, verbatim from production", () => {
-  it("catches the Google-listing robocall that hit 956 Woodworks nine times — it reads its instruction TWICE", () => {
+  it("catches the Google-listing robocall that hit the pilot client nine times — it reads its instruction TWICE", () => {
     // Owner decision O-3 (danlo, 2026-10-09): the guard hangs up only at the
     // SECOND instruction in a call. This script opens two sentences with one
     // — "…finding you. Press 0 to speak with an agent…" and "…search. Press

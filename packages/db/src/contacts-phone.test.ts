@@ -12,7 +12,7 @@ import { applyImportBatch, type MatchIndex } from "./contact-import";
  */
 describe("phoneFields", () => {
   it("a US number is stored as E.164, unflagged", () => {
-    expect(phoneFields("(956) 292-1696")).toEqual({ phone: "+19562921696", phone_country_unconfirmed: false });
+    expect(phoneFields("(956) 555-0196")).toEqual({ phone: "+19565550196", phone_country_unconfirmed: false });
   });
 
   it("a plainly Mexican ten digits is stored as +52, unflagged (mutation: always +1 → FAILS)", () => {
@@ -40,7 +40,7 @@ describe("phoneKeyOf — the dedupe key of the number as it will be stored", () 
   });
 
   it("the same US number spelled two ways keys the same", () => {
-    expect(phoneKeyOf("(956) 292-1696")).toBe(phoneKeyOf("+19562921696"));
+    expect(phoneKeyOf("(956) 555-0196")).toBe(phoneKeyOf("+19565550196"));
   });
 
   it("blank is the empty key", () => {
@@ -225,9 +225,9 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
   // existed, dropping `!result.phoneMatch &&` from that branch's condition
   // passed every other test in this file.
   it("a +1 contact already stored as +1 is found by its own key, with no fallback read (M3; mutation: drop `!result.phoneMatch &&` from the bare-ten-digit branch → a second read, FAILS)", async () => {
-    const m = memoryDb([{ id: "c-us", account_id: "a1", phone: "+19562921696", phone_key: "9562921696" }]);
-    expect(await createContact(m.db, "a1", { phone: "(956) 292-1696" }, "user_test")).toMatchObject({ id: "c-us", existing: true });
-    expect(m.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["9562921696"]);
+    const m = memoryDb([{ id: "c-us", account_id: "a1", phone: "+19565550196", phone_key: "9565550196" }]);
+    expect(await createContact(m.db, "a1", { phone: "(956) 555-0196" }, "user_test")).toMatchObject({ id: "c-us", existing: true });
+    expect(m.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["9565550196"]);
   });
 
   // Was "a +1 number never takes the +52 fallback": that pinned the exact
@@ -240,10 +240,10 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
   // read happens and simply finds nothing.
   it("a +1 number also takes the fallback, checking for an MX-keyed twin on the same ten digits (symmetric with the +52 case above; mutation: drop the /^\\d{10}$/ branch → no second read, FAILS)", async () => {
     const n = memoryDb([]);
-    expect(await createContact(n.db, "a1", { phone: "(956) 292-1696" }, "user_test")).toMatchObject({ existing: false, flagged: false });
+    expect(await createContact(n.db, "a1", { phone: "(956) 555-0196" }, "user_test")).toMatchObject({ existing: false, flagged: false });
     expect(n.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual([
-      "9562921696",
-      ["529562921696", "5219562921696"],
+      "9565550196",
+      ["529565550196", "5219565550196"],
     ]);
   });
 
@@ -307,10 +307,10 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
    * PR #151 (893f0bc4's note: "+52 after +1 flags; +1 after +52 doesn't").
    */
   it("the same ten digits stored as +52 ARE a country twin when the new number reads as +1 (symmetric with the +1-then-+52 case above; mutation: drop the /^\\d{10}$/ branch → no flag, FAILS)", async () => {
-    const m = memoryDb([{ id: "c-mx", account_id: "a1", phone: "+529562921696", phone_key: "529562921696" }]);
-    const created = await createContact(m.db, "a1", { phone: "(956) 292-1696" }, "user_test");
+    const m = memoryDb([{ id: "c-mx", account_id: "a1", phone: "+529565550196", phone_key: "529565550196" }]);
+    const created = await createContact(m.db, "a1", { phone: "(956) 555-0196" }, "user_test");
     expect(created).toMatchObject({ existing: false, flagged: true });
-    expect(m.tables.contacts.find((r) => r.id === created.id)).toMatchObject({ phone: "+19562921696" });
+    expect(m.tables.contacts.find((r) => r.id === created.id)).toMatchObject({ phone: "+19565550196" });
     expect(m.tables.contact_duplicate_flags).toEqual([expect.objectContaining({
       account_id: "a1", contact_a: [created.id, "c-mx"].sort()[0], contact_b: [created.id, "c-mx"].sort()[1], reason: "phone_country_twin",
     })]);
@@ -419,8 +419,8 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
 
   it("a GENUINELY different number recomputes the flag from its own reading (mutation: always keep the old flag → FAILS)", async () => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
-    await updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_test" });
-    expect(m.tables.contacts[0]).toMatchObject({ phone: "+19562921696", phone_country_unconfirmed: false });
+    await updateContact(m.db, "a1", "c1", { phone: "(956) 555-0196" }, { authorKind: "person", authorId: "user_test" });
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+19565550196", phone_country_unconfirmed: false });
   });
 
   it.each([
@@ -473,7 +473,7 @@ describe("updateContact: its own current-phone read fails closed and stays accou
       }
       return realFrom(table);
     };
-    await expect(updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_test" })).rejects.toThrow();
+    await expect(updateContact(m.db, "a1", "c1", { phone: "(956) 555-0196" }, { authorKind: "person", authorId: "user_test" })).rejects.toThrow();
     // Unchanged — the failed check must have aborted the write, not just
     // failed to compare correctly.
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });

@@ -362,7 +362,7 @@ describe("acceptBookingAct / unacceptBookingAct (F-077 part 1)", () => {
 describe("the consent To-do's buttons (consent chain PR-2)", () => {
   // Distinct sentinels: `{}` and `{}` are deep-equal, so a swap of the two
   // clients would pass every toHaveBeenCalledWith below unnoticed.
-  const CTX = { db: { tag: "request-db" }, writer: { tag: "service-writer" }, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19562921696", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
+  const CTX = { db: { tag: "request-db" }, writer: { tag: "service-writer" }, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19565550196", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
   beforeEach(() => {
     for (const fn of Object.values(texts)) fn.mockReset();
     texts.textsContextFor.mockResolvedValue(CTX);
@@ -386,7 +386,7 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
     await confirmStopFromTask("acct_1", "t1");
     const call = vi.mocked(readConsentHistory).mock.calls[0]!;
     expect(call[0]).toBe(CTX.writer);
-    expect(call.slice(1)).toEqual(["acct_1", "sms", "+19562921696"]);
+    expect(call.slice(1)).toEqual(["acct_1", "sms", "+19565550196"]);
   });
 
   it("a To-do whose number is no longer on hold says it was already decided, and decides nothing (mutation: decide anyway → FAILS)", async () => {

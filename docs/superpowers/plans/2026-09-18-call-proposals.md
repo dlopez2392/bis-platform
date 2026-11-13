@@ -389,7 +389,7 @@ async function seedCall(db: any, accountId: string): Promise<string> {
     .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
   expect(num.error, `phone_numbers insert failed: ${num.error?.message}`).toBeNull();
   const call = await db.from("calls")
-    .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })
+    .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19565550196" })
     .select("id").single();
   expect(call.error, `calls insert failed: ${call.error?.message}`).toBeNull();
   return call.data!.id as string;
@@ -722,7 +722,7 @@ const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
 
 describe("isGrounded", () => {
   const transcript = [
-    t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+    t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
     t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
   ];
 
@@ -761,7 +761,7 @@ describe("isGrounded", () => {
   // Only the CALLER's words are evidence. Sofía's own sentences are the
   // model quoting itself, which grounds nothing.
   it("does not accept the assistant's own words as evidence (mutation: drop the role filter -> FAILS)", () => {
-    expect(isGrounded("Thanks for calling 956 Woodworks", transcript)).toBe(false);
+    expect(isGrounded("Thanks for calling Valle Cabinet", transcript)).toBe(false);
   });
 });
 ```
@@ -981,7 +981,7 @@ const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
   ({ role, text, at: "2026-09-18T12:00:00.000Z" });
 
 const transcript: TranscriptEvent[] = [
-  t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+  t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
   t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
 ];
 

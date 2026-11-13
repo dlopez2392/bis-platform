@@ -36,7 +36,7 @@ describe("rowsToFlag", () => {
   it("keeps exactly the numbers that could be Mexican (mutation: keep every candidate → FAILS)", () => {
     const rows = [
       row(1, "+15512345678", "5512345678"),   // +1, valid under +52: flag
-      row(2, "+19562921696", "9562921696"),   // McAllen: no
+      row(2, "+19565550196", "9565550196"),   // McAllen: no
       row(3, "55 1234 5678", "5512345678"),   // bare, both: flag
       row(4, "899 922 1234", "8999221234"),   // bare Reynosa: the gate reads +52 already
     ];

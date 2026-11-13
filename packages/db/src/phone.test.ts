@@ -11,7 +11,7 @@ import { normalisePhone, phoneForCountry, repickPhoneCountry, couldBeMexican } f
 describe("normalisePhone: ten digits, judged by country", () => {
   it.each([
     // [label, input, e164, unconfirmed]
-    ["McAllen, US only (956)", "(956) 292-1696", "+19562921696", false],
+    ["McAllen, US only (956)", "(956) 555-0196", "+19565550196", false],
     ["El Paso, US only (915)", "915-234-5678", "+19152345678", false],
     ["Toronto, NANP only (416)", "416 555 0199", "+14165550199", false],
     ["Reynosa, MX only (899)", "899 922 1234", "+528999221234", false],
@@ -28,14 +28,14 @@ describe("normalisePhone: ten digits, judged by country", () => {
 
 describe("normalisePhone: a number with a country code is kept as given", () => {
   it.each([
-    ["+1, as a carrier sends it", "+19562921696", "+19562921696"],
+    ["+1, as a carrier sends it", "+19565550196", "+19565550196"],
     ["+1 of an ambiguous number is NOT flagged: the code is the confirmation", "+15512345678", "+15512345678"],
     ["+52, as a carrier sends it", "+528999221234", "+528999221234"],
     ["+52 1 drops the retired mobile 1", "+52 1 899 922 1234", "+528999221234"],
     ["00 52 (dialled from Mexico)", "00 52 899 922 1234", "+528999221234"],
     ["00 52 1 drops the 1 too", "0052 1 899 922 1234", "+528999221234"],
     ["011 52 (dialled from the US)", "011 52 899 922 1234", "+528999221234"],
-    ["1 + ten digits is the NANP trunk prefix", "1 (956) 292-1696", "+19562921696"],
+    ["1 + ten digits is the NANP trunk prefix", "1 (956) 555-0196", "+19565550196"],
     ["a UK number typed with +", "+44 20 7946 0958", "+442079460958"],
   ])("%s", (_label, input, e164) => {
     expect(normalisePhone(input)).toEqual({ e164, unconfirmed: false });
@@ -50,23 +50,23 @@ describe("normalisePhone: nothing to text", () => {
 
 describe("phoneForCountry: a number typed beside a country choice", () => {
   it("ten national digits take the chosen country", () => {
-    expect(phoneForCountry("956 292 1696", "US")).toBe("+19562921696");
-    expect(phoneForCountry("956 292 1696", "MX")).toBe("+529562921696");
-    expect(phoneForCountry("1 956 292 1696", "US")).toBe("+19562921696");
+    expect(phoneForCountry("956 555 0196", "US")).toBe("+19565550196");
+    expect(phoneForCountry("956 555 0196", "MX")).toBe("+529565550196");
+    expect(phoneForCountry("1 956 555 0196", "US")).toBe("+19565550196");
     expect(phoneForCountry("52 1 899 922 1234", "MX")).toBe("+528999221234");
   });
 
   it("digits that begin with a country code are that country's, never re-read under the other (mutation: strip 52/1 and take the chosen country → a stranger's number, FAILS)", () => {
     expect(phoneForCountry("52 55 1234 5678", "US")).toBeNull();
     expect(phoneForCountry("52 899 922 1234", "US")).toBeNull();
-    expect(phoneForCountry("1 956 292 1696", "MX")).toBeNull();
+    expect(phoneForCountry("1 956 555 0196", "MX")).toBeNull();
     expect(phoneForCountry("52 55 1234 5678", "MX")).toBe("+525512345678");
   });
 
   it("a typed country code must agree with the choice (mutation: return the typed E.164 regardless → FAILS)", () => {
     expect(phoneForCountry("+52 899 922 1234", "MX")).toBe("+528999221234");
     expect(phoneForCountry("+52 899 922 1234", "US")).toBeNull();
-    expect(phoneForCountry("+1 956 292 1696", "MX")).toBeNull();
+    expect(phoneForCountry("+1 956 555 0196", "MX")).toBeNull();
     expect(phoneForCountry("011 52 899 922 1234", "MX")).toBe("+528999221234");
     expect(phoneForCountry("+44 20 7946 0958", "US")).toBeNull();
   });
@@ -101,11 +101,11 @@ describe("couldBeMexican: the 0054 backfill's test", () => {
     ["+1 and ten digits valid under +52 (CDMX 55, also NJ 551)", "+15512345678", true],
     ["+1 and a Reynosa number the old toE164 made American", "+18999221234", true],
     ["1 and ten digits, no plus, valid under +52", "1 (899) 922-1234", true],
-    ["+1 McAllen, not a Mexican number", "+19562921696", false],
+    ["+1 McAllen, not a Mexican number", "+19565550196", false],
     ["bare ten digits valid under both", "55 1234 5678", true],
     ["bare ten digits valid under neither (a write would flag it too)", "956 123 4567", true],
     ["bare Reynosa: the gate already reads it as +52, no flag", "899 922 1234", false],
-    ["bare McAllen", "(956) 292-1696", false],
+    ["bare McAllen", "(956) 555-0196", false],
     ["already +52", "+528999221234", false],
     ["a UK number", "+44 20 7946 0958", false],
     ["blank", "", false],
@@ -128,7 +128,7 @@ describe("normalisePhone: Mexico's retired trunk prefixes, and leading zeros", (
   });
 
   it("a bare ten digits with a leading 0 is refused, never stored as +10… (review m1; mutation: drop the leading-zero guard inside the ten-digit branch → a +10 number, FAILS)", () => {
-    expect(normalisePhone("0562921696")).toBeNull();
+    expect(normalisePhone("0565550196")).toBeNull();
   });
 });
 
@@ -136,14 +136,14 @@ describe("normalisePhone: an extension never becomes another country's number (r
   it.each([
     // [label, input, e164, unconfirmed]
     ["(415) 555-0100 x2 (mutation: don't strip the extension → +41555501002, Switzerland, FAILS)", "(415) 555-0100 x2", "+14155550100", true],
-    ["(956) 292-1696 ext 12 (mutation: don't strip the extension → +956292169612, Myanmar, FAILS)", "(956) 292-1696 ext 12", "+19562921696", false],
+    ["(956) 555-0196 ext 12 (mutation: don't strip the extension → +956555019612, Myanmar, FAILS)", "(956) 555-0196 ext 12", "+19565550196", false],
     ["212-555-0100 ext 3 (mutation: don't strip the extension → +21255501003, Morocco, FAILS)", "212-555-0100 ext 3", "+12125550100", false],
   ])("%s", (_label, input, e164, unconfirmed) => {
     expect(normalisePhone(input)).toEqual({ e164, unconfirmed });
   });
 
-  it("a trailing digit group that is NOT an extension marker is refused, kept as typed (mutation: strip any trailing digits → +95629216965, Myanmar, FAILS)", () => {
-    expect(normalisePhone("956-292-1696 after 5")).toBeNull();
+  it("a trailing digit group that is NOT an extension marker is refused, kept as typed (mutation: strip any trailing digits → +95655501965, Myanmar, FAILS)", () => {
+    expect(normalisePhone("956-555-0196 after 5")).toBeNull();
   });
 
   it("the old broad rule ('any other 8-15 digits') is gone: a bare number that is not a recognised code form is refused, not accepted as international (mutation: restore rule 5 → FAILS)", () => {

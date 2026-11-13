@@ -85,17 +85,17 @@ import { describe, expect, it } from "vitest";
 import { phoneDigits, emailKey } from "../contacts";
 import { withTestAccount } from "./fixtures";
 
-// Real shapes this database actually holds. "(956) 292-1696" is the majority
-// operator-entered shape; "+19562921696" is what toE164 and inbound SMS
+// Real shapes this database actually holds. "(956) 555-0196" is the majority
+// operator-entered shape; "+19565550196" is what toE164 and inbound SMS
 // produce. They are the same ten digits and MUST produce the same key — that
 // equivalence is the entire reason phoneDigits exists.
 const PHONES = [
-  "(956) 292-1696",
-  "+19562921696",
-  "956-292-1696",
-  "19562921696",
-  "9562921696",
-  "956.292.1696 x12",
+  "(956) 555-0196",
+  "+19565550196",
+  "956-555-0196",
+  "19565550196",
+  "9565550196",
+  "956.555.0196 x12",
   "",
 ];
 
@@ -296,7 +296,7 @@ Expected: PASS, 3 tests.
 
 - [ ] **Step 8: Mutation-check the parity claim**
 
-Change `phoneDigits`' fold from `digits.length === 11` to `digits.length === 12`, re-run, and confirm the parity test fails **by name** reporting the `+19562921696` case. That is the proof the test compares the real column rather than re-deriving it. Revert and re-run to green. Read the failing test's NAME — a vitest filter that matches nothing skips silently.
+Change `phoneDigits`' fold from `digits.length === 11` to `digits.length === 12`, re-run, and confirm the parity test fails **by name** reporting the `+19565550196` case. That is the proof the test compares the real column rather than re-deriving it. Revert and re-run to green. Read the failing test's NAME — a vitest filter that matches nothing skips silently.
 
 - [ ] **Step 9: Commit**
 
@@ -327,11 +327,11 @@ describe("dedupe after the key columns (spec §5)", () => {
       const a = await createContact(db, accountId,
         { firstName: "Email", email: "shared@example.com" }, "test");
       const b = await createContact(db, accountId,
-        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+        { firstName: "Phone", phone: "(956) 555-0196" }, "test");
 
       // Incoming row carries BOTH — it matches a by email and b by phone.
       const got = await createContact(db, accountId,
-        { firstName: "Both", email: "shared@example.com", phone: "+19562921696" }, "test");
+        { firstName: "Both", email: "shared@example.com", phone: "+19565550196" }, "test");
 
       // Email wins, unchanged. This is deliberate: a phone-wins rule is
       // defensible but would shift every existing caller for no present gain.
@@ -354,9 +354,9 @@ describe("dedupe after the key columns (spec §5)", () => {
   it("matches a reformatted phone through the key", async () => {
     await withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId,
-        { firstName: "Formatted", phone: "(956) 292-1696" }, "test");
+        { firstName: "Formatted", phone: "(956) 555-0196" }, "test");
       const got = await createContact(db, accountId,
-        { firstName: "E164", phone: "+19562921696" }, "test");
+        { firstName: "E164", phone: "+19565550196" }, "test");
       expect(got.existing).toBe(true);
       expect(got.id).toBe(a.id);
     });
@@ -495,16 +495,16 @@ it("flags the pair when email and phone disagree, and does not duplicate the fla
     const a = await createContact(db, accountId,
       { firstName: "Email", email: "clash@example.com" }, "test");
     const b = await createContact(db, accountId,
-      { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+      { firstName: "Phone", phone: "(956) 555-0196" }, "test");
 
     const first = await createContact(db, accountId,
-      { firstName: "Both", email: "clash@example.com", phone: "+19562921696" }, "test");
+      { firstName: "Both", email: "clash@example.com", phone: "+19565550196" }, "test");
     expect(first.flagged, "the conflicting pair should be flagged").toBe(true);
 
     // The same conflict seen again must not accumulate rows — the queue shows
     // a duplicate pair once, however many times an import re-encounters it.
     await createContact(db, accountId,
-      { firstName: "Again", email: "clash@example.com", phone: "956-292-1696" }, "test");
+      { firstName: "Again", email: "clash@example.com", phone: "956-555-0196" }, "test");
 
     const [lo, hi] = [a.id, b.id].sort();
     const { data } = await db.from("contact_duplicate_flags")
@@ -518,9 +518,9 @@ it("flags the pair when email and phone disagree, and does not duplicate the fla
 it("does not flag when both matches are the same contact", async () => {
   await withTestAccount(async (db, accountId) => {
     await createContact(db, accountId,
-      { firstName: "Same", email: "same@example.com", phone: "(956) 292-1696" }, "test");
+      { firstName: "Same", email: "same@example.com", phone: "(956) 555-0196" }, "test");
     const again = await createContact(db, accountId,
-      { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
+      { firstName: "Same", email: "same@example.com", phone: "+19565550196" }, "test");
     expect(again.existing).toBe(true);
     expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
   });

@@ -20,16 +20,16 @@ describe("smsRecipientState", () => {
   });
 
   it("reads the ledger on the NORMALISED number, sms channel (mutation: pass the raw phone → FAILS)", async () => {
-    await smsRecipientState(DB, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false });
-    expect(readConsentState).toHaveBeenCalledWith(DB, "a1", "sms", "+19562921696");
+    await smsRecipientState(DB, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: false });
+    expect(readConsentState).toHaveBeenCalledWith(DB, "a1", "sms", "+19565550196");
   });
 
   it("stopped and held carry the deciding row's time", async () => {
     readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" }))
       .toEqual({ kind: "stopped", since: "2026-10-03T15:00:00Z" });
     readConsentState.mockResolvedValueOnce({ state: "held", since: "2026-10-03T16:00:00Z", method: "keyword_ambiguous", eventId: "e2" });
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" }))
       .toEqual({ kind: "held", since: "2026-10-03T16:00:00Z" });
   });
 
@@ -46,8 +46,8 @@ describe("smsRecipientState", () => {
   it("a read that fails is 'unknown', logged without the number, never thrown (it fails closed)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     readConsentState.mockRejectedValueOnce(new Error("permission denied for table consent_events"));
-    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" })).toEqual({ kind: "unknown" });
-    expect(err.mock.calls.flat().join(" ")).not.toContain("9562921696");
+    expect(await smsRecipientState(DB, "a1", { phone: "+19565550196" })).toEqual({ kind: "unknown" });
+    expect(err.mock.calls.flat().join(" ")).not.toContain("9565550196");
     err.mockRestore();
   });
 

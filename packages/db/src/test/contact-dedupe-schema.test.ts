@@ -131,7 +131,7 @@ describe("0106: the keys match their TypeScript twins", () => {
       expect(r.name_key).toBe(nameKey(first, last));
     }));
 
-  const PHONES = ["+19562921696", "(956) 292-1696", "9562921696", "19562921696", "+528999221234", "+52 1 899 922 1234",
+  const PHONES = ["+19565550196", "(956) 555-0196", "9565550196", "19565550196", "+528999221234", "+52 1 899 922 1234",
     "+5218999221234", "044 899 922 1234", "045 899 922 1234", "01 899 922 1234", "+44 20 7946 0958", "+5289992212345",
     "call after 5", "0123456789", ""];
   it.each(PHONES)("phone_national and phone_family = their twins for %j (mutation: drop the 521 branch in SQL only -> FAILS)", (phone) =>
