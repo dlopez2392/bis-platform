@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Locator } from "./fixtures/test";
+import type { Response as PwResponse } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, DOCUMENT_BUCKET } from "@bis/db";
@@ -141,6 +142,28 @@ async function open(page: Page) {
   await page.goto(contactUrl());
   // Loaded, not the skeleton: the count line renders only once the card's own read has landed.
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
+}
+
+/**
+ * Why the card's read was refused, said in the failure itself. The route answers 404 with the same empty body
+ * for four different reasons (no signed-in person, a session that is not an agency visit's, a contact that is
+ * not there, no live visit), so the status alone cannot say which; CI run 43492200294 (shard 2) failed here
+ * with a bare 404 and a 1.8s test, which rules out a token that aged out and nothing else. This reads what
+ * tells them apart: Clerk's own auth verdict headers on that response (`x-clerk-auth-status`/`-reason`, never
+ * a token), the NAMES of the browser's cookies (never their values), and the same read repeated at once from
+ * the page, which says whether the refusal was momentary or stays.
+ */
+async function explainRefusedRead(page: Page, refused: PwResponse): Promise<string> {
+  const clerk = Object.entries(refused.headers()).filter(([k]) => k.startsWith("x-clerk")).map(([k, v]) => `${k}=${v}`);
+  const cookieNames = (await page.context().cookies()).map((c) => c.name).sort();
+  const again = await page.evaluate(async (u) => (await fetch(u, { cache: "no-store" })).status, refused.url()).catch((e: unknown) => `threw ${String(e)}`);
+  return [
+    `the card's mount read on a phone answered ${refused.status()}, not 200`,
+    `body: ${(await refused.text().catch(() => "(unreadable)")).slice(0, 200)}`,
+    `clerk headers: ${clerk.join(" ") || "(none)"}`,
+    `cookies held: ${cookieNames.join(", ") || "(none)"}`,
+    `the same read repeated from the page: ${again}`,
+  ].join("\n");
 }
 
 function toast(page: Page, text: string): Locator {
@@ -584,7 +607,8 @@ test("9. Take photo: hidden on a desktop; on a phone it is shown and opens the c
   // mounts no body at all, so without this the "N files" wait below would
   // report "element(s) not found" for either reason and tell a reader nothing.
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  expect((await mountRead).status(), "the card's mount read on a phone").toBe(200);
+  const mounted = await mountRead;
+  if (mounted.status() !== 200) throw new Error(await explainRefusedRead(page, mounted));
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
   const takePhoto = card(page).locator("[data-take-photo]");
   await expect(takePhoto).toBeVisible();
