@@ -37,6 +37,7 @@ const LOCAL_BISCI = `postgresql://postgres:${PASSWORD}@127.0.0.1:5002/postgres`;
 // project's user.
 const FAKE_PSQL = `#!/usr/bin/env bash
 { printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGHOST=%s PGOPTIONS=%s PGSSLMODE=%s PGPASSWORD=%s URLS=%s\\n' "\${PGHOST:-}" "\${PGOPTIONS:-}" "\${PGSSLMODE:-}" "\${PGPASSWORD:+set}" "\${BIS_MIGRATIONS_DB_URL:+db}\${BIS_MIGRATIONS_BISCI_DB_URL:+bisci}"; } >> "$FAKE_DIR/log"
+case "$*" in *"from items"*) case "$*" in *:5002/*|*postgres.${CI_REF}@*|*postgres.${CI_REF}:*) printf '%s' "$FAKE_BISCI_FP" ;; *) printf '%s' "$FAKE_TARGET_FP" ;; esac; exit "\${FAKE_FP_EXIT:-0}" ;; esac
 case " $* " in *" -f "*) touch "$FAKE_DIR/applied"; [ -n "\${FAKE_APPLY_STDERR:-}" ] && printf '%s\\n' "$FAKE_APPLY_STDERR" >&2; exit "\${FAKE_APPLY_EXIT:-0}" ;; esac
 case "$*" in
   *:5002/*|*postgres.${CI_REF}@*|*postgres.${CI_REF}:*) printf '%s' "$FAKE_BISCI_ROWS" ;;
@@ -94,7 +95,7 @@ function run(args: string[], env: Record<string, string | undefined> = {}): Run 
   const pathKey = Object.keys(e).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   e[pathKey] = `${path.join(root, "bin")}${path.delimiter}${e[pathKey] ?? ""}`;
   for (const k of Object.keys(e)) if (k.startsWith("BIS_") || k === "GITHUB_ACTIONS") delete e[k];
-  Object.assign(e, { FAKE_DIR: toBashPath(root), FAKE_TARGET_ROWS: "", FAKE_BISCI_ROWS: "" });
+  Object.assign(e, { FAKE_DIR: toBashPath(root), FAKE_TARGET_ROWS: "", FAKE_BISCI_ROWS: "", FAKE_TARGET_FP: "", FAKE_BISCI_FP: "" });
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete e[k];
     else e[k] = v;
@@ -438,5 +439,260 @@ describe("migrations-apply.sh --require-empty: rebuild-push runs only on an empt
   it("takes no files beside it", () => {
     const r = run(["--target", "local-as-bis-ci", "--require-empty", `${DIR}/${NEW}`], asLocalBisCi("0\n"));
     expect(r.status, r.output).toBe(2);
+  });
+});
+
+// PR 5 (2026-11-13): production's step. The secret lives only in the
+// production-migrations environment, which the owner creates by hand; until
+// then (or if it is ever deleted) the job's step receives an empty value, and
+// the runner must say which secret is missing and where it belongs.
+describe("migrations-apply.sh --target production with no production secret", () => {
+  it("refuses, naming PROD_MIGRATIONS_DB_URL and the production-migrations environment, and reads nothing (mutation: drop the production branch of the empty-URL message → FAILS)", () => {
+    files({ [NEW]: "select 1;\n" });
+    const r = run(["--target", "production", `${DIR}/${NEW}`], { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: "", BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF) });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::PROD_MIGRATIONS_DB_URL is not set: it is a secret of the production-migrations environment only/);
+    expect(r.output).toContain("Nothing was read or applied.");
+    expect(r.log).toEqual([]);
+  });
+});
+
+// D4: parity, after every production apply. fingerprint-detail.sql is read
+// on production and on bis-ci (fake psql answers with FAKE_TARGET_FP and
+// FAKE_BISCI_FP: `kind SEP key SEP digest of the definition` lines), the
+// differences are compared by KEY, the allowed list is subtracted, and only
+// keys are printed. The histories are compared NORMALISED first: each row
+// maps to the file it covers by D1's rule, so production's slug-only and stem
+// rows equal bis-ci's pairs for the same files.
+describe("migrations-apply.sh --parity compares production with bis-ci (D4)", () => {
+  const PARITY_DIR = "packages/db/supabase/parity";
+  const LEGACY = "0001_tenancy.sql";
+  const LEGACY2 = "0060_owner_line.sql";
+  const DETAIL = fs.readFileSync(path.join(REPO, PARITY_DIR, "fingerprint-detail.sql"), "utf8");
+  const ALLOWED = [
+    "# kind | key | why (every line needs its reason)",
+    "extension_version(info) | * | the platform upgrades extensions on its own schedule",
+    "function | app.current_account_id() | re-indented by the MCP apply",
+    "history | 0048_accounts_mailing_address_check_escapes | a hand repair recorded on production only",
+    "",
+  ].join("\n");
+  const fp = (...l: [string, string, string][]) => l.map(([k, key, d]) => `${k}${SEP}${key}${SEP}${d}\n`).join("");
+  const BASE: [string, string, string][] = [
+    ["column", "public.contacts.email", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    ["function", "public.concierge_enable(p_account_id uuid)", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    ["relation", "public.contacts", "cccccccccccccccccccccccccccccccc"],
+  ];
+  const setup = (allowed = ALLOWED, detail = DETAIL) => {
+    files({ [LEGACY]: "select 1;\n", [LEGACY2]: "select 2;\n", [NEW]: "select 3;\n" });
+    fs.mkdirSync(path.join(tree, PARITY_DIR), { recursive: true });
+    fs.writeFileSync(path.join(tree, PARITY_DIR, "fingerprint-detail.sql"), detail);
+    fs.rmSync(path.join(tree, PARITY_DIR, "allowed-differences.txt"), { force: true });
+    if (allowed !== "") fs.writeFileSync(path.join(tree, PARITY_DIR, "allowed-differences.txt"), allowed);
+  };
+  // bis-ci: every row the runner or the CLI wrote, as pairs. Production: 0001
+  // as the CLI's pair, 0060 slug-only at its apply time, the new file as the
+  // runner's pair (A3's shapes).
+  const bisci = () => rows(["0001", "tenancy"], ["0060", "owner_line"], ["20261114093000", "work_queue", md5(NEW)]);
+  const prod = (...extra: [string, string, string?][]) =>
+    rows(["0001", "tenancy"], ["20261111035059", "owner_line"], ["20261114093000", "work_queue", md5(NEW)], ...extra);
+  const parity = (target: string, b: string, tfp: string, bfp: string, extra: Record<string, string | undefined> = {}) =>
+    run(["--target", "local-as-production", "--parity", `${DIR}/${NEW}`], asLocalProd(target, b, { FAKE_TARGET_FP: tfp, FAKE_BISCI_FP: bfp, ...extra }));
+
+  it("passes when the normalised histories and every item match: production's slug-only row equals bis-ci's pair for the same file", () => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain("Parity: production matches bis-ci");
+    // Both reads are ONE read-only transaction sent as one command, with a lock timeout.
+    // (A multi-line query spans log lines, so calls are split on the fake's own "psql " prefix.)
+    const reads = r.log.join("\n").split(/^psql /m).filter((c) => c.includes("from items"));
+    expect(reads).toHaveLength(2);
+    for (const l of reads) expect(l).toMatch(/\[\[begin transaction read only; set local lock_timeout = '5s';/);
+    // M5: both sides hash each definition, so none is ever printed.
+    for (const l of reads) expect(l).toContain("select kind, key, coalesce(md5(def), '-') from items");
+  });
+
+  it("fails on an extra column on production, naming its kind and key and never its definition (mutation: always pass → FAILS)", () => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE, ["column", "public.contacts.secret_note", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::Parity: production and bis-ci differ/);
+    expect(r.output).toContain("column public.contacts.secret_note (production only)");
+    expect(r.output).not.toContain("dddddddddddddddd");
+  });
+
+  it("fails on a function that only bis-ci has (mutation: make parity ignore the function kind → FAILS)", () => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE, ["function", "public.new_rpc(p uuid)", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"]));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain("function public.new_rpc(p uuid) (bis-ci only)");
+  });
+
+  it("fails on an item whose definition differs, naming it as different on both", () => {
+    setup();
+    const changed = BASE.map(([k, key, d]): [string, string, string] => (k === "relation" ? [k, key, "ffffffffffffffffffffffffffffffff"] : [k, key, d]));
+    const r = parity(prod(), bisci(), fp(...changed), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain("relation public.contacts (differs)");
+    expect(r.output).not.toContain("ffffffffffffffff");
+  });
+
+  it("passes when the only differences are allowed: a listed key, and a kind listed with * (mutation: ignore the allowed list → FAILS)", () => {
+    setup();
+    const t = fp(...BASE, ["function", "app.current_account_id()", "11111111111111111111111111111111"], ["extension_version(info)", "pg_trgm", "1.6"]);
+    const b = fp(...BASE, ["function", "app.current_account_id()", "22222222222222222222222222222222"], ["extension_version(info)", "pg_trgm", "1.5"]);
+    const r = parity(prod(), bisci(), t, b);
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain("allowed: function app.current_account_id()");
+  });
+
+  it("does not judge the schema when the histories differ (another PR is between bis-ci and production): a notice naming the migration, and a pass", () => {
+    setup();
+    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
+    const r = parity(prod(), b, fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/::notice::Parity not judged: bis-ci holds/);
+    expect(r.output).toContain("20261115000000_other_branch (bis-ci only)");
+    expect(r.log.filter((l) => l.includes("from items"))).toHaveLength(0);
+  });
+
+  it("treats a history row listed as allowed as absent, so production's extra hand-repair row does not stop the judgement (mutation: drop the history kind → FAILS)", () => {
+    setup();
+    const r = parity(prod(["20260925000000", "0048_accounts_mailing_address_check_escapes"]), bisci(), fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain("column public.x.y (production only)");
+  });
+
+  it("fails when a newly applied file's recorded content differs between the file, bis-ci and production, even when histories differ", () => {
+    setup();
+    const p = rows(["0001", "tenancy"], ["20261111035059", "owner_line"], ["20261114093000", "work_queue", "0".repeat(32)]);
+    const r = parity(p, bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain(`${DIR}/${NEW} was applied to local-as-production with different content`);
+  });
+
+  it("fails when bis-ci's recorded copy of a newly applied file differs from the file (mutation: skip the bis-ci side of the digest check → FAILS)", () => {
+    setup();
+    const b = rows(["0001", "tenancy"], ["0060", "owner_line"], ["20261114093000", "work_queue", "0".repeat(32)]);
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain(`${DIR}/${NEW} is not recorded with the file's content on bis-ci`);
+  });
+
+  it("fails closed when a fingerprint cannot be read", () => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE), { FAKE_FP_EXIT: "2" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::Could not read the production fingerprint/);
+  });
+
+  it("fails closed on an empty fingerprint: an empty read is not a match", () => {
+    setup();
+    const r = parity(prod(), bisci(), "", "");
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::The production fingerprint came back empty/);
+  });
+
+  it("refuses an allowed-differences line with no reason, and a missing list", () => {
+    setup("column | public.contacts.email |\n");
+    let r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/allowed-differences\.txt line 1 has no reason/);
+    setup("");
+    r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/allowed-differences\.txt is missing/);
+  });
+
+  it("refuses when fingerprint-detail.sql's final select is not the one it hashes", () => {
+    setup(ALLOWED, DETAIL.replace("select kind, key, def from items", "select kind, key, def, 1 from items"));
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/fingerprint-detail\.sql no longer ends in the select parity hashes/);
+  });
+
+  it("runs only with production's rules", () => {
+    setup();
+    const r = run(["--target", "local-as-bis-ci", "--parity", `${DIR}/${NEW}`], asLocalBisCi(bisci()));
+    expect(r.status, r.output).toBe(2);
+  });
+
+  // Review of #370, item 1: drift on PRODUCTION is never "another PR in flight".
+  it("FAILS when production holds a history row bis-ci lacks (a hand fix on production is drift), naming the stem (mutation: treat production-only rows like bis-ci-only → FAILS)", () => {
+    setup();
+    const r = parity(prod(["20261112000000", "hand_fix"]), bisci(), fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::Parity: production holds 20261112000000_hand_fix that bis-ci does not: drift/);
+    expect(r.log.join("\n")).not.toContain("from items");
+  });
+
+  // Item 2: a bis-ci-only row (an in-flight or abandoned PR) skips the
+  // judgement, and the notice says it will keep doing so until resolved.
+  it("a bis-ci-only row skips the judgement with a notice that says it persists until the row is allowed or reaches production", () => {
+    setup();
+    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/every apply until each row above is listed in packages\/db\/supabase\/parity\/allowed-differences\.txt \(`history \| <stem> \| reason`\) or its migration reaches production/);
+  });
+
+  it("an orphan bis-ci row listed by its stem as `history` no longer stops the judgement (mutation: match history lines on the row's name only → FAILS)", () => {
+    setup(`${ALLOWED}history | 20261115000000_other_branch | PR closed unmerged; reverted by a later migration\n`);
+    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
+    const r = parity(prod(), b, fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain("column public.x.y (production only)");
+  });
+
+  // Item 3: the documented MCP fallback leaves a whole-stem row on production
+  // with no runner digest. It is accepted only when bis-ci's recorded digest
+  // equals the file AND parity is judged and passes.
+  const prodHand = () => rows(["0001", "tenancy"], ["20261111035059", "owner_line"], ["20261114120000", "20261114093000_work_queue"]);
+
+  it("accepts a file applied to production BY HAND (whole-stem row, no digest) when bis-ci's copy matches and parity passes, saying so (mutation: refuse every row without a digest → FAILS)", () => {
+    setup();
+    const r = parity(prodHand(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/::notice::.*20261114093000_work_queue\.sql was applied to production by hand/);
+    expect(r.output).toContain("Parity: production matches bis-ci");
+  });
+
+  it("a hand-applied file is still judged: an extra column fails", () => {
+    setup();
+    const r = parity(prodHand(), bisci(), fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+  });
+
+  it("refuses a hand-applied file when bis-ci's recorded copy differs from the file", () => {
+    setup();
+    const b = rows(["0001", "tenancy"], ["0060", "owner_line"], ["20261114093000", "work_queue", "0".repeat(32)]);
+    const r = parity(prodHand(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain(`${DIR}/${NEW} is not recorded with the file's content on bis-ci`);
+  });
+
+  it("refuses a hand-applied file when parity cannot be judged: nothing then vouches for its content (mutation: accept it on the notice path → FAILS)", () => {
+    setup();
+    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
+    const r = parity(prodHand(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql was applied to production by hand, and parity could not be judged/);
+  });
+
+  // Item 4 (M8): only parity's production-side content check can catch a
+  // pair row with no runner digest (a CLI push, say): the runner's earlier
+  // loops treat a digest-less row as applied.
+  it("refuses a production pair row that carries no content digest: only parity's production-side check sees it (mutation: drop that check → FAILS)", () => {
+    setup();
+    const p = rows(["0001", "tenancy"], ["20261111035059", "owner_line"], ["20261114093000", "work_queue"]);
+    const r = parity(p, bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain(`${DIR}/${NEW} is not recorded with the file's content on production`);
+  });
+
+  it("parses the repository's own allowed-differences.txt: every line has a kind, a key and a reason", () => {
+    setup(fs.readFileSync(path.join(REPO, PARITY_DIR, "allowed-differences.txt"), "utf8"));
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
   });
 });

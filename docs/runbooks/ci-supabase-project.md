@@ -192,7 +192,36 @@ fixture account.
 
 ## 5. Parity with production
 
-Run the same read on both projects and diff. Expected differences in the
+**Since the migration pipeline's PR 5, CI checks parity after every
+production apply** (`migrations-apply.sh --target production --parity`, in
+`migrations-production`'s one step): `fingerprint-detail.sql` on production
+and on bis-ci, each in one read-only transaction, compared by kind and key
+(each definition hashed, never printed), minus
+`packages/db/supabase/parity/allowed-differences.txt`. Any other difference
+FAILS the job, so the `e2e` check stays red and the PR cannot merge (owner
+answer Q3); the schema stays applied and recorded, and the fix is forward (a
+new migration, or a reasoned line in that file in a reviewed PR). The
+histories are compared first, NORMALISED (each row becomes the file it covers
+by the runner's D1 rule, so production's slug-only and stem rows equal
+bis-ci's pairs). Then:
+- **A row on PRODUCTION that bis-ci lacks FAILS** ("production holds <stem>
+  that bis-ci does not: drift"): bis-ci always comes first, so this is a
+  hand change on production. Investigate with `fingerprint-detail.sql` on both;
+  a known, reasoned row goes in `allowed-differences.txt` as
+  `history | <stem> | reason`.
+- **A row on bis-ci alone** (another PR between the two projects) means the
+  schema is NOT judged: a notice names each migration. **This repeats on EVERY
+  apply until the row is resolved**, so a PR closed unmerged after its
+  bis-ci apply silently stops parity for good: list its stem in
+  `allowed-differences.txt` (`history | <stem> | reason`, ideally beside the
+  reverting migration) or let the migration reach production.
+- **A file applied to production by hand** (the MCP fallback, section 6: a
+  whole-stem row with no runner digest) is accepted only when bis-ci's
+  recorded copy equals the file AND parity is judged and passes; a notice
+  says it was applied by hand. If parity cannot be judged, it is refused. The by-hand read below stays for
+an investigation or for when CI cannot run.
+
+By hand: run the same read on both projects and diff. Expected differences in the
 `migration-history` diff (not drift): production's 61 slug-only rows (0032,
 0042-0045, 0060-0115) print as the bare slug (`owner_line`) against CI's
 `0115_owner_line`, and production carries one extra row,
@@ -206,7 +235,10 @@ Run the same read on both projects and diff. Expected differences in the
 A kind whose digest differs is drilled into with `fingerprint-detail.sql` on
 both sides.
 
-**Allowed differences** (first parity run, 2026-09-24): `extension_version(info)`,
+**Allowed differences** (first parity run, 2026-09-24; since PR 5 the list CI
+subtracts is `packages/db/supabase/parity/allowed-differences.txt`, each line
+`kind | key | reason`, plus a `history` line for production's extra 0048 row):
+`extension_version(info)`,
 and three cosmetic differences on production's side in the `column` and
 `function` kinds, each an artefact of how the MCP applied a file rather than a
 difference in what the database does: `public.contacts.email_key`'s generation
@@ -260,26 +292,51 @@ CI first, then production.
    read-only file); for a constraint or function with a backslash escape, the
    md5 of its stored definition against the file's.
 4. The branch's CI green on its head SHA (both jobs, read from the check runs).
-5. Production: the existing MCP procedure (pre-flight read by `name`,
-   `apply_migration`, post-apply verification, md5 compare for anything with a
-   backslash escape). **For a timestamped file, pass `name` = the file's
-   WHOLE stem** (`20261114093000_work_queue`, never `work_queue`). The MCP
-   records its own apply time as the version, so the stem in `name` is the
-   only link from the row to the file. Do NOT copy the habit of 0032,
-   0042–0045 and 0060–0115, which were applied with the slug alone (0115 is
-   `(20261111035059, owner_line)`, read in the review of #365). Those 61 rows
-   are matched to their files by slug, which is unique among them. The other
-   legacy rows are the stem form (0012–0031, 0033–0041, 0046–0059, 0116,
-   plus an extra `0048_accounts_mailing_address_check_escapes`), and
-   0001–0011 are the CLI's form (`0001`, `tenancy`).
-6. Parity (section 5).
+5. **Production: CI applies it behind danlo's click (since the pipeline's
+   PR 5).** Once `migrations-bis-ci` succeeds in the run, `migrations-production`
+   waits for the `production-migrations` environment's approval (danlo only,
+   in the run's page: Review deployments; never through the API). After the
+   click, ONE step: `migrations-apply.sh --target production` (only the files
+   the branch adds, each refused unless bis-ci holds it byte for byte; one
+   transaction per file; nothing retried; errors as SQLSTATE only), then
+   `--parity` (step 6), then `--check` (production holds every file of the
+   branch). The `e2e` check is red until that job succeeds. A push with no
+   migration never runs it. Failures:
+   - `PROD_MIGRATIONS_DB_URL is not set`: the environment or its secret is
+     missing (owner's checklist). Nothing was read or applied.
+   - an apply fails: production keeps the files before it; this file left
+     neither schema nor row. A SQL error here, after bis-ci took the same
+     file, means DRIFT: run `fingerprint-detail.sql` on both, fix by a new
+     migration. A `lock_timeout` (55P03) is transient: Re-run failed jobs (a
+     new click) when traffic is quiet.
+   - parity fails: step 6.
+   - a later push to the same branch asks for the click again (the runner
+     applies nothing new; until the pipeline's PR 6).
+   **Fallback, only when CI cannot run:** the MCP procedure (for an OPEN PR:
+   afterwards Re-run failed jobs; the runner skips the file as applied, and
+   parity accepts the hand-applied row only when bis-ci holds the same bytes
+   and parity is judged and passes) (pre-flight read
+   by `name`, `apply_migration`, post-apply verification, md5 compare for
+   anything with a backslash escape). For a timestamped file pass `name` =
+   the file's WHOLE stem (`20261114093000_work_queue`, never `work_queue`):
+   the MCP records its apply time as the version, so the stem in `name` is
+   the only link from the row to the file. Do NOT copy the habit of 0032,
+   0042-0045 and 0060-0115, which were applied with the slug alone (0115 is
+   `(20261111035059, owner_line)`). Those 61 rows are matched to their files
+   by slug, which is unique among them. The other legacy rows are the stem
+   form (0012-0031, 0033-0041, 0046-0059, 0116, plus an extra
+   `0048_accounts_mailing_address_check_escapes`), and 0001-0011 are the
+   CLI's form (`0001`, `tenancy`).
+6. Parity (section 5): CI's `--parity` in the same step. A failure names
+   each differing kind and key; the merge is blocked until a new migration
+   fixes it or `allowed-differences.txt` gains a reasoned line.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
-**The migration runner (since 2026-11-13; nothing in CI calls it yet).**
+**The migration runner (since 2026-11-13; CI's `migrations-bis-ci` and `migrations-production` call it).**
 `.github/scripts/migrations-apply.sh --target <bis-ci|production> [--dry-run|--check] FILE...`
 applies the timestamped files a branch adds. The pipeline's PR 4 will run it
-against this project, and PR 5 against production behind the owner's approval.
+against this project, and PR 5 against production behind the owner's approval (both built).
 - **It refuses before writing anything** when:
   - a file on main is missing from the target's history (behind main);
   - an applied file's content changed;

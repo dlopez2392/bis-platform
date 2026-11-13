@@ -125,8 +125,14 @@ differing KEYS, never definitions.
 - Histories are compared NORMALISED: each row maps to the file stem it covers by D1's rule (a row covering no
   file in the tree keeps `version_name`), and two histories are equal when their sets of stems are. If equal:
   any remaining schema difference FAILS the job, so `e2e` stays red and the PR cannot merge.
-- If they differ (another PR is between bis-ci and production): report which migrations differ and do NOT judge
-  the schema; parity is judged by the next apply whose histories match. Always judged, either way: each newly
+- If PRODUCTION holds a row bis-ci lacks (not an allowed `history` line): FAIL, "production holds <stem> that
+  bis-ci does not: drift" (corrected by #370's review: bis-ci always comes first, so that is drift, never in-flight).
+- If only BIS-CI holds rows (another PR is between bis-ci and production): report them and do NOT judge the schema.
+  This repeats on every apply until each row is listed as `history | <stem> | reason` or reaches production, so an
+  abandoned PR's orphan disables parity until it is listed; the notice says so. PR 6: fail when the orphan is older
+  than every open migration PR's.
+- A production row that is the file's whole stem with no runner digest (the MCP fallback) is accepted only when
+  bis-ci's recorded digest equals the file AND parity is judged and passes (a notice says "applied by hand"). Always judged, either way: each newly
   applied file's digest is equal in the file, bis-ci and production.
 - Rejected: a fingerprint against a stack built from the branch's files. bis-ci and production both hold other
   PRs' in-flight migrations, so it would differ most days.
@@ -147,8 +153,9 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
 - A run cancelled mid-apply (a newer push): the open transaction dies with its connection; at most the
   current file is lost, never half-written.
 - PR abandoned after an apply: the schema stays. Remove it with a reverting migration in its own PR
-  (`if exists` throughout, so it is a no-op where the original never landed); until then the gate's notice
-  names the orphan on every run.
+  (`if exists` throughout, so it is a no-op where the original never landed). Corrected by #370's review: no
+  gate notice named the orphan; parity's "not judged" notice names it on every production apply, and parity stays
+  unjudged until it is listed in `allowed-differences.txt` (D4). Failing on an old orphan is left to PR 6.
 
 **D6. Security.** (The bis-ci half of D6's CLAUDE.md wording landed in PR 4: CI writes to bis-ci through
 `migrations-bis-ci`; production stays by hand until PR 5.)
@@ -205,7 +212,10 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
 
 1. Settings > Environments > New `production-migrations`: required reviewer **danlo**; "prevent self-review"
    OFF (agents push as you); administrator bypass OFF; deployment branches: all branches; no wait timer.
-2. In that environment only: secret `PROD_MIGRATIONS_DB_URL` = production's Session pooler URI. Never a
+2. A5, after 1 and BEFORE the secret exists: verified with the first real migration PR's run (no secret means
+   nothing is applied): the job waits for the click, self-approval works with "prevent self-review" off, and
+   Re-run failed jobs asks for a new click. Then:
+   In that environment only: secret `PROD_MIGRATIONS_DB_URL` = production's Session pooler URI. Never a
    repository secret, never Vercel.
 3. Q1-Q6 answered 2026-11-13 (section 6). No ruleset change (the gate lives inside `e2e`).
 Until 1 and 2 are done, PR 5 does not merge and production stays manual (MCP, parity by hand). From PR 1 on,
@@ -274,6 +284,13 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
 - Probes: make parity ignore `function` kind → the extra-function case fails; let the gate accept a skipped
   production job → its case fails; move the secret to job env → its pin fails.
 - First live use: the next real migration; the orchestrator watches and reads production's history after.
+- Built (amended by PR 5): parity is the runner's own `--parity` mode, not a separate `migrations-parity.sh`, so it
+  reuses the runner's history reader and D1's cover rule. `allowed-differences.txt` gained a `history` kind: production's
+  extra `0048_accounts_mailing_address_check_escapes` row covers no file, so without it every history comparison would
+  "differ" and parity would never judge. Its cases run on fixtures through a fake psql; a live two-database case is a
+  follow-up. The production step is ONE step (apply, then `--parity`, then `--check`), so the secret is on one line.
+  A job that names an environment GitHub does not have CREATES it with no protection rules: until section 3 is done,
+  such a run starts with no click and no secret, and the runner refuses ("PROD_MIGRATIONS_DB_URL is not set").
 
 **PR 6 — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
 `production-migrations` deployments of this branch (A6) and passes `prod_evidence` when one was on a commit
