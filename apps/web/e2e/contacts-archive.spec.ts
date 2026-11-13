@@ -160,7 +160,11 @@ test("archive from the list runs at once with Undo; the Archived view restores i
   await expect(page.getByText(oneName)).toBeVisible();
   await expect.poll(() => readTotal(page, "active")).toBe(beforeFirstArchive);
 
-  // Archive it again, then follow the list's own link to the Archived view.
+  // Archive it again, then follow the list's own link to the Archived view. First let the first
+  // archive's toast close: an Undo toast stays up for 10 s, so on a fast runner it is still on screen
+  // when the second one opens with the same words, and the check below then finds two (strict-mode
+  // failure on two PR branches 2026-11-13, shard 1, after #357 made the runners faster).
+  await expect(page.getByText(m["bulk.archivedOne"])).toHaveCount(0, { timeout: 15_000 });
   const beforeSecondArchive = await readTotal(page, "active");
   await oneRow.getByRole("checkbox").click();
   const secondArchive = actionAnswered(page, archiveOneId);
