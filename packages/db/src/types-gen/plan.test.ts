@@ -5,9 +5,11 @@ import {
   REGENERATE,
   TYPES_FILE,
   acceptGenerated,
+  checkVerdict,
   driftReport,
   parseArgs,
   pgMetaRun,
+  redactSecrets,
   schemaFiles,
 } from "./plan";
 
@@ -106,6 +108,49 @@ describe("driftReport: the CI check's verdict", () => {
   it("counts a missing trailing newline or a CRLF file as drift (the comparison is bytes)", () => {
     expect(driftReport(GENERATED.trimEnd(), GENERATED)).not.toBeNull();
     expect(driftReport(GENERATED.replace(/\n/g, "\r\n"), GENERATED)).not.toBeNull();
+  });
+});
+
+describe("checkVerdict: the check mode's whole decision", () => {
+  it("passes (exit 0) when the checked-in file is exactly what the schema generates", () => {
+    expect(checkVerdict(GENERATED, GENERATED, true)).toEqual({ exitCode: 0, message: `types: ${TYPES_FILE} matches the schema` });
+  });
+
+  it("fails (exit 1) on drift with an ::error:: line naming the file and `types:gen` on a runner", () => {
+    const v = checkVerdict(GENERATED.replace("public: {}", "public: { old: true }"), GENERATED, true);
+    expect(v.exitCode).toBe(1);
+    expect(v.message.startsWith(`::error::${TYPES_FILE} is not what the migrations generate`)).toBe(true);
+    expect(v.message).toContain("Run `pnpm --filter @bis/db types:gen`");
+  });
+
+  it("fails the same way off a runner, without the annotation prefix", () => {
+    const v = checkVerdict("", GENERATED, false);
+    expect(v.exitCode).toBe(1);
+    expect(v.message.startsWith(`${TYPES_FILE} is not`)).toBe(true);
+  });
+});
+
+describe("redactSecrets: nothing the generator or docker echoes prints a password", () => {
+  // The review's probe: postgres-meta echoes a URL it cannot parse, whole.
+  const PROBE = "postgresql://postgres:s3cr/et@w0rd%21@127.0.0.1:54322/postgres?sslmode=disable&password=hunter2";
+
+  it("hides the user-info of every URL and every password= value, keeping the rest readable", () => {
+    const out = redactSecrets(`Error: invalid connection string "${PROBE}"
+at parse (x.js:1)`);
+    for (const secret of ["s3cr", "et@w0rd", "%21", "hunter2"]) expect(out).not.toContain(secret);
+    expect(out).toContain("postgresql://***@127.0.0.1:54322/postgres?sslmode=disable&password=***");
+    expect(out).toContain("at parse (x.js:1)");
+  });
+
+  it("leaves text with no URL or password alone", () => {
+    expect(redactSecrets("connect ECONNREFUSED 127.0.0.1:54322")).toBe("connect ECONNREFUSED 127.0.0.1:54322");
+  });
+
+  it("is applied to what acceptGenerated quotes, before it shortens it", () => {
+    const echoed = "x".repeat(400) + ` failed for ${PROBE}`;
+    expect(() => acceptGenerated(echoed)).toThrow(/did not print a types file/);
+    expect(() => acceptGenerated(echoed)).not.toThrow(/s3cr|hunter2/);
+    try { acceptGenerated(echoed); } catch (e) { expect((e as Error).message).toContain("***@127.0.0.1"); }
   });
 });
 

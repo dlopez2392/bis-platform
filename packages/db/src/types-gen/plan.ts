@@ -1,6 +1,9 @@
 /**
  * The generated database types (src/database.types.ts): how they are made,
- * and how CI tells a stale copy from a current one. ./run.ts does the I/O.
+ * and how CI tells a stale copy from a current one. ./cli.ts applies the
+ * verdict and sets the exit code; ./run.ts does the I/O. Any text the
+ * generator or docker prints back is passed through redactSecrets before it
+ * is shown: postgres-meta echoes a URL it cannot parse, password included.
  *
  * ONE GENERATOR, TWO CALLERS. `types:gen` (a developer, after writing a
  * migration) and `types:check` (CI's verify-db, on its own stack) both run
@@ -17,7 +20,10 @@
  */
 import { mentionsProduction, PRODUCTION_SUPABASE_REF } from "../ci/target";
 
-/** postgres-meta at the version Supabase CLI 2.109.1 runs, pinned by digest (read 2026-11-13). */
+/**
+ * postgres-meta at the version Supabase CLI 2.109.1 runs, pinned by digest (read 2026-11-13).
+ * Moves with the CLI pin (.github/scripts/ci-supabase-cli.sh), as does POSTGRES_IMAGE below.
+ */
 export const PG_META_IMAGE =
   "public.ecr.aws/supabase/postgres-meta:v0.96.6@sha256:a84cc713585eea7b401e4a2561ec4a1e48c87083d1c7ecb4502f204bb4391300";
 
@@ -85,13 +91,27 @@ export function pgMetaRun(dbUrl: string, reach: Reach): DockerRun {
 }
 
 /**
+ * Text from docker or postgres-meta with every credential hidden: the
+ * user-info of any URL (`scheme://user:pass@` becomes `scheme://***@`, up to
+ * the LAST `@` of the token, since a password that breaks the URL is exactly
+ * the case postgres-meta echoes it whole) and any `password=` value. Applied
+ * to the WHOLE text before it is shortened, so a cut can never split a URL
+ * from its scheme and let the password through.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s'"`]*@/gi, "$1***@")
+    .replace(/(password=)[^\s&'"`]*/gi, "$1***");
+}
+
+/**
  * The generator's stdout, if it is a types file. postgres-meta prints its
  * errors to the same stream, so an unreachable database must never become
- * the checked-in file.
+ * the checked-in file. What it printed instead is quoted redacted.
  */
 export function acceptGenerated(stdout: string): string {
   if (!stdout.startsWith("export type Json =") || !stdout.includes("\nexport type Database = {")) {
-    throw new Error(`types: postgres-meta did not print a types file. It printed: ${stdout.slice(0, 300) || "(nothing)"}`);
+    throw new Error(`types: postgres-meta did not print a types file. It printed: ${redactSecrets(stdout).slice(-1500) || "(nothing)"}`);
   }
   return stdout;
 }
@@ -109,6 +129,19 @@ export function driftReport(checkedIn: string, generated: string): string | null
     `checked in: ${quote(a[line])}, generated:  ${quote(b[line])}). ` +
     `Run \`${REGENERATE}\` (Docker must be running) and commit the result.`
   );
+}
+
+export type Verdict = { exitCode: 0 | 1; message: string };
+
+/**
+ * The check mode's whole decision, given the checked-in file's text and the
+ * text just generated: exit 0 when they are byte for byte equal, else exit 1
+ * with driftReport's message (an `::error::` annotation on a runner).
+ */
+export function checkVerdict(checkedIn: string, generated: string, onRunner: boolean): Verdict {
+  const drift = driftReport(checkedIn, generated);
+  if (drift === null) return { exitCode: 0, message: `types: ${TYPES_FILE} matches the schema` };
+  return { exitCode: 1, message: `${onRunner ? "::error::" : ""}${drift}` };
 }
 
 export type Args = { mode: "write" | "check"; dbUrl: string | null };

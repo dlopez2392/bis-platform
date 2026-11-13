@@ -250,8 +250,11 @@ jobs:
       # same generator `pnpm --filter @bis/db types:gen` uses (Supabase's
       # postgres-meta, pinned; packages/db/src/types-gen/plan.ts) and fails,
       # naming the first differing line and that command, if they differ.
-      # Before the suites: about half a minute, against several. The URL is
-      # passed by its variable's name, so no failure line can print it.
+      # Before the suites: 8-9s measured (image pull included), against
+      # several minutes. The URL is passed by its variable's name, so pnpm's
+      # failure line cannot print it, and whatever docker or postgres-meta
+      # echoes back (postgres-meta prints a URL it cannot parse whole) is
+      # redacted before it is shown (plan.ts redactSecrets).
       - name: Check the generated database types against the migrations
         if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter @bis/db types:check --db-url-env SUPABASE_DB_URL

@@ -7,28 +7,30 @@
  * remove it: nothing shared is read. `--db-url-env NAME` generates from the
  * existing database whose URL is in the variable NAME instead; CI's verify-db
  * names SUPABASE_DB_URL, its own stack's. The pieces, and why one generator
- * serves both: ./plan.ts. Needs Docker.
+ * serves both: ./plan.ts. What it does with the result, and its exit code:
+ * ./cli.ts. This file is only the I/O. Needs Docker.
  *
- * Reads no .env file. Production's database is refused (./plan.ts).
+ * Reads no .env file. Production's database is refused (./plan.ts). The URL
+ * is never on a command line, and anything docker or postgres-meta prints
+ * back (postgres-meta echoes a URL it cannot parse, password and all) is
+ * redacted before it is shown (./plan.ts redactSecrets).
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runCli } from "./cli";
 import {
   POSTGRES_IMAGE,
-  TYPES_FILE,
   acceptGenerated,
-  driftReport,
-  parseArgs,
   pgMetaRun,
+  redactSecrets,
   schemaFiles,
   type DockerRun,
 } from "./plan";
 
 const PKG = fileURLToPath(new URL("../..", import.meta.url));
-const OUT = join(PKG, "src", "database.types.ts");
 
 function docker(args: string[], opts: { env?: Record<string, string>; input?: string } = {}): string {
   const r = spawnSync("docker", args, {
@@ -39,7 +41,7 @@ function docker(args: string[], opts: { env?: Record<string, string>; input?: st
   });
   if (r.error) throw new Error(`types: could not run docker (${r.error.message}). Is Docker installed and running?`);
   if (r.status !== 0) {
-    throw new Error(`types: \`docker ${args.slice(0, 2).join(" ")} …\` exited ${r.status}: ${(r.stderr || r.stdout).slice(-1500)}`);
+    throw new Error(`types: \`docker ${args.slice(0, 2).join(" ")} …\` exited ${r.status}: ${redactSecrets(r.stderr || r.stdout).slice(-1500)}`);
   }
   return r.stdout;
 }
@@ -93,28 +95,17 @@ function generateFromMigrations(): string {
   }
 }
 
-function main(): void {
-  const { mode, dbUrl } = parseArgs(process.argv.slice(2), process.env);
-  const generated = dbUrl ? generate(pgMetaRun(dbUrl, { platform: process.platform })) : generateFromMigrations();
-  if (mode === "write") {
-    writeFileSync(OUT, generated);
-    console.log(`types: wrote ${TYPES_FILE} (${generated.split("\n").length} lines)`);
-    return;
-  }
-  const report = driftReport(readFileSync(OUT, "utf8"), generated);
-  if (report === null) {
-    console.log(`types: ${TYPES_FILE} matches the schema`);
-    return;
-  }
-  const copy = join(mkdtempSync(join(tmpdir(), "bis-types-")), "database.types.ts");
-  writeFileSync(copy, generated);
-  console.error(`${process.env.GITHUB_ACTIONS === "true" ? "::error::" : ""}${report} The generated file is at ${copy}.`);
-  process.exitCode = 1;
-}
-
-try {
-  main();
-} catch (e) {
-  console.error((e as Error).message);
-  process.exitCode = 1;
-}
+runCli(process.argv.slice(2), process.env, {
+  generateFrom: (dbUrl) => generate(pgMetaRun(dbUrl, { platform: process.platform })),
+  generateFromMigrations,
+  readText: (path) => readFileSync(path, "utf8"),
+  writeText: (path, text) => writeFileSync(path, text),
+  // Drift only: the copy is what the message points the author at. A passing check leaves nothing in the temp dir.
+  saveGeneratedCopy: (text) => {
+    const copy = join(mkdtempSync(join(tmpdir(), "bis-types-")), "database.types.ts");
+    writeFileSync(copy, text);
+    return copy;
+  },
+  out: (line) => console.log(line),
+  err: (line) => console.error(line),
+}, process);

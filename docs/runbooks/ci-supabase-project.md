@@ -301,6 +301,15 @@ on its own stack (section 11), the same generator, and fails if the file is
 not byte for byte what the branch's migrations produce, quoting the first
 differing line and naming the command above. A red here is fixed by running
 it and committing the result, never by editing the file by hand.
+`types:check` (no flag) runs the same check locally. On drift it saves what it
+generated to a `bis-types-*` folder in the OS temp directory and names it, so
+you can diff it; a passing check writes nothing there. Delete the folder when
+you are done. Anything docker or postgres-meta prints back is shown with URL
+credentials and `password=` values redacted.
+
+Bumping the Supabase CLI (`.github/scripts/ci-supabase-cli.sh`) also moves
+`POSTGRES_IMAGE` and the postgres-meta digest in `plan.ts` to that release's
+images, then `types:gen`.
 
 ## 7. Restore from a pause
 
