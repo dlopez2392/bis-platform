@@ -516,7 +516,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         // F-032: an owner-line call finishes as one (its row, its minutes, its access-log entry, nothing else);
         // a customer's call exactly as before.
         if (args.mode === "owner_line") await args.ownerLine.finish(state, { callRowId, startedAt, endedAt: new Date() });
-        else await finishCall(state, args.finishCtx, { callRowId, startedAt, endedAt: new Date() });
+        else await finishCall(state, args.finishCtx, { callRowId, providerCallId: callId, startedAt, endedAt: new Date() });
       } catch (e) {
         log("finishCall threw unexpectedly", { callId, error: String(e) });
       }

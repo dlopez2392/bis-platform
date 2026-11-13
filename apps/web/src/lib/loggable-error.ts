@@ -46,6 +46,16 @@ export function loggablePhone(n: string | null | undefined): string {
 }
 
 /**
+ * `text` with every phone number replaced by "[phone]", in the same narrow
+ * shapes loggableError redacts (E.164 and the common US forms). For prose a
+ * log line must quote, such as a call's AI summary, which can repeat the
+ * number the caller gave.
+ */
+export function redactPhones(text: string): string {
+  return text.replace(PHONE_LIKE, "[phone]");
+}
+
+/**
  * An error as a log line may carry it: its class (the SDK's `.type`, else its
  * name), Stripe's `code` and HTTP status when present, and its message with
  * every email address replaced by "[email]" and every phone number by

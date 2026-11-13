@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggablePhone } from "@/lib/loggable-error";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { FIELD_NAME, ATTESTATION_FIELD, MAX_ATTESTATION, shownValue } from "@/lib/voice/attestation-log";
 
@@ -48,7 +49,11 @@ export async function readTelnyxForm(
     console.error(`${tag}: failed to read request body: ${String(e)}`);
   }
   const form = new URLSearchParams(rawBody);
-  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
+  // A key whose private half is published in this repo is refused in
+  // production, never read as unset (unset would accept unsigned requests).
+  const telnyx = telnyxPublicKey();
+  if (telnyx.kind === "refused") return { ok: false, response: new NextResponse(null, { status: 403 }) };
+  const publicKey = telnyx.kind === "set" ? telnyx.key : undefined;
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
     const signatureB64 = req.headers.get("telnyx-signature-ed25519");

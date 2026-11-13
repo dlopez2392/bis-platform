@@ -6,6 +6,7 @@ import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
 import { GET as texmlGET } from "../route";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeyFormPost } from "@/lib/voice/testing/published-telnyx-key";
 
 const stampMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
@@ -282,6 +283,24 @@ describe("the same Telnyx gate as the main route", () => {
 });
 
 describe("GET mirrors the main route: closed with the key set, answered without it", () => {
+  it("the Telnyx test key whose private half is in this repo: refused 403 in production (POST validly signed, and GET), accepted on Preview", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+    const fields = { Digits: "1", To: LINE, From: STRANGER };
+    try {
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect((await POST(publishedKeyFormPost(URL_BASE, fields))).status).toBe(403);
+      expect((await GET(new Request(`${URL_BASE}&Digits=1&To=${encodeURIComponent(LINE)}`))).status).toBe(403);
+      expect(lookupMock).not.toHaveBeenCalled();
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect((await POST(publishedKeyFormPost(URL_BASE, fields))).status).toBe(200);
+      expect(lookupMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
+  });
+
   it("GET with TELNYX_PUBLIC_KEY set → 405", async () => {
     process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const res = await GET(new Request(`${URL_BASE}&Digits=1&To=${encodeURIComponent(LINE)}`));

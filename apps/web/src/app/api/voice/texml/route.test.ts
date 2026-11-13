@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST, OWNER_LINE_LOOKUP_DEADLINE_MS } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
 import type { BillingStanding } from "@bis/db";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeySignature } from "@/lib/voice/testing/published-telnyx-key";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -2407,5 +2408,55 @@ describe("texml route — a caller's number reaches the log masked, never in ful
     expect(res.status).toBe(403);
     expect(logged()).toContain(`texml: rejected request (missing-headers), claimedTo ${LIVE_TO}, claimedFrom ${MASKED}`);
     expect(logged()).not.toContain(CALLER);
+  });
+
+  it("VOICE_FORWARD_TO: the forward target is masked too (it is usually someone's mobile)", async () => {
+    process.env.VOICE_FORWARD_TO = "+19565550177";
+    try {
+      await texmlXml({ To: LIVE_TO, From: CALLER });
+    } finally {
+      delete process.env.VOICE_FORWARD_TO;
+    }
+    expect(logged()).toContain("texml FORWARDING to +1••••••••77 — Sofía is bypassed");
+    expect(logged()).not.toContain("+19565550177");
+  });
+});
+
+describe("texml route — the Telnyx test key whose private half is in this repo", () => {
+  const raw = new URLSearchParams({ To: LIVE_TO, From: "+19562921696" }).toString();
+  const signedPost = () => POST(new Request("https://x.example/api/voice/texml", {
+    method: "POST", body: raw,
+    headers: { "content-type": "application/x-www-form-urlencoded", ...publishedKeySignature(raw) },
+  }));
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it("in production a request VALIDLY signed with it is refused 403, and nothing is looked up", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const res = await signedPost();
+    expect(res.status).toBe(403);
+    expect(lookupMock).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("TELNYX_PUBLIC_KEY"));
+  });
+
+  it("in production a GET is refused too (403), never answered as if no key were set", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const res = await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}`));
+    expect(res.status).toBe(403);
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("on Preview the same signed request is accepted and dialled", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const res = await signedPost();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<Dial");
   });
 });

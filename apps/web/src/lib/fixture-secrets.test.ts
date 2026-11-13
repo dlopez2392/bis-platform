@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isFixtureSecret, readSecret } from "./fixture-secrets";
+import { isFixtureSecret, readSecret, telnyxPublicKey } from "./fixture-secrets";
+import { scannerConfig } from "./documents/scan-client";
+import { PUBLISHED_TELNYX_PUBLIC_KEY } from "./voice/testing/published-telnyx-key";
 import { cronAuthorized } from "./automations/cron-auth";
 import { webhookSecretFromEnv } from "./billing/stripe-gateway";
 import { consentTokenSecrets } from "./consent/token";
@@ -41,6 +43,37 @@ describe("isFixtureSecret", () => {
   it("does not take a real-looking secret for a fixture", () => {
     expect(isFixtureSecret(REAL)).toBe(false);
     expect(isFixtureSecret("whsec_" + REAL)).toBe(false);
+  });
+
+  it("recognises the marker in any case: a fixture typed in capitals is still public", () => {
+    expect(isFixtureSecret("BIS_CI_E2E_CONSENT_TOKEN_FIXTURE_ONLY")).toBe(true);
+    expect(isFixtureSecret("bis_Fixture_Only_0000000000000000")).toBe(true);
+  });
+});
+
+describe("telnyxPublicKey: a Telnyx key whose private half is published", () => {
+  it("the published list holds the public half of the key the e2e suite signs with", () => {
+    expect(telnyxPublicKey({ ...PROD, TELNYX_PUBLIC_KEY: PUBLISHED_TELNYX_PUBLIC_KEY })).toEqual({ kind: "refused" });
+  });
+
+  it("in production it is refused, never read as unset (unset opens TeXML), and the log names the variable, never the value", () => {
+    expect(telnyxPublicKey({ ...PROD, TELNYX_PUBLIC_KEY: ` ${PUBLISHED_TELNYX_PUBLIC_KEY}\n` })).toEqual({ kind: "refused" });
+    expect(logged()).toContain("TELNYX_PUBLIC_KEY");
+    expect(logged()).not.toContain(PUBLISHED_TELNYX_PUBLIC_KEY);
+  });
+
+  it("outside production the same key is used (CI's e2e job runs on it)", () => {
+    expect(telnyxPublicKey({ ...PREVIEW, TELNYX_PUBLIC_KEY: PUBLISHED_TELNYX_PUBLIC_KEY }))
+      .toEqual({ kind: "set", key: PUBLISHED_TELNYX_PUBLIC_KEY });
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it("in production, any other key is used, trimmed, and an unset or blank one is unset", () => {
+    const other = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    expect(telnyxPublicKey({ ...PROD, TELNYX_PUBLIC_KEY: ` ${other} ` })).toEqual({ kind: "set", key: other });
+    expect(telnyxPublicKey({ ...PROD, TELNYX_PUBLIC_KEY: "  " })).toEqual({ kind: "unset" });
+    expect(telnyxPublicKey({ ...PROD })).toEqual({ kind: "unset" });
+    expect(errSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -116,5 +149,12 @@ describe("the guard at each point of use", () => {
     vi.stubEnv("VERCEL_ENV", "production");
     expect(feedSecretConfigured()).toBe(false);
     expect(() => feedToken("11111111-1111-4111-8111-111111111111")).toThrow("CALENDAR_FEED_SECRET is required");
+  });
+
+  it("SCANNER_SECRET: the scanner is not configured, so no file is sent to it", () => {
+    const env = { SCANNER_URL: "https://scanner.example", SCANNER_SECRET: "bis_e2e_scanner_fixture_only" };
+    expect(scannerConfig({ ...PROD, ...env })).toBeNull();
+    expect(scannerConfig({ ...PREVIEW, ...env })).toEqual({ origin: "https://scanner.example", secret: "bis_e2e_scanner_fixture_only" });
+    expect(logged()).toContain("SCANNER_SECRET");
   });
 });

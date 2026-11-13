@@ -35,6 +35,7 @@
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggablePhone } from "@/lib/loggable-error";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import {
   actionOrigin, answer, bridgeAfterFailure, screenActionUrl, screenGoodbyeXml, screenSecondAskXml, xmlResponse,
   type Languages,
@@ -111,7 +112,10 @@ async function decide(
  * no signed body; answered without it, where nothing is authenticated anyway.
  */
 export async function GET(req: Request): Promise<NextResponse> {
-  if (process.env.TELNYX_PUBLIC_KEY?.trim()) return new NextResponse(null, { status: 405 });
+  const telnyx = telnyxPublicKey();
+  // A published test key in production (lib/fixture-secrets.ts): refused.
+  if (telnyx.kind === "refused") return new NextResponse(null, { status: 403 });
+  if (telnyx.kind === "set") return new NextResponse(null, { status: 405 });
   const query = new URL(req.url).searchParams;
   return decide(query, query, actionOrigin(req), false);
 }

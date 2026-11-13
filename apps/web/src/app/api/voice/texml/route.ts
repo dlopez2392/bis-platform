@@ -52,6 +52,7 @@
 import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggablePhone } from "@/lib/loggable-error";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { agencyHandsets } from "@/lib/voice/caller-reputation";
 import { decideScreen, readScreenConfig } from "@/lib/voice/call-screen";
@@ -1150,7 +1151,10 @@ export function actionOrigin(req: Request): string {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
-  if (process.env.TELNYX_PUBLIC_KEY?.trim()) {
+  const telnyx = telnyxPublicKey();
+  // A published test key in production (lib/fixture-secrets.ts): refused.
+  if (telnyx.kind === "refused") return new NextResponse(null, { status: 403 });
+  if (telnyx.kind === "set") {
     // Hardened mode: signature enforcement requires the TeXML app's Voice
     // Method flipped to POST first (see voice-setup runbook) — with the key
     // set, GET is closed entirely (405) because a GET has no signed body;
