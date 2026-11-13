@@ -5,7 +5,7 @@ import { openGateDb, OPEN_GATE, type GateOver } from "./testing/open-gate";
 /** Spec 3.1, 3.5, 6, 8.1, 8.2 (gateway). The client is the open-gate fake; the provider is a stubbed fetch. */
 const SYSTEM = "SENTINEL-PROMPT-7f3 system rules";
 const base = (o: Partial<AiInput> = {}): AiInput => ({
-  accountId: "acct1", feature: "call_summary", model: "gpt-4o-mini",
+  accountId: "acct1", task: "call_summary",
   messages: [{ role: "system", content: SYSTEM }, { role: "user", content: "what are your hours?" }],
   timeoutMs: 10_000, timezone: "America/Chicago", ref: "call c1", now: new Date("2026-10-18T15:00:00Z"), ...o,
 });
@@ -26,7 +26,7 @@ describe("aiComplete: an answer", () => {
   it("returns the text and its usage, and records one ok row in the ACCOUNT's month and day (mutation: periodKeys in UTC -> p_month 2026-11 -> FAILS)", async () => {
     const { db, calls } = openGateDb();
     const r = await aiComplete(db, base({ fetchImpl: answer("Caller asked about hours."), now: new Date("2026-11-01T04:30:00Z") }));
-    expect(r).toEqual({ ok: true, text: "Caller asked about hours.", usage: { inputTokens: 4000, outputTokens: 200, costMicroUsd: 720 } });
+    expect(r).toEqual({ ok: true, text: "Caller asked about hours.", model: "gpt-4o-mini", usage: { inputTokens: 4000, outputTokens: 200, costMicroUsd: 720 } });
     expect(calls.map((c) => c.fn)).toEqual(["ai_gate_check", "ai_ledger_record"]);
     expect(calls[0]!.args).toEqual({ p_account: "acct1", p_month: "2026-10", p_day: "2026-10-31" });
     expect(ledgerOf(calls)[0]).toMatchObject({
@@ -72,11 +72,11 @@ describe("aiComplete: an answer", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("sends the caller's model, messages, JSON mode, token cap and time limit; 3 s, 10 s, 3 s in that order (mutations: drop response_format; timeoutMs 600_000 -> FAILS)", async () => {
+  it("sends the task row's model, JSON mode and token cap, the caller's messages and time limit; 3 s, 10 s, 3 s in that order (mutations: drop response_format; timeoutMs 600_000 -> FAILS)", async () => {
     const { db } = openGateDb();
     const fetchImpl = answer("{}");
     const timeout = vi.spyOn(AbortSignal, "timeout");
-    await aiComplete(db, base({ fetchImpl, responseFormat: { type: "json_object" }, maxTokens: 2000 }));
+    await aiComplete(db, base({ fetchImpl, task: "call_proposals" }));
     const [url, init] = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     expect(JSON.parse(init.body as string)).toEqual({
@@ -98,7 +98,7 @@ describe("aiComplete: an answer", () => {
     const msgs = [{ role: "system" as const, content: "a".repeat(400) }, { role: "user" as const, content: "b".repeat(400) }];
     const r = await aiComplete(db, base({ messages: msgs, fetchImpl: answer("c".repeat(40), null) }));
     // 800 prompt characters -> 200 tokens; 40 answer characters -> 10 tokens; ceil((200*150000 + 10*600000) / 1e6) = 36.
-    expect(r).toEqual({ ok: true, text: "c".repeat(40), usage: { inputTokens: null, outputTokens: null, costMicroUsd: 36 } });
+    expect(r).toEqual({ ok: true, text: "c".repeat(40), model: "gpt-4o-mini", usage: { inputTokens: null, outputTokens: null, costMicroUsd: 36 } });
     expect(ledgerOf(calls)[0]).toMatchObject({ p_in: null, p_out: null, p_cost: 36 });
   });
 
@@ -164,14 +164,7 @@ describe("aiComplete: every refusal is a reason, never a request (spec 3.1 steps
     expect((await aiComplete(db, base({ fetchImpl: answer("x") }))).ok).toBe(true);
   });
 
-  it("an unknown model is refused before the gate, so it cannot spend unmetered (mutation: skip the price check -> FAILS)", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const { db, calls } = openGateDb();
-    const fetchImpl = answer("x");
-    expect(await aiComplete(db, base({ model: "gpt-9", fetchImpl }))).toEqual({ ok: false, reason: "unknown_model" });
-    expect(calls.map((c) => c.fn)).toEqual(["ai_ledger_record"]);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+  // An unknown model's refusal is in gateway.routes.test.ts, which swaps a task's row.
 
   it("no key: no request, a no_key row, one error line naming the call (mutation: drop the gateway's no_key log -> FAILS)", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -293,7 +286,7 @@ describe("the fake provider (spec 6, 8.1)", () => {
 
   it("in JSON mode it answers JSON every caller reads as 'nothing' (mutation: answer plain text in JSON mode -> FAILS)", async () => {
     vi.stubEnv("AI_PROVIDER", "fake");
-    const r = await aiComplete(openGateDb().db, base({ responseFormat: { type: "json_object" } }));
+    const r = await aiComplete(openGateDb().db, base({ task: "call_card" }));
     expect(JSON.parse(r.ok ? r.text : "null")).toMatchObject({ proposals: [], reason: null, quote: null });
   });
 

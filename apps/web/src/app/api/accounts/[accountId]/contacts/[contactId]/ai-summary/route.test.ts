@@ -25,6 +25,7 @@ const serviceDbMock = vi.fn(() => { fx.order.push("serviceDb"); return SERVICE; 
 const aiGateCheckMock = vi.fn<AnyArgs<object>>(async () => ({}));
 const getRecordSummaryMock = vi.fn<AnyArgs<null>>(async () => null);
 const claimMock = vi.fn<AnyArgs<{ status: string }>>(async () => ({ status: "busy" }));
+const saveMock = vi.fn<AnyArgs<boolean>>(async () => true);
 const aiCompleteMock = vi.fn<AnyArgs<{ ok: boolean; reason: string }>>(async () => ({ ok: false, reason: "no_key" }));
 // M7a PR-4 (plan G21): the billing standing, read through the REAL standing-read.ts (switch and verdict).
 const readBillingStandingMock = vi.fn<AnyArgs<object | null>>(async () => null);
@@ -38,7 +39,7 @@ vi.mock("@/lib/zone", () => ({ renderZone: async (z?: string) => ({ zone: z ?? "
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@bis/db")>()),
   getContact: getContactMock, serviceDb: serviceDbMock, aiGateCheck: aiGateCheckMock, getRecordSummary: getRecordSummaryMock,
-  claimRecordSummary: claimMock, readBillingStanding: readBillingStandingMock,
+  claimRecordSummary: claimMock, readBillingStanding: readBillingStandingMock, saveRecordSummary: saveMock,
 }));
 vi.mock("@/lib/ai/gateway", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/ai/gateway")>()), aiComplete: aiCompleteMock }));
 // Spread-real since M7a PR-4 (plan G21): the paused cases run the REAL serveRecordSummary, which digests the inputs.
@@ -123,9 +124,20 @@ describe("the AI summary route (spec 4.2)", () => {
     expect(aiGateCheckMock.mock.calls[0]![1]).toMatchObject({ accountId: A, monthKey: expect.stringMatching(/^\d{4}-\d{2}$/), dayKey: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(claimMock).toHaveBeenCalledWith(SERVICE, { accountId: A, contactId: C, language: "en", digest: "a".repeat(64), force: false });
     expect(aiCompleteMock.mock.calls[0]![0]).toBe(SERVICE);
-    expect(aiCompleteMock.mock.calls[0]![1]).toMatchObject({ accountId: A, feature: "record_summary", model: "gpt-4o-mini", maxTokens: 400, timeoutMs: 10_000, timezone: "America/Chicago", language: "en", ref: `contact ${C}` });
+    expect(aiCompleteMock.mock.calls[0]![1]).toMatchObject({ accountId: A, task: "record_summary", timeoutMs: 10_000, timezone: "America/Chicago", language: "en", ref: `contact ${C}` });
     expect(fx.order.indexOf("getContact request")).toBeGreaterThanOrEqual(0);
     expect(fx.order.indexOf("getContact request")).toBeLessThan(fx.order.indexOf("serviceDb"));
+  });
+
+  it("the stored paragraph names the model that ANSWERED, the task's fallback when it did (mutation: always save the primary's model -> FAILS)", async () => {
+    await call(GET);
+    const deps = serveMock.mock.calls[0]![0] as { complete(m: unknown[]): Promise<unknown>; save(s: object): Promise<unknown> };
+    const s = { leaseId: "L1", body: "b", digest: "d", generatedAt: "2026-11-13T00:00:00Z" };
+    await deps.save(s);
+    aiCompleteMock.mockResolvedValueOnce({ ok: true, text: "x", model: "some-fallback", usage: {} } as never);
+    await deps.complete([]);
+    await deps.save(s);
+    expect(saveMock.mock.calls.map((c) => (c[1] as { model: string }).model)).toEqual(["gpt-4o-mini", "some-fallback"]);
   });
 
   it("the cap's day and the budget's month are the ACCOUNT's, not UTC's: at 22:30 in Chicago on Oct 31 (03:30 UTC Nov 1) the gate is asked for 2026-10 / 2026-10-31 (orchestrator note 1; mutation: periodKeys(now, \"UTC\") -> FAILS)", async () => {

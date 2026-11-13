@@ -77,8 +77,8 @@ export async function generateSummary(
   const input = buildSummaryInput(state);
   const answer = await aiComplete(opts.db, {
     accountId: opts.accountId,
-    feature: "call_summary",
-    model: "gpt-4o-mini",
+    // The model and its settings are the task's row (lib/ai/tasks.ts).
+    task: "call_summary",
     messages: [
       { role: "system", content: systemRules.join(" ") },
       { role: "user", content: opts.protectIds ? maskIdNumbers(input) : input },

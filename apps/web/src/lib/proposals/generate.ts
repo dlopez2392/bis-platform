@@ -341,9 +341,10 @@ export async function generateProposals(input: {
     // per robocall. An empty proposal list IS the fallback.
     const answer = await aiComplete(input.db, {
       accountId: input.accountId,
-      feature: "call_proposals",
-      model: "gpt-4o-mini",
-      // Deliberate divergence from summary-service.ts's own completion:
+      // The model, JSON mode and the 2000-token cap are the task's row (lib/ai/tasks.ts); the reasons for
+      // both stay here.
+      task: "call_proposals",
+      // JSON mode. Deliberate divergence from summary-service.ts's own completion:
       // that function consumes PROSE and has a deterministic fact-line
       // fallback (`composeSummary`) when the completion is unusable, so a
       // stray code fence in the response costs it nothing. This function
@@ -352,15 +353,14 @@ export async function generateProposals(input: {
       // ```json fence when asked for JSON without `response_format`,
       // which would silently zero this feature forever. Forcing JSON mode
       // removes that failure instead of tolerating it.
-      responseFormat: { type: "json_object" },
-      // Minor 6 of the fix-wave: with no bound here, nothing states a
+      //
+      // The cap. Minor 6 of the fix-wave: with no bound here, nothing states a
       // ceiling on how many elements the model's own `proposals` array
       // can contain before the loop below even starts counting attempts
       // — a flood of UNGROUNDED proposals still costs a full
       // `groundedTurn` scan per element (measured: 5,000 elements
       // against a 120-turn transcript, 565ms). Three short task
       // proposals fit comfortably inside this; a runaway array does not.
-      maxTokens: 2000,
       messages: [
         { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo, input.protectIds ?? false) },
         { role: "user", content: transcriptForModel(input.transcript) },

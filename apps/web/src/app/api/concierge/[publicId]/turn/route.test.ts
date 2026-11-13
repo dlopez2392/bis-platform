@@ -34,6 +34,23 @@ const dbFns = vi.hoisted(() => ({
   readBillingStanding: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
+// The AI gateway's gate read goes through the service client's `rpc` (lib/ai/testing/open-gate.ts answers it,
+// open unless a test says otherwise), and a test may swap the web_chat task's row (lib/ai/tasks.ts) for a probe
+// model the price table is told to accept.
+const aiGate = vi.hoisted(() => ({ rpc: null as null | ((fn: string, args: Record<string, unknown>) => unknown) }));
+const swapped = vi.hoisted(() => ({ routes: {} as Record<string, unknown> }));
+vi.mock("@/lib/ai/tasks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai/tasks")>();
+  return { ...actual, AI_TASKS: new Proxy(actual.AI_TASKS, { get: (t, k) => swapped.routes[k as string] ?? Reflect.get(t, k) }) };
+});
+vi.mock("@/lib/ai/prices", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai/prices")>();
+  return {
+    ...actual,
+    isPricedModel: (m: string) => m === "route-probe-model" || actual.isPricedModel(m),
+    costMicroUsd: (m: string, i: number, o: number) => (m === "route-probe-model" ? 1 : actual.costMicroUsd(m as "gpt-4o-mini", i, o)),
+  };
+});
 
 // `after()` becomes a recorder we invoke ourselves — same pattern as
 // api/voice/texml/route.test.ts. Spreading `actual` matters: the route
@@ -82,6 +99,7 @@ vi.mock("@bis/db", async (importOriginal) => {
     ...actual,
     recordLanguageSignal: vi.fn(async () => true),
     serviceDb: () => ({
+      rpc: (fn: string, args: Record<string, unknown>) => aiGate.rpc!(fn, args),
       from: (table: string) => {
         dbSpy.from.push(table);
         return {
@@ -147,6 +165,17 @@ import {
 } from "@/lib/concierge/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
+import { gateRpc, type GateOver, type GateRpcCall } from "@/lib/ai/testing/open-gate";
+// The route imports the gateway lazily, inside the handler; loading it here keeps that cost out of the first
+// test's 5 s (it timed out under a parallel run without this).
+import "@/lib/ai/gateway";
+
+/** The gate the gateway reads on this test's turns, and every RPC it made. */
+function aiGateWith(over: GateOver = {}): GateRpcCall[] {
+  const g = gateRpc(over);
+  aiGate.rpc = g.rpc;
+  return g.calls;
+}
 
 const PUBLIC_ID = "abc123abc123";
 const PROFILE = {
@@ -268,6 +297,8 @@ function sentToModel(call = 0) {
 beforeEach(() => {
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
   vi.stubEnv("OPENAI_API_KEY", "sk-test");
+  aiGateWith();
+  swapped.routes = {};
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
   fetchMock.mockResolvedValue(modelReplies("Yes, we do."));
@@ -773,6 +804,66 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     // — this FAILS, and a deployment with no key inflates the per-IP and
     // per-account conversation counters on every visitor who ever tries it.
     expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_chat task)", () => {
+  // The account's switch and its budget are the gateway's read at the model call, AFTER the claim (the claim
+  // is a visitor's turn, not money); either one answers exactly what a failed model call answers.
+  const refused: [string, GateOver][] = [
+    ["the account's AI switched off", { gate: { account_enabled: false } }],
+    ["the account over its AI budget", { gate: { month_spend_microusd: 10_000_000 } }],
+    ["the agency-wide switch off", { gate: { global_enabled: false } }],
+  ];
+  it.each(refused)("%s: 503 unavailable, no model call, nothing stored (mutation: call the model without the gateway -> FAILS)", async (_name, over) => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    aiGateWith(over);
+    const res = await laterTurn();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbFns.appendConciergeTurns).not.toHaveBeenCalled();
+  });
+
+  it("a refused FIRST turn still hands back the conversation it opened (D-050), like any failed model call", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    aiGateWith({ gate: { account_enabled: false } });
+    const res = await firstTurn();
+    expect(await res.json()).toEqual({ error: "unavailable", conversationId: "c1" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the kill switch (AI_GATEWAY_OFF=1) refuses BEFORE the claim and before any row, as a missing key does (mutation: drop aiReadiness -> FAILS)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubEnv("AI_GATEWAY_OFF", "1");
+    const first = await firstTurn();
+    expect([first.status, await first.json()]).toEqual([503, { error: "unavailable" }]);
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+    const later = await laterTurn();
+    expect(later.status).toBe(503);
+    expect(dbFns.claimConciergeTurn).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the gate once per completion and writes no ledger row: 0086's feature check has no web_chat yet", async () => {
+    const calls = aiGateWith();
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
+    await laterTurn();
+    expect(calls.map((c) => c.fn)).toEqual(["ai_gate_check", "ai_gate_check"]);
+  });
+
+  it("BOTH requests send whatever the web_chat row says: a model swap is a table edit (PR #350's shape; mutation: a literal model or max_tokens in the route -> FAILS)", async () => {
+    swapped.routes.web_chat = {
+      feature: null,
+      primary: { model: "route-probe-model", params: { maxOutput: { field: "max_completion_tokens", tokens: 500 }, reasoningEffort: "none" } },
+    };
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
+    await laterTurn();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of [0, 1]) {
+      const body = sentToModel(call) as unknown as Record<string, unknown>;
+      expect([body.model, body.max_tokens, body.max_completion_tokens, body.reasoning_effort]).toEqual(["route-probe-model", undefined, 500, "none"]);
+    }
   });
 });
 
@@ -1537,7 +1628,7 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     expect(sentToModel().messages[0]!.content).not.toContain("TRADE RULES —");
   });
 
-  it("the model is CONCIERGE_MODEL, gpt-4o-mini (SD6)", async () => {
+  it("the model is the web_chat task's row, gpt-4o-mini today (SD6)", async () => {
     await firstTurn();
     expect(sentToModel().model).toBe("gpt-4o-mini");
   });

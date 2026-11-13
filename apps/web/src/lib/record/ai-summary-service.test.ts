@@ -24,7 +24,7 @@ function deps(over: Partial<SummaryDeps> = {}) {
     gate: async () => OPEN,
     cached: async () => null,
     claim: async () => ({ status: "won", leaseId: "L1" }),
-    complete: async () => ({ ok: true, text: "  SENTINEL-OUTPUT-7f3 booked.  ", usage: { inputTokens: 100, outputTokens: 20, costMicroUsd: 27 } }),
+    complete: async () => ({ ok: true, text: "  SENTINEL-OUTPUT-7f3 booked.  ", model: "gpt-4o-mini", usage: { inputTokens: 100, outputTokens: 20, costMicroUsd: 27 } }),
     save: async () => true,
     release: async () => {},
     now: () => NOW,
@@ -140,7 +140,7 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
     expect(logs.some((l) => l.includes("release failed"))).toBe(true);
   });
   it("an empty answer is failed and releases (mutation: save an empty body -> FAILS)", async () => {
-    const { d, calls } = deps({ complete: async () => ({ ok: true, text: "  ", usage: { inputTokens: 1, outputTokens: 0, costMicroUsd: 1 } }) });
+    const { d, calls } = deps({ complete: async () => ({ ok: true, text: "  ", model: "gpt-4o-mini", usage: { inputTokens: 1, outputTokens: 0, costMicroUsd: 1 } }) });
     expect(await serve(d)).toEqual({ state: "failed" });
     expect(calls).toContain("release L1");
   });

@@ -36,11 +36,11 @@ describe("generateSummary on the gateway (spec 3.2)", () => {
     expect(gw.aiComplete).not.toHaveBeenCalled();
   });
 
-  it("asks for call_summary on gpt-4o-mini for THIS account, under 10 s, in its zone (mutation: feature 'call_card' -> FAILS)", async () => {
+  it("asks for the call_summary task for THIS account, under 10 s, in its zone (mutation: task 'call_card' -> FAILS)", async () => {
     gw.aiComplete.mockResolvedValue({ ok: true, text: "Caller asked about Saturday.", usage: { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 } });
     const out = await generateSummary(spoke(), { ...GATE, ref: "call c1" });
     expect(gw.aiComplete).toHaveBeenCalledWith(GATE.db, expect.objectContaining({
-      accountId: "acct", feature: "call_summary", model: "gpt-4o-mini", timeoutMs: 10_000, timezone: "America/Chicago", ref: "call c1",
+      accountId: "acct", task: "call_summary", timeoutMs: 10_000, timezone: "America/Chicago", ref: "call c1",
     }));
     expect(out).toContain("Caller asked about Saturday.");
   });
