@@ -1,6 +1,10 @@
 export { serviceDb } from "./service";
 export { userDb } from "./user-client";
 export type { SupabaseClient } from "@supabase/supabase-js";
+// The schema's row shapes, generated from the migrations (./database.types.ts; regenerate with
+// `pnpm --filter @bis/db types:gen`). Type a row as `Tables<"calls">` or `Pick<Tables<"calls">, "id">`,
+// a write as `TablesInsert<"calls">`, instead of a hand-written `as { ... }`: a renamed column then fails tsc.
+export type { Database, Json, Tables, TablesInsert, TablesUpdate } from "./database.types";
 export { emit, emitAgencyEvent, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm, searchTermLength } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
