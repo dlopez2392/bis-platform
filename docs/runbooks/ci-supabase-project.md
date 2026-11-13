@@ -264,6 +264,26 @@ CI first, then production.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
+**What every push refuses before anything is applied (since 2026-11-13).**
+The `migrations-plan` part of the `e2e` check
+(`.github/scripts/migrations-plan.mjs`) holds no credential and reads only git.
+It compares the branch with its merge base with main and refuses:
+- a change to a migration already on main (an edit, a deletion or a rename);
+- an added numbered migration;
+- in an added file, outside comments, strings and dollar-quoted bodies:
+  - top-level `BEGIN` / `COMMIT` / `ROLLBACK` / `END` (or `SAVEPOINT` and
+    the like);
+  - `CONCURRENTLY` or `VACUUM` (neither runs inside a transaction);
+  - a backslash (a psql meta-command);
+  - the runner's variable prefix `:bis_mig_`;
+- `DROP TABLE`, `DROP COLUMN` or `RENAME` with no `-- contract: <why>` line.
+  Production gets the schema before the app that needs it deploys, so say why
+  the app on main keeps working;
+- a branch that adds a migration AND changes the migration pipeline (owner
+  decision, 2026-11-13: split it into two PRs).
+
+Each refusal names the file and line.
+
 Append-only applies here too: a migration changed after its CI push is a new
 migration, not a re-push. Push to CI only when the branch is otherwise ready:
 Vercel Preview and local runs on danlo's machine run on this project, so a

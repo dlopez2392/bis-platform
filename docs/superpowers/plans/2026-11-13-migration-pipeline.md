@@ -216,9 +216,9 @@ validate), `migration:new` script, a directory test, a `schemaFiles` ordering ca
 - Probes: allow `0117_x.sql` → the directory test fails by name; match by version only → the "another name"
   case fails; sort descending → the ordering case fails.
 
-**PR 2 — The plan job** (MEDIUM, ~450). `.github/scripts/migrations-plan.sh` (D2's refusals, outputs the added
-files), `migrations-plan` job in `ci.yml` (no secret, before `e2e-migrations`, which `needs` it), and
-`ci-workflow.test.ts` pins (no secret in the job; no `pull_request` trigger).
+**PR 2 — The plan job** (built HIGH: `.github/scripts/migrations-plan.mjs`, node built-ins, since SQL lexing in
+bash is fragile). `migrations-plan` is its own credential-free PART of the `e2e` gate, needing nothing (PR 4 adds
+`needs` when bis-ci applies). It refuses any backslash outside a string, not only at a line start (psql reads all), plus `VACUUM`.
 - Tests: `apps/web/ci/migrations-plan.test.ts` on scratch git repos (the pattern in `ci-docs-only.test.ts`):
   edit, delete and rename of a main file refused; added 4-digit refused; `concurrently`, `commit;`, leading
   backslash, `:bis_mig_x` refused; `concurrently` inside a `--` comment allowed (0103 and 0114 do that);
