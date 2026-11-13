@@ -45,7 +45,7 @@ const DB_URL = poolerUrl(CI_REF);
 // One log line per call, each argument kept whole inside [[…]], so a case can
 // tell one `-c "a; b"` from two `-c a -c b`.
 const FAKE_PSQL = `#!/usr/bin/env bash
-{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf '\\n'; } >> "$FAKE_DIR/log"
+{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGPASSWORD=%s PGSSLMODE=%s\\n' "\${PGPASSWORD:-}" "\${PGSSLMODE:-}"; } >> "$FAKE_DIR/log"
 if [ -n "\${FAKE_PSQL_STDERR:-}" ]; then printf '%s\\n' "$FAKE_PSQL_STDERR" >&2; fi
 printf '%s' "$FAKE_APPLIED"
 exit "\${FAKE_PSQL_EXIT:-0}"
@@ -128,13 +128,16 @@ describe("ci-migrations-applied.sh: every migration in the branch is on the CI p
     expect(VERSIONS.every((v) => /^[0-9]+$/.test(v))).toBe(true);
   });
 
-  it("passes when bis-ci holds every one, and reads the CLI's own history table with the CI project's DB URL", () => {
+  it("passes when bis-ci holds every one, and reads the CLI's own history table from the CI project, its password in PGPASSWORD and never on psql's command line, over TLS (mutation: pass the URL whole → FAILS)", () => {
     const r = run(PAIRS);
     expect(r.output).not.toContain("::error::");
     expect(r.status).toBe(0);
     expect(r.log).toHaveLength(1);
     expect(r.log[0]).toContain("supabase_migrations.schema_migrations");
-    expect(r.log[0]).toContain(DB_URL);
+    const args = [...(r.log[0] ?? "").matchAll(/\[\[([\s\S]*?)\]\]/g)].map((m) => m[1]!);
+    expect(args).toContain(`postgresql://postgres.${CI_REF}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`);
+    expect(args.join(" ")).not.toContain(DB_PASSWORD);
+    expect(r.log[0]).toContain(`PGPASSWORD=${DB_PASSWORD} PGSSLMODE=require`);
   });
 
   it("fails naming EACH missing migration file, and only those, with the fix (mutation: exit 0 whatever is missing → FAILS)", () => {
@@ -246,7 +249,8 @@ describe("ci-migrations-applied.sh reads bis-ci only, read-only, and only from i
     expect(r.status, r.output).toBe(0);
     expect(r.log).toHaveLength(1);
     const args = [...(r.log[0] ?? "").matchAll(/\[\[(.*?)\]\]/g)].map((m) => m[1]!);
-    expect(args).toContain(url);
+    // The connection, without its password (that travels in PGPASSWORD).
+    expect(args).toContain(url.replace(`:${DB_PASSWORD}@`, "@"));
     const commands = args.filter((_, i) => args[i - 1] === "-c");
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatch(

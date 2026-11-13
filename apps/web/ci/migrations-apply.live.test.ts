@@ -103,7 +103,7 @@ afterAll(() => {
     try { sql(ADMIN, `drop database if exists ${db} with (force)`); } catch { /* reported by the next run's leftovers, never fatal here */ }
   }
   if (root) fs.rmSync(root, { recursive: true, force: true });
-});
+}, 60_000);
 
 const A = "20261114093000_widgets.sql";
 const A_SQL = "create table widgets (id int primary key);\ninsert into widgets values (1);\n";
@@ -150,6 +150,24 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh applies each file in one transac
     // psql's own line, once: the file was tried once.
     expect(r.output.match(/ERROR: +22012/g)).toHaveLength(1);
     expect(sql(db, "select to_regclass('public.half') is null")).toBe("t");
+    expect(history(db)).toBe("");
+  });
+
+  // A file with its own transaction control (migrations-plan refuses it at PR
+  // time; this is the runner not lying if one reaches it anyway). Its COMMIT
+  // ends the runner's transaction early; whatever it committed stays.
+  it.each([
+    ["COMMIT, then a failure (the reviewer's file)", "begin; create table before_commit (id int); commit; create table after_commit (id int); select 1 / 0;\n", ["before_commit"], ["after_commit"]],
+    ["COMMIT, then nothing fails", "begin; create table before_commit (id int); commit; create table after_commit (id int);\n", ["before_commit"], ["after_commit"]],
+    ["ROLLBACK, then more", "create table rolled_back (id int); rollback; create table after_rollback (id int);\n", [], ["rolled_back", "after_rollback"]],
+  ])("a file with its own transaction control (%s) is reported as such and NOT recorded (mutation: drop the transaction-id check, or AUTOCOMMIT off → FAILS)", (_l, migration, committed, absent) => {
+    const db = scratchDatabase();
+    const r = apply(tree({ [A]: migration }), "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_widgets\.sql ran its own transaction control: part of it may be COMMITTED and it is NOT recorded\. Repair by hand before running again; nothing is retried\./);
+    expect(r.output).not.toMatch(/rolled back|applied 1 file/);
+    for (const t of committed) expect(sql(db, `select to_regclass('public.${t}') is not null`), t).toBe("t");
+    for (const t of absent) expect(sql(db, `select to_regclass('public.${t}') is null`), t).toBe("t");
     expect(history(db)).toBe("");
   });
 
@@ -236,7 +254,7 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh keeps customer data out of the l
   });
 
   it.each([
-    ["raise notice and raise warning with the row", "client_min_messages", "do $$ declare r record; begin select * into r from customers limit 1; raise notice '%', r; raise warning '%', r; end $$;\n"],
+    ["raise notice and raise warning with the row", "the stderr discard on success", "do $$ declare r record; begin select * into r from customers limit 1; raise notice '%', r; raise warning '%', r; end $$;\n"],
     ["a SELECT of the table", "the discarded query output", "select * from customers;\n"],
   ])("applies, printing nothing of %s (mutation: drop %s → FAILS)", (_l, _mutation, migration) => {
     const db = scratchDatabase();
@@ -278,7 +296,7 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh keeps production safe", () => {
     const refused = runs.filter((r) => r.status === 1);
     expect(ok, runs.map((r) => r.output).join("\n----\n")).toHaveLength(1);
     expect(refused).toHaveLength(1);
-    expect(refused[0]!.output).toMatch(/::error::.*widgets\.sql: another run applied it to local-as-bis-ci first; this run wrote nothing/);
+    expect(refused[0]!.output).toMatch(/::error::.*widgets\.sql: this version is now recorded by another run; run again to see whether it is this file\. This run wrote nothing/);
     expect(history(db)).toBe(`20261114093000|widgets|${md5(A_SQL)}|${MARKER}`);
   });
 

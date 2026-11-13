@@ -84,6 +84,8 @@ done
 . "$(dirname "${BASH_SOURCE[0]}")/ci-db-target.sh"
 db_target "$target"
 case "$?" in 0) ;; 2) usage ;; *) exit 1 ;; esac
+# Read once: no child (psql included) inherits the URLs, password and all.
+unset BIS_MIGRATIONS_DB_URL BIS_MIGRATIONS_BISCI_DB_URL
 
 # The URL is the whole connection: no PG* variable from the caller's
 # environment (a host, options, an sslmode) reaches psql. TLS is required for
@@ -287,21 +289,51 @@ for name in "${pending[@]}"; do
     # the value, `raise exception '%', r` the row); NOTICE and WARNING are not
     # sent at all; the migration's own query output is discarded (psql -o).
     printf '\\set VERBOSITY sqlstate\n\\set SHOW_CONTEXT never\n'
-    printf "begin;\nset local lock_timeout = '5s';\nset local statement_timeout = '10min';\nset local client_min_messages = error;\n"
+    # A file with its own COMMIT, END or ROLLBACK (migrations-plan refuses one
+    # at PR time) would end this transaction early. AUTOCOMMIT off: after that,
+    # every statement starts a new implicit transaction that nothing commits.
+    # The transaction's id is printed (stdout, not the log) for the runner to
+    # ask txid_status() after a failure, and kept in a transaction-local
+    # setting: just before the history row, BMA03 if the transaction changed.
+    printf '\\set AUTOCOMMIT off\n'
+    printf "begin;\nselect set_config('bis_mig.txid', txid_current()::text, true) as bis_mig_txid \\\\gset\n\\\\echo bis_mig_txid=:bis_mig_txid\n"
+    printf "set local lock_timeout = '5s';\nset local statement_timeout = '10min';\nset local client_min_messages = error;\n"
     printf 'lock table supabase_migrations.schema_migrations in share row exclusive mode;\n'
     printf "do \$bis_mig_check\$ begin if exists (select 1 from supabase_migrations.schema_migrations where version = '%s') then raise exception using errcode = 'BMA01'; end if; %s end \$bis_mig_check\$;\n" "$ver" "$newer"
     cat "$f"
     printf '\n;\n'
+    printf "do \$bis_mig_tx\$ begin if coalesce(current_setting('bis_mig.txid', true), '') <> txid_current()::text then raise exception using errcode = 'BMA03'; end if; end \$bis_mig_tx\$;\n"
     printf "insert into supabase_migrations.schema_migrations (version, name, statements) values ('%s', '%s', array[\$%s\$" "$ver" "$slug" "$tag"
     cat "$f"
     printf "\$%s\$, '%s']);\ncommit;\n" "$tag" "$MARKER"
   } > "$wrapper"
   echo "applying: $f"
-  if ! pq "$DB_CONN" "$DB_PASS" -X -q -v ON_ERROR_STOP=1 -o "$work/discarded-output" -f "$wrapper" 2> "$work/stderr"; then
+  if ! pq "$DB_CONN" "$DB_PASS" -X -q -v ON_ERROR_STOP=1 -o "$work/discarded-output" -f "$wrapper" > "$work/stdout" 2> "$work/stderr"; then
     cat "$work/stderr" >&2
-    code="$(grep -oE 'ERROR: +[0-9A-Z]{5}' "$work/stderr" | tail -n 1 | grep -oE '[0-9A-Z]{5}$')"
+    code="$(grep -oE '(ERROR|FATAL): +[0-9A-Z]{5}' "$work/stderr" | tail -n 1 | grep -oE '[0-9A-Z]{5}$')"
+    # Did the file end the runner's transaction itself? BMA03 says so when
+    # nothing failed first; otherwise the transaction's own fate says it:
+    # COMMITTED means the file committed part of itself before failing.
+    txid="$(grep -oE 'bis_mig_txid=[0-9]+' "$work/stdout" | head -n 1 | cut -d= -f2)"
+    own_tx=""
+    if [ "$code" = "BMA03" ]; then
+      own_tx="yes"
+    elif [ -n "$txid" ]; then
+      tx_status="$(pq "$DB_CONN" "$DB_PASS" -X -q -tA -c "select txid_status($txid)" 2>/dev/null)" || tx_status="unreadable"
+      case "$tx_status" in
+        committed) own_tx="yes" ;;
+        unreadable) own_tx="unknown" ;;
+      esac
+    fi
+    if [ "$own_tx" = "yes" ]; then
+      echo "::error::$f ran its own transaction control: part of it may be COMMITTED and it is NOT recorded. Repair by hand before running again; nothing is retried. (SQLSTATE ${code:-unknown}; runbook section 6.)"
+      exit 1
+    elif [ "$own_tx" = "unknown" ]; then
+      echo "::error::$f failed (SQLSTATE ${code:-unknown}), and whether its transaction committed could not be read back. Treat part of it as possibly COMMITTED and NOT recorded: check by hand before running again; nothing is retried."
+      exit 1
+    fi
     case "$code" in
-      BMA01) echo "::error::$f: another run applied it to $target first; this run wrote nothing. It is applied: there is nothing to fix." ;;
+      BMA01) echo "::error::$f: this version is now recorded by another run; run again to see whether it is this file. This run wrote nothing." ;;
       BMA02) echo "::error::$f: another run applied a newer migration to $target first, so this file is now older than a version there; this run wrote nothing. It has been applied nowhere: give it a new version (pnpm --filter @bis/db migration:new <slug>), move the SQL in, delete this file." ;;
       *)
         case "$code" in

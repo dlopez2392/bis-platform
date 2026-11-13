@@ -105,7 +105,10 @@ fi
 # either pooler. (psql 15+ prints every statement's result from one -c; -q
 # drops the BEGIN/COMMIT tags, and only `<digits>|<name>` rows are read below
 # anyway.)
-if ! applied_raw="$(psql "$db_url" -X -q -tA -v ON_ERROR_STOP=1 \
+# The password goes to psql in PGPASSWORD, never on its command line (which `ps`
+# shows), and over TLS; the connection string carries everything else.
+_db_conn
+if ! applied_raw="$(PGPASSWORD="$_DB_PASS" PGSSLMODE=require psql "$_DB_CONN" -X -q -tA -v ON_ERROR_STOP=1 \
   -c "begin transaction read only; select version, name from supabase_migrations.schema_migrations order by version; commit;")"; then
   echo "::error::Could not read the CI project's migration history (supabase_migrations.schema_migrations); psql's own message is above. A gate that cannot check is red, not skipped: re-run once, and if it fails again, check the CI project (docs/runbooks/ci-supabase-project.md)."
   exit 1

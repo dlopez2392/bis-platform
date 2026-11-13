@@ -292,6 +292,12 @@ against this project, and PR 5 against production behind the owner's approval.
 - **When a file fails.** It leaves neither its changes nor its row; files
   before it stay applied. Nothing is retried. A file starting with a UTF-8
   byte-order mark is refused before anything runs.
+- **A file with its own COMMIT, END or ROLLBACK.** `migrations-plan` refuses
+  one at PR time. If one reaches the runner anyway (a manual dispatch), it
+  says "<file> ran its own transaction control: part of it may be COMMITTED
+  and it is NOT recorded" and exits 1. Whatever the file committed before
+  that point stays; nothing after it is committed (psql runs with AUTOCOMMIT
+  off). Find what it committed and repair it by hand before running again.
 - **Which rows count** (the production rows are the three forms in step 5
   above):
   - on production, a numbered file is found by its pair, its whole stem, or

@@ -36,11 +36,11 @@ const LOCAL_BISCI = `postgresql://postgres:${PASSWORD}@127.0.0.1:5002/postgres`;
 // with the target's rows, or bis-ci's when the URL names port 5002 or the CI
 // project's user.
 const FAKE_PSQL = `#!/usr/bin/env bash
-{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGHOST=%s PGOPTIONS=%s PGSSLMODE=%s PGPASSWORD=%s\\n' "\${PGHOST:-}" "\${PGOPTIONS:-}" "\${PGSSLMODE:-}" "\${PGPASSWORD:+set}"; } >> "$FAKE_DIR/log"
-case " $* " in *" -f "*) exit "\${FAKE_APPLY_EXIT:-0}" ;; esac
+{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGHOST=%s PGOPTIONS=%s PGSSLMODE=%s PGPASSWORD=%s URLS=%s\\n' "\${PGHOST:-}" "\${PGOPTIONS:-}" "\${PGSSLMODE:-}" "\${PGPASSWORD:+set}" "\${BIS_MIGRATIONS_DB_URL:+db}\${BIS_MIGRATIONS_BISCI_DB_URL:+bisci}"; } >> "$FAKE_DIR/log"
+case " $* " in *" -f "*) touch "$FAKE_DIR/applied"; [ -n "\${FAKE_APPLY_STDERR:-}" ] && printf '%s\\n' "$FAKE_APPLY_STDERR" >&2; exit "\${FAKE_APPLY_EXIT:-0}" ;; esac
 case "$*" in
   *:5002/*|*postgres.${CI_REF}@*|*postgres.${CI_REF}:*) printf '%s' "$FAKE_BISCI_ROWS" ;;
-  *) printf '%s' "$FAKE_TARGET_ROWS" ;;
+  *) if [ -e "$FAKE_DIR/applied" ] && [ -n "\${FAKE_TARGET_ROWS_AFTER:-}" ]; then printf '%s' "$FAKE_TARGET_ROWS_AFTER"; else printf '%s' "$FAKE_TARGET_ROWS"; fi ;;
 esac
 exit "\${FAKE_PSQL_EXIT:-0}"
 `;
@@ -77,6 +77,7 @@ beforeEach(() => {
   tree = fs.mkdtempSync(path.join(root, "tree-"));
   fs.mkdirSync(path.join(tree, DIR), { recursive: true });
   fs.rmSync(path.join(root, "log"), { force: true });
+  fs.rmSync(path.join(root, "applied"), { force: true });
 });
 
 /** Files in the scratch tree's migrations directory. */
@@ -322,6 +323,34 @@ describe("migrations-apply.sh decides which files are applied by D1's rules", ()
       asLocalBisCi(rows(["20261114080000", "other", "0".repeat(32)])));
     expect(r.status).toBe(1);
     expect(r.output).toMatch(/::error::.*20261114080000_other\.sql has different content from what local-as-bis-ci recorded/);
+  });
+
+  it("succeeds when the history, read AGAIN after the apply, records the file with its content (mutation: drop the post-apply re-read → FAILS)", () => {
+    files({ [NEW]: "select 4;\n" });
+    const recorded = rows([NEW.slice(0, 14), "work_queue", md5(NEW)]);
+    const r = run(["--target", "local-as-bis-ci", `${DIR}/${NEW}`], asLocalBisCi("", { FAKE_TARGET_ROWS_AFTER: recorded }));
+    expect(r.output).not.toContain("::error::");
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain("applied 1 file(s)");
+    // Read, apply, read again.
+    expect(r.log.map((l) => (l.includes("[[-f]]") ? "apply" : "read"))).toEqual(["read", "apply", "read"]);
+  });
+
+  it("names the SQLSTATE of a connection-level FATAL too, and says nothing ran (mutation: count ERROR lines only → FAILS)", () => {
+    files({ [NEW]: "select 4;\n" });
+    const r = run(["--target", "local-as-bis-ci", `${DIR}/${NEW}`],
+      asLocalBisCi("", { FAKE_APPLY_EXIT: "2", FAKE_APPLY_STDERR: "psql: error: connection to server failed: FATAL:  28P01" }));
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql failed \(SQLSTATE 28P01\) and was rolled back/);
+  });
+
+  it("hands psql neither URL variable: psql reads only the connection string and PGPASSWORD", () => {
+    files({ [NEW]: "select 4;\n" });
+    const r = run(["--target", "local-as-production", "--dry-run", `${DIR}/${NEW}`],
+      asLocalProd("", rows([NEW.slice(0, 14), "work_queue", md5(NEW)])));
+    expect(r.status, r.output).toBe(0);
+    expect(r.log.length).toBeGreaterThan(0);
+    for (const line of r.log) expect(line).toMatch(/ URLS=$/);
   });
 
   it("fails when the file ran but the history does not record it afterwards (mutation: drop the post-apply re-read → FAILS)", () => {
