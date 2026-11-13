@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { PUBLISHED_TELNYX_PUBLIC_KEY } from "@/lib/voice/testing/published-telnyx-key";
 
 const verify = vi.hoisted(() => vi.fn());
 const dbMocks = vi.hoisted(() => ({
@@ -454,6 +455,22 @@ describe("the sms.inbound heartbeat (operational-floor spec §1)", () => {
   it("a handled event is one ok stamp", async () => {
     await POST(post({ data: { event_type: "message.finalized", payload: { id: "prov_1", to: [{ status: "delivered" }] } } }));
     expect(stampMock).toHaveBeenCalledExactlyOnceWith("sms.inbound", { ok: true });
+  });
+
+  it("the Telnyx test key whose private half is in this repo: 401 in production even when the signature verifies, accepted on Preview", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const finalized = { data: { event_type: "message.finalized", payload: { id: "prov_1", to: [{ status: "delivered" }] } } };
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+    try {
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect((await POST(post(finalized))).status).toBe(401);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("TELNYX_PUBLIC_KEY"));
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect((await POST(post(finalized))).status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
   });
 
   it("a refused signature — or an unset key — is never stamped (mutation: stamp an error there → FAILS)", async () => {

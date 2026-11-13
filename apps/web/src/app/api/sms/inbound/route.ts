@@ -44,6 +44,7 @@ import {
 import { looksAutomaticText } from "@/lib/contacts/automatic-text";
 import { readCandidates, isShared } from "@/lib/voice/identity/candidates";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggableError } from "@/lib/loggable-error";
@@ -331,7 +332,10 @@ export async function POST(req: Request): Promise<NextResponse> {
   // a parsed body would not match.
   const rawBody = await req.text();
 
-  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
+  // A key whose private half is published in this repo is refused in
+  // production (lib/fixture-secrets.ts) and lands on the 401 below.
+  const telnyx = telnyxPublicKey();
+  const publicKey = telnyx.kind === "set" ? telnyx.key : undefined;
   const timestamp = req.headers.get("telnyx-timestamp");
   const signatureB64 = req.headers.get("telnyx-signature-ed25519");
   const verified = !!publicKey &&

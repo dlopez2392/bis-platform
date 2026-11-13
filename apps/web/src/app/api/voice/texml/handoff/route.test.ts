@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { POST } from "./route";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeyFormPost } from "@/lib/voice/testing/published-telnyx-key";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -81,6 +82,7 @@ const REQUESTED = {
 const MINUTE = 60_000;
 const agoIso = (ms: number) => new Date(Date.now() - ms).toISOString();
 
+const URL_T = "https://x.example/api/voice/texml/handoff?t=tok_abc";
 function req(token: string | undefined, body: Record<string, string> = {}): Request {
   const url = token === undefined
     ? "https://x.example/api/voice/texml/handoff"
@@ -419,6 +421,22 @@ describe("voice texml handoff route — signature enforcement matches /api/voice
   it("with the key unset (local runs; production has had it since 2026-09-29), no signature is required", async () => {
     const res = await POST(req("tok_abc"));
     expect(res.status).toBe(200);
+  });
+
+  it("the Telnyx test key whose private half is in this repo: refused in production even validly signed, accepted on Preview", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+    try {
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect((await POST(publishedKeyFormPost(URL_T, {}))).status).toBe(403);
+      expect(getCallByHandoffTokenMock).not.toHaveBeenCalled();
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect((await POST(publishedKeyFormPost(URL_T, {}))).status).toBe(200);
+      expect(getCallByHandoffTokenMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
   });
 });
 

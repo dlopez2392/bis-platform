@@ -19,6 +19,7 @@
 // handling is what the caller would hear, and it is not words.
 import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { verifyFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { configuredOrigin } from "@/lib/email/origin";
@@ -492,7 +493,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   // rather than inferred, so the two cannot drift. TELNYX_PUBLIC_KEY is set in
   // production (since 2026-09-29); unset — local runs and the route tests —
   // means validation is OFF.
-  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
+  // A key whose private half is published in this repo is refused in
+  // production, never read as unset (lib/fixture-secrets.ts).
+  const telnyx = telnyxPublicKey();
+  if (telnyx.kind === "refused") {
+    console.error("handoff: rejected request (published test key)");
+    return new NextResponse(null, { status: 403 });
+  }
+  const publicKey = telnyx.kind === "set" ? telnyx.key : undefined;
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
     const signatureB64 = req.headers.get("telnyx-signature-ed25519");

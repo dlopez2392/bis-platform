@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { readSecret } from "@/lib/fixture-secrets";
 import { isTokenShape, tokenHash } from "@/lib/document-requests/token";
 
 /**
@@ -12,12 +13,13 @@ const SUFFIX = ".ics";
 const MIN = 32;
 
 function feedKey(): Buffer {
-  const secret = process.env.CALENDAR_FEED_SECRET;
+  // In production, a value published in this repo reads as unset (lib/fixture-secrets.ts).
+  const secret = readSecret("CALENDAR_FEED_SECRET");
   if (!secret || secret.length < MIN) throw new Error("CALENDAR_FEED_SECRET is required (at least 32 characters)");
   return createHash("sha256").update(`bis-calendar-feed:${secret}`).digest();
 }
 export function feedSecretConfigured(): boolean {
-  const s = process.env.CALENDAR_FEED_SECRET;
+  const s = readSecret("CALENDAR_FEED_SECRET");
   return typeof s === "string" && s.length >= MIN;
 }
 export function feedToken(feedId: string): string {
