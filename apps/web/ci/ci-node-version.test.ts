@@ -54,10 +54,10 @@ describe("CI installs the Node major production runs on", () => {
   // pin it — or pins a different major — must still show up here, named, or
   // this count silently drops and the loop below never sees it (mutation:
   // drop scanner's setup-node step, or its node-version, → FAILS).
-  it("finds the setup-node steps of verify-db, verify-app, e2e-shard and scanner (so the check below is not empty)", () => {
+  it("finds the setup-node steps of verify-db, verify-app, e2e-shard, migrations-plan and scanner (so the check below is not empty)", () => {
     const ciSteps = steps.filter((s) => s.file === "ci.yml");
-    expect(ciSteps).toHaveLength(4);
-    expect(ciSteps.map((s) => s.job).sort()).toEqual(["e2e-shard", "scanner", "verify-app", "verify-db"]);
+    expect(ciSteps).toHaveLength(5);
+    expect(ciSteps.map((s) => s.job).sort()).toEqual(["e2e-shard", "migrations-plan", "scanner", "verify-app", "verify-db"]);
   });
 
   it.each(steps.map((s, i) => [`${s.file}${s.job ? ` (${s.job})` : ""} #${i}`, s] as const))(

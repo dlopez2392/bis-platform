@@ -28,6 +28,8 @@ const INSTALL_CLI = "bash .github/scripts/ci-supabase-cli.sh";
 const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
 /** e2e's check that the CI project holds every migration of the branch (ci-migrations-applied.test.ts). */
 const MIGRATIONS_APPLIED = "bash .github/scripts/ci-migrations-applied.sh";
+/** The credential-free migration plan check (migrations-plan part, 2026-11-13). */
+const MIGRATIONS_PLAN = "node .github/scripts/migrations-plan.mjs";
 /** e2e seeds the stack in its own runner, never the CI project (packages/db/src/ci-seed/config.ts ciSeedMode). */
 const SEED_LOCAL = "pnpm --filter @bis/db ci:seed:local";
 /** The names the code reads to find Supabase. verify gets them from its own stack only. */
@@ -61,7 +63,7 @@ const isDiagnostic = (s: { run?: string }) => s.run === DIAGNOSE_BASELINE || s.r
  */
 const GATES: Record<"verify" | "e2e", string[]> = {
   verify: ["verify-db", "verify-app"],
-  e2e: ["e2e-migrations", "e2e-shard"],
+  e2e: ["e2e-migrations", "e2e-shard", "migrations-plan"],
 };
 const PARTS = [...GATES.verify, ...GATES.e2e];
 /** The parts that start a Supabase stack in their own runner. */
@@ -511,6 +513,7 @@ describe("ci.yml's jobs", () => {
     ["e2e-shard", [DIAGNOSE_FAILURE]],
     ["verify-app", []],
     ["e2e-migrations", []],
+    ["migrations-plan", []],
   ] as const)("%s's stack diagnostics: the failure dump last, on failure() only; verify-db's baseline straight after its last suite, unless cancelled or docs-only; each bounded, nothing else on the step (mutation: drop the failure step, or give it `if: always()` → FAILS)", (id, expected) => {
     const all = steps(job(id));
     expect(all.filter(isDiagnostic).map((s) => s.run)).toEqual(expected);
@@ -564,6 +567,28 @@ describe("ci.yml's jobs", () => {
     // shards would read bis-ci four times.
     for (const id of Object.keys(ciJobs).filter((j) => j !== "e2e-migrations")) {
       expect(steps(job(id)).map((s) => s.run), id).not.toContain(MIGRATIONS_APPLIED);
+    }
+  });
+
+  // The migration plan check (2026-11-13) refuses what the pipeline cannot
+  // apply safely, from git alone. It must hold NOTHING: no secret, no env, no
+  // install, so no branch's code reaches a credential through it, and it can
+  // never be what makes a push without migrations slower.
+  it("migrations-plan runs exactly the guard, the docs-only decision, node 24 without pnpm and the plan check, and holds no secret, no env and no install (mutation: map CI_SUPABASE_DB_URL onto its step, or add `pnpm install` → FAILS)", () => {
+    const lines = job("migrations-plan");
+    const all = steps(lines);
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_PLAN]);
+    expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([
+      expect.stringMatching(/^actions\/checkout@/),
+      expect.stringMatching(/^actions\/setup-node@/),
+    ]);
+    expect(lines.filter((l) => /package-manager-cache:\s*false\s*$/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => /secrets\./.test(l))).toEqual([]);
+    expect(lines.filter((l) => /^\s+env:\s*$/.test(l))).toEqual([]);
+    expect(jobKeys(lines)).not.toContain("environment");
+    // No other job runs it, and it runs nothing that could install code.
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-plan")) {
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(MIGRATIONS_PLAN);
     }
   });
 
@@ -647,6 +672,7 @@ describe("ci.yml's jobs", () => {
     guarded("verify-db", WEB_LIVE_TESTS);
     guarded("verify-db", TYPES_CHECK);
     guarded("e2e-migrations", MIGRATIONS_APPLIED);
+    guarded("migrations-plan", MIGRATIONS_PLAN);
     guarded("e2e-shard", `${START_STACK} --trust-clerk-dev-instance`);
     guarded("e2e-shard", SEED_LOCAL);
     guarded("e2e-shard", PLAYWRIGHT);

@@ -75,10 +75,16 @@ name: CI
 #           The guard runs and the stack are preflights, not gates; the stack
 #           diagnostics (2026-10-13) are read-only and exit 0.
 #
-#   e2e     = e2e-migrations + e2e-shard.
+#   e2e     = e2e-migrations + e2e-shard + migrations-plan.
 #     e2e-migrations  the CI project holds every migration in the branch (the
 #           "CI project FIRST" rule's gate, since no gate runs on that project
 #           any more). Bash and psql only.
+#     migrations-plan (2026-11-13) no credential at all: refuses a branch that
+#           changes a migration already on main, adds a numbered one, adds SQL
+#           the runner cannot apply in one transaction, removes or renames
+#           something the app may read without a `-- contract:` reason, or
+#           adds a migration AND changes the pipeline. Git and node only,
+#           beside everything else.
 #     e2e-shard  four runners, each its own stack, seeded (`ci:seed:local`:
 #           "Test Client One" and the rows the specs assume), then its quarter
 #           of the Playwright journey (`--shard=N/4`). Starts beside verify,
@@ -413,6 +419,48 @@ jobs:
           BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
         run: bash .github/scripts/ci-migrations-applied.sh
 
+  # The migration plan check (2026-11-13; docs/superpowers/plans/
+  # 2026-11-13-migration-pipeline.md, D2 and PR 2). Everything that would make
+  # applying a branch's migrations unsafe is visible in the branch alone, so it
+  # is refused here, on every push, before anything is applied anywhere: a
+  # change to a migration already on main, an added numbered migration, SQL
+  # the runner cannot apply inside its one transaction, a drop or rename with
+  # no `-- contract:` reason, and a migration and a pipeline change in one
+  # branch (owner decision Q6). The refusals and their messages:
+  # .github/scripts/migrations-plan.mjs.
+  #
+  # Holds NO credential: no secret, no env, nothing but git (main's history,
+  # fetched as ci-docs-only.sh fetches it) and node's built-ins (no install).
+  # Its own part, not a step of e2e-migrations, because that job holds the
+  # CI project's DB URL on a later step. It needs nothing and runs beside the
+  # shards, about 12 seconds of work against their several minutes, so it
+  # makes no push slower.
+  migrations-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      # It holds no Supabase value either; the guard proves that, as in every part.
+      - name: Check that migrations-plan holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
+
+      - name: Decide whether this push changes only docs
+        id: scope
+        run: bash .github/scripts/ci-docs-only.sh
+
+      # No pnpm here: package-manager-cache off, or setup-node looks for pnpm
+      # (the scanner job's note below says why).
+      - uses: actions/setup-node@v5
+        if: steps.scope.outputs.docs_only != 'true'
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Refuse what the pipeline cannot apply safely
+        if: steps.scope.outputs.docs_only != 'true'
+        run: node .github/scripts/migrations-plan.mjs
+
   e2e-shard:
     runs-on: ubuntu-latest
     # 40 since 2026-10-26: the Chromium step's worst case grew to 18 minutes
@@ -652,7 +700,7 @@ jobs:
   # a failed or cancelled part turns it red instead of skipping it. For the
   # matrix, GitHub's result is `success` only when every shard succeeded.
   e2e:
-    needs: [e2e-migrations, e2e-shard]
+    needs: [e2e-migrations, e2e-shard, migrations-plan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -662,7 +710,8 @@ jobs:
         env:
           E2E_MIGRATIONS: ${{ needs.e2e-migrations.result }}
           E2E_SHARD: ${{ needs.e2e-shard.result }}
-        run: bash .github/scripts/ci-gate.sh E2E_MIGRATIONS E2E_SHARD
+          MIGRATIONS_PLAN: ${{ needs.migrations-plan.result }}
+        run: bash .github/scripts/ci-gate.sh E2E_MIGRATIONS E2E_SHARD MIGRATIONS_PLAN
 
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
   # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers

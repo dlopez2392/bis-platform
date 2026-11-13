@@ -60,12 +60,13 @@ files to bis-ci when ALL hold: the push is not to `main`; `verify` and every `e2
 (the migration has been built twice from the files and run under the whole app: the Review's "after the e2e
 tests"); an open, non-draft PR has this SHA as its head (REST `commits/{sha}/pulls`; a draft or no PR fails the
 job with "mark the PR ready, then Re-run failed jobs", so a re-run re-checks it). Before it, a credential-free
-`migrations-plan` job (git only, `fetch-depth: 0`, diff against the merge base with `origin/main`) refuses:
-any modified, deleted or renamed file that exists on main; an added 4-digit name; top-level
-`begin`/`commit`/`rollback`, `concurrently`, a line starting with a backslash, or a `:bis_mig_` token (the
-runner is psql, D3); `drop table`, `drop column` or `rename` without a `-- contract: <why>` line (production
-gets the schema before the app, so every migration must work with the app on main); and a branch that adds a
-migration AND changes the pipeline itself (`.github/workflows/**`, the migration scripts, `parity/**`).
+`migrations-plan` job (git only, main's history fetched by the script itself, diff against the merge base) refuses:
+any modified, deleted or renamed file on main; an added 4-digit name; top-level transaction control, `concurrently`,
+`vacuum`, any unquoted backslash, `:bis_mig_`, `standard_conforming_strings` (psql runner, D3); DROP TABLE / COLUMN
+(incl. `alter table x drop y`) / VIEW / FUNCTION / PROCEDURE / TYPE / SCHEMA, any DROP … CASCADE, RENAME or a TRUNCATE
+statement, DO bodies (and their `execute` strings) included,
+without a `-- contract: <why>` comment line (production gets the schema before the app); and a migration plus a
+pipeline change (`.github/workflows`, `scripts/ci-*`, `scripts/migrations-*`, parity, bootstrap, `config.toml`, `src/{migrations,ci}`).
 - Guards: `push` trigger only (forks never run here; a test pins no `pull_request`/`pull_request_target`);
   `if: github.repository == '<owner>/bis-platform'`; `CI_SUPABASE_DB_URL` on the apply step's env only; the
   runner re-validates the bis-ci pooler form and refuses production's ref (same rule as
@@ -216,16 +217,14 @@ validate), `migration:new` script, a directory test, a `schemaFiles` ordering ca
 - Probes: allow `0117_x.sql` → the directory test fails by name; match by version only → the "another name"
   case fails; sort descending → the ordering case fails.
 
-**PR 2 — The plan job** (MEDIUM, ~450). `.github/scripts/migrations-plan.sh` (D2's refusals, outputs the added
-files), `migrations-plan` job in `ci.yml` (no secret, before `e2e-migrations`, which `needs` it), and
-`ci-workflow.test.ts` pins (no secret in the job; no `pull_request` trigger).
-- Tests: `apps/web/ci/migrations-plan.test.ts` on scratch git repos (the pattern in `ci-docs-only.test.ts`):
-  edit, delete and rename of a main file refused; added 4-digit refused; `concurrently`, `commit;`, leading
-  backslash, `:bis_mig_x` refused; `concurrently` inside a `--` comment allowed (0103 and 0114 do that);
-  `drop column` and `ALTER TABLE x DROP COLUMN` without `-- contract:` refused, with it allowed; migration +
-  workflow change refused; a clean addition listed.
-- Probes: drop `R` from the diff filter → the rename test fails; scan comments too → the "inside a comment"
-  test fails; match case-sensitively → the upper-case `DROP COLUMN` test fails.
+**PR 2 — The plan job** (built HIGH: `.github/scripts/migrations-plan.mjs`, node built-ins, since SQL lexing in
+bash is fragile). `migrations-plan` is its own credential-free PART of the `e2e` gate, needing nothing (PR 4 adds
+`needs` when bis-ci applies). It refuses any backslash outside a string, not only at a line start (psql reads all), plus `VACUUM`.
+- Tests: `migrations-plan.test.ts` on scratch git repos: every refusal, every lexer edge, one branch per pipeline
+  pattern, and fail-closed (no fetch, no merge base, diff error, file missing, run from a subdirectory). On the 116
+  legacy files it flags six real contract changes in five files (0034, 0072, 0080, 0090 twice, 0110), nothing else.
+- Probes: each rule's mutation fails its own test; `""` in identifiers is an equivalent mutant (same mask).
+  The "no `pull_request` trigger" pin belongs to PR 4 (the `on:` pin already holds it today).
 
 **PR 3 — The runner** (HIGH, ~750). `.github/scripts/ci-db-target.sh` (shared target rules: `bis-ci`,
 `production`, `loopback`), `migrations-apply.sh` (D2/D3 steps; `--dry-run` lists pending and applies nothing),

@@ -264,6 +264,63 @@ CI first, then production.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
+**What every push refuses before anything is applied (since 2026-11-13).**
+The `migrations-plan` part of the `e2e` check
+(`.github/scripts/migrations-plan.mjs`) holds no credential and reads only git.
+It compares the branch with its merge base with main and refuses:
+- a change to a migration already on main (an edit, a deletion or a rename);
+- an added numbered migration;
+- in an added file, outside comments, strings and dollar-quoted bodies:
+  - top-level `BEGIN` / `COMMIT` / `ROLLBACK` / `END` (or `SAVEPOINT` and
+    the like);
+  - `CONCURRENTLY` or `VACUUM` (neither runs inside a transaction);
+  - a backslash (a psql meta-command);
+  - the runner's variable prefix `:bis_mig_`;
+- `standard_conforming_strings` anywhere in the file, even in a string or a
+  comment. It changes how strings are read, so it could hide statements from
+  the check; a migration never mentions or sets it;
+- a contract change with no `-- contract: <why>` line. The contract changes
+  are:
+  - `DROP TABLE`;
+  - `DROP COLUMN`, including `ALTER [FOREIGN] TABLE x DROP y` and
+    `DROP IF EXISTS y`. Dropping a CONSTRAINT, DEFAULT, NOT NULL, IDENTITY or
+    EXPRESSION is fine;
+  - `DROP VIEW`, `DROP FUNCTION`, `DROP PROCEDURE`, `DROP TYPE`,
+    `DROP SCHEMA`;
+  - any `DROP … CASCADE` (CASCADE removes what depends on the object; a
+    foreign key's `ON DELETE CASCADE` is not one; `DROP SEQUENCE` alone is
+    not one);
+  - `RENAME`;
+  - a `TRUNCATE` statement (the word inside a GRANT or REVOKE is a privilege,
+    not a statement).
+
+  These are looked for inside `DO [LANGUAGE x] $$ … $$` blocks too, because
+  those statements run. That includes their dynamic SQL: the string given to
+  `execute '…'`, `execute format('…')` or `execute $q$…$q$` counts, and so
+  does a string in `raise notice`, which then needs a contract line. A
+  function body does not count, since it runs only when called. **Known
+  gaps:** SQL put together by concatenation (`'drop ' || 'table'`), and a
+  plpgsql label before TRUNCATE (`<<l>> truncate t`). The check guards
+  against slips, not intent; review and the owner's production click are the
+  backstops.
+  - Production gets the schema before the app that needs it deploys, so say
+    why the app on main keeps working.
+  - The reason must be a real `--` comment line, not text in a string or a
+    function body.
+  - **One contract line covers the whole file**;
+- a branch that adds a migration AND changes the migration pipeline (owner
+  decision, 2026-11-13: split it into two PRs). The pipeline is
+  `.github/workflows/`, `.github/scripts/ci-*` and `migrations-*`,
+  `supabase/parity/`, `supabase/bootstrap/`, `supabase/config.toml`,
+  `src/migrations/` and `src/ci/` in packages/db. A dependency bump in
+  `package.json` is not the pipeline.
+
+Each refusal names the file and line. Over the 116 legacy files (applied
+long ago, so never checked again), the contract rules flag six real changes
+in five files: 0034 and 0080 (`DROP COLUMN`), 0072 (`DROP FUNCTION`), 0090
+(`DROP TABLE` and `DROP FUNCTION` inside its DO block) and 0110 (an index
+`RENAME`). Nothing else fires.
+
 Append-only applies here too: a migration changed after its CI push is a new
 migration, not a re-push. Push to CI only when the branch is otherwise ready:
 Vercel Preview and local runs on danlo's machine run on this project, so a
