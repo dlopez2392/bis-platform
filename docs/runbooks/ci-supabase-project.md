@@ -184,7 +184,11 @@ fixture account.
 
 ## 5. Parity with production
 
-Run the same read on both projects and diff:
+Run the same read on both projects and diff. Expected differences in the
+`migration-history` diff (not drift): production's 61 slug-only rows (0032,
+0042-0045, 0060-0115) print as the bare slug (`owner_line`) against CI's
+`0115_owner_line`, and production carries one extra row,
+`0048_accounts_mailing_address_check_escapes`. Anything else is a finding.
 
 - CI: `-f step=fingerprint` (and `migration-history`), from the artifact.
 - Production: the orchestrator pastes `packages/db/supabase/parity/fingerprint.sql`
@@ -210,21 +214,54 @@ reference for what the files say.
 
 CI first, then production.
 
-1. bis-db-schema writes `NNNN_*.sql` and its tests, as always, then
-   regenerates the database types in the same commit:
-   `pnpm --filter @bis/db types:gen` (below).
+1. bis-db-schema creates the file with
+   `pnpm --filter @bis/db migration:new <slug>` and writes it and its tests,
+   then regenerates the database types in the same commit:
+   `pnpm --filter @bis/db types:gen` (below). **Since 2026-11-13 a new file is
+   `YYYYMMDDHHMMSS_slug.sql`** (the UTC second it was created), never
+   `NNNN_*.sql`: two branches kept taking the same next number. `0001`..`0116`
+   keep their names; `packages/db/src/migrations/directory.test.ts` (in
+   `verify`) refuses a new numbered file, a reused version, a missing
+   numbered one, a timestamp before `20261113000000` or more than a day
+   ahead, and a new file whose slug another file already has (production
+   records 61 legacy migrations by slug alone, step 5). Legacy names sort before every timestamped one, so the
+   order of every build is unchanged.
 2. On the migration's branch, with main merged in: `-f step=push-dry-run`
    dispatched with `--ref <branch>` must list exactly the one new file; then
-   `-f step=push` on the same ref.
+   `-f step=push` on the same ref. **Until the pipeline's PR 4 (CI applies to
+   bis-ci itself), schema branches still serialise here**, because `db push`
+   compares the CI project's WHOLE history with the branch's files. Two cases:
+   - **Another branch's migration is on the CI project but not yet on main**
+     (the common one). The dry run refuses with "Remote migration versions not
+     found in local migrations directory." Wait for that branch to merge, merge
+     main into yours, and dispatch again. **NEVER run `supabase migration
+     repair` against the CI project** to get past it: it would delete the
+     other branch's history row, and that branch's e2e check would go red
+     while its schema stayed.
+   - **The CI project holds a LATER version than your file** (that branch is
+     merged and you merged main, but your file is older). The CLI asks for
+     `--include-all` (confirmed in CLI 2.109.1, review of #365), which
+     `db:push:ci` refuses on purpose. Give the file a new version:
+     `migration:new` with a new slug, move the SQL into it, delete the old
+     file. It has been applied nowhere, so that is not an edit.
 3. Post-apply checks of the new objects on the CI project (`ci:sql` with a
    read-only file); for a constraint or function with a backslash escape, the
    md5 of its stored definition against the file's.
 4. The branch's CI green on its head SHA (both jobs, read from the check runs).
 5. Production: the existing MCP procedure (pre-flight read by `name`,
    `apply_migration`, post-apply verification, md5 compare for anything with a
-   backslash escape).
+   backslash escape). **For a timestamped file, pass `name` = the file's
+   WHOLE stem** (`20261114093000_work_queue`, never `work_queue`). The MCP
+   records its own apply time as the version, so the stem in `name` is the
+   only link from the row to the file. Do NOT copy the habit of 0032,
+   0042–0045 and 0060–0115, which were applied with the slug alone (0115 is
+   `(20261111035059, owner_line)`, read in the review of #365). Those 61 rows
+   are matched to their files by slug, which is unique among them. The other
+   legacy rows are the stem form (0012–0031, 0033–0041, 0046–0059, 0116,
+   plus an extra `0048_accounts_mailing_address_check_escapes`), and
+   0001–0011 are the CLI's form (`0001`, `tenancy`).
 6. Parity (section 5).
-7. Ledger: `NNNN APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
+7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
 Append-only applies here too: a migration changed after its CI push is a new
@@ -249,10 +286,15 @@ that the CI project has every migration in this branch"
 (`.github/scripts/ci-migrations-applied.sh`), its step after the docs-only
 decision. It compares every
 `packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
-project's `supabase_migrations.schema_migrations` by version, and fails
-naming each file that is missing, with this section as the fix. A version
-this project holds that the branch lacks (another branch pushed first) is
-reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
+project's `supabase_migrations.schema_migrations` by the pair (version, name)
+the CLI records (since 2026-11-13; a numbered file is also found by a row
+whose name is its whole stem, the form of SOME of production's MCP rows; all
+116 of this project's legacy rows are the CLI's pair, read in the review of
+#365), and fails naming each file that
+is missing, with this section as the fix. A row with the file's version under
+another name is another migration and is named as such: give this file a new
+version with `migration:new`. A row this project holds that the branch lacks
+(another branch pushed first) is reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
 this project: `BIS_CI_SUPABASE_REF` and `BIS_CI_SUPABASE_DB_URL` (from
 `CI_SUPABASE_DB_URL`) are set on that step alone, the script checks the URL
 is this project's Session pooler user before psql sees it, and it reads in
@@ -260,8 +302,8 @@ one read-only transaction sent as one command. It does not check production
 (e2e holds no production credential, and must not): steps 5 and 6 are still
 the orchestrator's.
 
-**What that gate does NOT prove.** It checks that each migration's VERSION is
-in this project's history, nothing more. No CI test runs against this
+**What that gate does NOT prove.** It checks that each migration's version and
+name are in this project's history, nothing more. No CI test runs against this
 project's schema any more, so "the app works on bis-ci" is checked only by
 what still runs here: Vercel Preview (a deployment for every pushed branch,
 exercised only when someone signs in to it), a `screenshots.yml` capture

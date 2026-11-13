@@ -1,0 +1,73 @@
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMigrationFile } from "./create";
+
+// `pnpm --filter @bis/db migration:new <slug>` (./new-run.ts) writes the next
+// migration file. Run here against a scratch directory, never the real one.
+//
+// In a zone that is not UTC (see names.test.ts): CI's runners are UTC, where a
+// local-time clock reading would pass unnoticed.
+const PRIOR_TZ = process.env.TZ;
+process.env.TZ = "Asia/Kolkata";
+// Put the zone back, as document-expiry.test.ts does, so a run with
+// --no-isolate cannot carry it into another file.
+afterAll(() => {
+  if (PRIOR_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = PRIOR_TZ;
+});
+
+const NOW = new Date(Date.UTC(2026, 10, 13, 18, 30, 5));
+let dir = "";
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "migration-new-"));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe("createMigrationFile", () => {
+  it("creates <UTC timestamp>_<slug>.sql in the directory and returns its path", () => {
+    const path = createMigrationFile(dir, "work_queue", NOW);
+    expect(path).toBe(join(dir, "20261113183005_work_queue.sql"));
+    expect(readdirSync(dir)).toEqual(["20261113183005_work_queue.sql"]);
+  });
+
+  it("starts the file with the append-only rule, so the author sees it before writing", () => {
+    const text = readFileSync(createMigrationFile(dir, "x", NOW), "utf8");
+    expect(text).toMatch(/^-- /);
+    expect(text).toMatch(/new migration/i);
+  });
+
+  it("never overwrites an existing file", () => {
+    writeFileSync(join(dir, "20261113183005_x.sql"), "select 1;\n");
+    expect(() => createMigrationFile(dir, "x", NOW)).toThrow(/exists/);
+    expect(readFileSync(join(dir, "20261113183005_x.sql"), "utf8")).toBe("select 1;\n");
+  });
+
+  it("refuses a bad slug and writes nothing", () => {
+    expect(() => createMigrationFile(dir, "Bad-Slug", NOW)).toThrow(/slug/);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("refuses a slug a timestamped file already has: running it twice makes one file, not two a second apart (mutation: drop the slug check → FAILS)", () => {
+    createMigrationFile(dir, "work_queue", NOW);
+    const later = new Date(NOW.getTime() + 1000);
+    expect(() => createMigrationFile(dir, "work_queue", later)).toThrow(/20261113183005_work_queue\.sql/);
+    expect(readdirSync(dir)).toEqual(["20261113183005_work_queue.sql"]);
+  });
+
+  it("refuses a slug a NUMBERED file has: production records 61 legacy migrations by slug alone, so a reused slug would be ambiguous there", () => {
+    writeFileSync(join(dir, "0115_owner_line.sql"), "select 1;\n");
+    expect(() => createMigrationFile(dir, "owner_line", NOW)).toThrow(/0115_owner_line\.sql/);
+    expect(readdirSync(dir)).toEqual(["0115_owner_line.sql"]);
+  });
+
+  it("refuses a second file in the same second with another slug: one version, one file", () => {
+    createMigrationFile(dir, "a", NOW);
+    expect(() => createMigrationFile(dir, "b", NOW)).toThrow(/20261113183005/);
+    expect(existsSync(join(dir, "20261113183005_b.sql"))).toBe(false);
+  });
+});

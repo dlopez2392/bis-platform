@@ -12,10 +12,20 @@
 # never received. This step is now what enforces "CI project first".
 #
 # What it checks: every packages/db/supabase/migrations/<version>_<name>.sql in
-# the checked-out tree has its <version> (the numeric prefix, which is what
-# `supabase db push` records and keys on) in bis-ci's
-# supabase_migrations.schema_migrations. A version bis-ci holds that this tree
-# does not (another branch applied its migration first) is reported and is
+# the checked-out tree has a row in bis-ci's
+# supabase_migrations.schema_migrations with the same PAIR (version, name):
+# the numeric prefix and the rest of the stem, which is what `supabase db
+# push` records (all 116 of bis-ci's legacy rows have this form, read in the
+# review of #365). A numbered file (0001..0116) is also found by a row whose
+# name is its whole stem, the form of SOME of production's MCP rows (whose
+# version is the moment of the apply). The other 61 of production's legacy rows
+# (0032, 0042-0045, 0060-0115) record the slug alone; matching those is the
+# production check's job (plan PR 3), not this bis-ci read. Never by version
+# alone (since 2026-11-13, when new files became timestamped,
+# YYYYMMDDHHMMSS_slug.sql): an MCP row's apply timestamp can equal a new file's
+# version, and a row with the file's version under another name is another
+# migration, reported as such. A row bis-ci holds that this tree does
+# not match (another branch applied its migration first) is reported and is
 # NOT a failure. It does not check production: e2e holds no production
 # credential, and must not.
 #
@@ -87,39 +97,56 @@ fi
 # could land on one and the read on another, read-write. A single query
 # string holding begin…commit is one transaction, kept on one connection by
 # either pooler. (psql 15+ prints every statement's result from one -c; -q
-# drops the BEGIN/COMMIT tags, and only digit lines are read below anyway.)
+# drops the BEGIN/COMMIT tags, and only `<digits>|<name>` rows are read below
+# anyway.)
 if ! applied_raw="$(psql "$db_url" -X -q -tA -v ON_ERROR_STOP=1 \
-  -c "begin transaction read only; select version from supabase_migrations.schema_migrations order by version; commit;")"; then
+  -c "begin transaction read only; select version, name from supabase_migrations.schema_migrations order by version; commit;")"; then
   echo "::error::Could not read the CI project's migration history (supabase_migrations.schema_migrations); psql's own message is above. A gate that cannot check is red, not skipped: re-run once, and if it fails again, check the CI project (docs/runbooks/ci-supabase-project.md)."
   exit 1
 fi
 
-declare -A applied=()
+# psql -tA prints each row as `version|name`. Rows only: a status line psql
+# printed (e.g. SET) is not a migration.
+declare -A applied_pair=()    # "version|name" -> 1
+declare -A applied_name=()    # name -> its row's "version|name"
+declare -A version_names=()   # version -> the names recorded under it
 while IFS= read -r line; do
-  v="$(printf '%s' "$line" | tr -d '[:space:]')"
-  # Versions only: a status line psql printed (e.g. SET) is not a migration.
-  [[ "$v" =~ ^[0-9]+$ ]] && applied["$v"]=1
+  row="$(printf '%s' "$line" | tr -d '[:space:]')"
+  [[ "$row" =~ ^([0-9]+)\|(.*)$ ]] || continue
+  applied_pair["$row"]=1
+  if [ -n "${BASH_REMATCH[2]}" ]; then
+    applied_name["${BASH_REMATCH[2]}"]="$row"
+    version_names["${BASH_REMATCH[1]}"]+="${version_names[${BASH_REMATCH[1]}]:+, }${BASH_REMATCH[2]}"
+  fi
 done <<< "$applied_raw"
 
-declare -A local_versions=()
+declare -A matched=()   # the rows some file of this tree matched
 missing=0
 for file in "${files[@]}"; do
-  if ! [[ "$file" =~ ^([0-9]+)_.+\.sql$ ]]; then
+  if ! [[ "$file" =~ ^([0-9]+)_(.+)\.sql$ ]]; then
     echo "::error::$MIGRATIONS_DIR/$file is not named <version>_<name>.sql, so \`supabase db push\` would not apply it as a migration."
     missing=$((missing + 1))
     continue
   fi
   version="${BASH_REMATCH[1]}"
-  local_versions["$version"]=1
-  if [ -z "${applied[$version]:-}" ]; then
+  name="${BASH_REMATCH[2]}"
+  stem="${file%.sql}"
+  if [ -n "${applied_pair[$version|$name]:-}" ]; then
+    matched["$version|$name"]=1
+  elif [ "${#version}" -eq 4 ] && [ -n "${applied_name[$stem]:-}" ]; then
+    matched["${applied_name[$stem]}"]=1
+  elif [ -n "${version_names[$version]:-}" ]; then
+    echo "::error::Migration $file is in this branch, but the CI project (bis-ci) records its version $version under another name (${version_names[$version]}): that is another migration. If it is not this file, give this one a new version: create it again with pnpm --filter @bis/db migration:new <slug> and move the SQL into it."
+    missing=$((missing + 1))
+  else
     echo "::error::Migration $file is in this branch but NOT applied to the CI project (bis-ci). $FIX"
     missing=$((missing + 1))
   fi
 done
 
 extra=0
-for v in "${!applied[@]}"; do
-  [ -n "${local_versions[$v]:-}" ] || extra=$((extra + 1))
+for row in "${!applied_pair[@]}"; do
+  [ -n "${matched[$row]:-}" ] || extra=$((extra + 1))
 done
 
 if [ "$missing" -ne 0 ]; then

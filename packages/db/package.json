@@ -24,6 +24,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:push:ci": "tsx src/ci/push-run.ts push",
     "db:migrations:ci": "tsx src/ci/push-run.ts list",
+    "migration:new": "tsx src/migrations/new-run.ts",
     "ci:sql": "tsx src/ci/sql-run.ts",
     "types:gen": "tsx src/types-gen/run.ts write",
     "types:check": "tsx src/types-gen/run.ts check",

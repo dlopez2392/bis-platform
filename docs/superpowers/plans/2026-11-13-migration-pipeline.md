@@ -37,16 +37,18 @@ no hand apply), and the app never deploys before the schema it needs.
 
 ## 1. Decisions (one recommendation each; the rejected alternative in one line)
 
-**D1. Names.** New files are `YYYYMMDDHHMMSS_slug.sql` (UTC, 14 digits, slug `[a-z0-9_]+`), created only by
-`pnpm --filter @bis/db migration:new <slug>`. `0001`..`0116` stay as they are, frozen.
+**D1. Names.** New files are `YYYYMMDDHHMMSS_slug.sql` (UTC, from `20261113000000`; slug `[a-z][a-z0-9_]*`,
+unique against every other file's slug), made only by `pnpm --filter @bis/db migration:new <slug>`. `0001`..`0116`
+stay as they are, frozen.
 - Ordering: every 14-digit name starts with `2`, every legacy name with `0`, so name order, numeric order and
   Postgres `order by version` (text) all agree: legacy first, then by time. `schemaFiles` (types-gen) and
   `supabase db push --local` need no change [A1].
-- History: new files are recorded as `version=<14 digits>, name=<slug>` in BOTH projects (D3's runner writes
-  both), which is also what the CLI would write. A file is "in a project's history" when a row matches the
-  PAIR: `(version, name) = (prefix, slug)`, or, for legacy files only, `name = <whole stem>` (production's MCP
-  rows). Never by version alone: a production MCP row's version is an apply timestamp and could equal a new
-  file's version; a version taken by a different name is refused ("rename the file").
+- History: the runner (D3) records new files as `(version=<14 digits>, name=<slug>)` in BOTH projects, as the CLI
+  would; a file applied by hand (MCP) before PR 5 is `(apply time, <whole stem>)`. A row COVERS a file when:
+  the pair matches; or, on PRODUCTION, its name is the whole stem (any file; bis-ci only ever has CLI pairs, and its check accepts a stem only for numbered files, so a hand-applied timestamped file on bis-ci counts as missing); or, for a LEGACY file on PRODUCTION only, its name
+  is the slug alone and exactly one slug-only row has that name (A3 is false: 61 production rows are slug-only).
+  Never by version alone: an MCP row's version is its apply time and could equal a new file's version; a
+  version taken by another name is refused ("rename the file").
 - `ci-migrations-applied.sh` moves to the pair rule and gains a content check for timestamped files (D2).
 - Refusal of a new numbered file, twice: a directory test (exactly 116 legacy files, `0001`..`0116`
   contiguous, no other 4-digit name, no duplicate version, every other name 14 digits that parse as a UTC time
@@ -115,8 +117,9 @@ commit SHA, then bash and psql), and runs `migrations-apply.sh --target producti
 each in one read-only transaction; compare the item lines `kind, key, def-digest` and subtract
 `packages/db/supabase/parity/allowed-differences.txt` (today's four, each with its reason). Print only the
 differing KEYS, never definitions.
-- If the two histories (normalised by D1) are equal: any remaining difference FAILS the job, so `e2e` stays red
-  and the PR cannot merge.
+- Histories are compared NORMALISED: each row maps to the file stem it covers by D1's rule (a row covering no
+  file in the tree keeps `version_name`), and two histories are equal when their sets of stems are. If equal:
+  any remaining schema difference FAILS the job, so `e2e` stays red and the PR cannot merge.
 - If they differ (another PR is between bis-ci and production): report which migrations differ and do NOT judge
   the schema; parity is judged by the next apply whose histories match. Always judged, either way: each newly
   applied file's digest is equal in the file, bis-ci and production.
@@ -169,17 +172,17 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
   > The required `e2e` check is red until production holds every migration of the branch, so the app never
   > deploys ahead of its schema. Parity is checked by that job after every apply.
 
-**D7. Owner's hands** (section 3). **D8. Tasks** (section 4).
-
 ## 2. Assumptions to verify (none of these is stated as fact)
 
 - A1 `supabase db push --local` (CLI 2.109.1) accepts 4- and 14-digit versions together and orders by name.
   Verify: PR 1's implementer runs it locally with a scratch `select 1` file; the first real timestamped
   migration's verify-db proves it again.
-- A2 bis-ci's legacy rows are `version=NNNN, name=slug` (true since `ci-migrations-applied.sh` has passed on
-  them since 2026-10-08, by version; the name half is unread).
-- A3 every production legacy row has `name=NNNN_slug`. Verify before PR 5: the orchestrator runs
-  `migration-history.sql` on production through the MCP, read only, and every row normalises.
+- A2 bis-ci's legacy rows are `version=NNNN, name=slug`. CONFIRMED (review of #365): all 116 match the files.
+- A3 every production legacy row has `name=NNNN_slug`. **FALSE** (review of #365, one read-only query): 0001-0011
+  are the CLI's pair; 0012-0031, 0033-0041, 0046-0059 and 0116 the whole stem (plus an extra
+  `0048_accounts_mailing_address_check_escapes`); 0032, 0042-0045 and 0060-0115 (61 rows) the slug alone with
+  the apply time as version (0115 is `(20261111035059, owner_line)`). D1's cover rule and PRs 3 and 5 take
+  all three forms; a hand apply of a timestamped file passes `name` = the whole stem (runbook section 6).
 - A4 `schema_migrations` has `version text primary key, statements text[], name text`, other columns nullable.
   Verify on a local stack in PR 3.
 - A5 GitHub Environments: a required-reviewer job waits without consuming its timeout; the triggering user may
@@ -198,11 +201,9 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
    OFF (agents push as you); administrator bypass OFF; deployment branches: all branches; no wait timer.
 2. In that environment only: secret `PROD_MIGRATIONS_DB_URL` = production's Session pooler URI. Never a
    repository secret, never Vercel.
-3. Q1-Q6: answered 2026-11-13 (section 6).
-4. No ruleset change (the gate lives inside `e2e`).
-Until 1 and 2 are done, PR 5 does not merge, and production stays as today: the MCP `apply_migration` by
-hand, parity by hand. Interim rule from PR 1 on: the MCP apply of a timestamped file uses `name=<whole stem>`
-so D1's legacy pair rule still finds it.
+3. Q1-Q6 answered 2026-11-13 (section 6). No ruleset change (the gate lives inside `e2e`).
+Until 1 and 2 are done, PR 5 does not merge and production stays manual (MCP, parity by hand). From PR 1 on,
+the MCP apply of a timestamped file passes `name` = the WHOLE stem, never the slug alone (A3).
 
 ## 4. Tasks (each PR under ~800 changed lines, each shippable alone, in this order)
 
@@ -228,7 +229,12 @@ files), `migrations-plan` job in `ci.yml` (no secret, before `e2e-migrations`, w
 
 **PR 3 — The runner** (HIGH, ~750). `.github/scripts/ci-db-target.sh` (shared target rules: `bis-ci`,
 `production`, `loopback`), `migrations-apply.sh` (D2/D3 steps; `--dry-run` lists pending and applies nothing),
-`ci-migrations-applied.sh --target production` support. Nothing in CI calls the runner yet.
+`ci-migrations-applied.sh --target production` support with D1's three row forms. Nothing in CI calls the runner
+yet. Its pending set uses the same cover rule, so no legacy file is ever re-applied on production.
+- Tests (production matching, fake psql, rows shaped like A3's evidence): a legacy file covered by a slug-only
+  row; by a stem row; a slug-only row whose slug two rows share → refused as ambiguous; a timestamped file
+  covered by a hand-applied stem row and by the runner's pair, never by its slug alone. Probe: accept slug-only
+  rows for timestamped files → the "never by its slug alone" case fails.
 - Tests: `migrations-apply.test.ts` with a fake psql: production's ref under `--target bis-ci` refused, a
   non-pooler or wrong-user URL refused, `production` outside Actions refused, the URL never printed.
   `migrations-apply.live.test.ts` (vitest `live`, real psql, a scratch DATABASE created on the loopback stack,
@@ -248,19 +254,19 @@ order, concurrency, no artifact), runbook sections 3, 6 and 8.
 - Probes: drop `needs: verify` → its pin fails; map `CI_SUPABASE_DB_URL` at job level → the guard test fails.
 - Ships alone: production stays manual, as in section 3's interim rule.
 
-**PR 5 — Production behind the click, and parity** (HIGH, ~700). Merge only after section 3 items 1-2 and A3,
-A5, A10. `migrations-production` job (D3), `migrations-parity.sh` + `allowed-differences.txt` (D4), the gate
+**PR 5 — Production behind the click, and parity** (HIGH, ~700). Merge only after section 3 items 1-2 and A5,
+A10 (A3 is answered: false, handled by D1). `migrations-production` job (D3), `migrations-parity.sh` + `allowed-differences.txt` (D4), the gate
 logic, guard refusal of `PROD_MIGRATIONS_DB_URL` elsewhere, `ci-workflow.test.ts` pins (the secret on one line,
 in the one job that declares `production-migrations`; no other workflow names it; no install step in that
 job), the CLAUDE.md wording (D6), runbook sections 5 and 6, `bis-platform.md` and `bis-db-schema.md` (the
 orchestrator no longer applies by MCP; the MCP path stays the documented fallback).
 - Tests: parity on two scratch databases on the loopback stack (identical → pass; extra column → fail naming
-  the key; an allowed item → pass; histories differing → "not comparable" notice, pass); gate cases (new files
+  the key; an allowed item → pass; histories differing → "not comparable" notice, pass; the same files recorded
+  as slug-only on one side and pairs on the other → histories EQUAL); gate cases (new files
   + production skipped → red; + success → green; none → bis-ci only).
 - Probes: make parity ignore `function` kind → the extra-function case fails; let the gate accept a skipped
   production job → its case fails; move the secret to job env → its pin fails.
-- First live use: the next real migration, with the orchestrator watching the run and reading production's
-  history (MCP, read only) afterwards.
+- First live use: the next real migration; the orchestrator watches and reads production's history after.
 
 **PR 6 — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
 `production-migrations` deployments of this branch (A6) and passes `prod_evidence` when one was on a commit
