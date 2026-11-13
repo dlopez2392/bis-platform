@@ -244,13 +244,13 @@ type Result = { status: number | null; output: string };
  * from `subdir` of the checkout when given, after `before` has had its way with
  * the clone (the fail-closed cases break something first).
  */
-function plan(branchName: string, opts: { subdir?: string; before?: (clone: string) => void } = {}): Result {
+function plan(branchName: string, opts: { subdir?: string; before?: (clone: string) => void; env?: Record<string, string> } = {}): Result {
   const clone = fs.mkdtempSync(path.join(root, "ci-"));
   execFileSync("git", ["clone", "-q", "--depth", "1", "--no-tags", "--branch", branchName, pathToFileURL(origin).href, clone], { env: gitEnv });
   opts.before?.(clone);
   const cwd = opts.subdir ? path.join(clone, opts.subdir) : clone;
   fs.mkdirSync(cwd, { recursive: true });
-  const run = spawnSync(process.execPath, [SCRIPT], { cwd, encoding: "utf8", env: gitEnv });
+  const run = spawnSync(process.execPath, [SCRIPT], { cwd, encoding: "utf8", env: { ...gitEnv, ...opts.env } });
   if (run.error) throw run.error;
   return { status: run.status, output: `${run.stdout}${run.stderr}` };
 }
@@ -467,5 +467,35 @@ describe("migrations-plan.mjs fails closed when it cannot read the branch", () =
 
   it("runs from the repository root wherever it is started, so a subdirectory cannot make it pass (mutation: drop the chdir → FAILS)", () => {
     refused(plan("drop-column", { subdir: "apps/web" }), /::error::.*:1: DROP COLUMN without/);
+  });
+});
+
+// PR 4 (2026-11-13): the job output migrations-bis-ci and the e2e gate read.
+// It is the ONLY thing that decides whether a push reaches bis-ci, so it is
+// written only when the plan passed, and lists exactly the ADDED files.
+describe("migrations-plan.mjs hands the files a branch adds to the job that applies them", () => {
+  function planWithOutput(branchName: string) {
+    const out = path.join(fs.mkdtempSync(path.join(root, "out-")), "github_output");
+    fs.writeFileSync(out, "");
+    const r = plan(branchName, { env: { GITHUB_OUTPUT: out } });
+    return { ...r, written: fs.readFileSync(out, "utf8") };
+  }
+
+  it("writes `added=` with the branch's added migration, by path", () => {
+    const r = planWithOutput("clean");
+    expect(r.status, r.output).toBe(0);
+    expect(r.written).toBe(`added=${NEW}\n`);
+  });
+
+  it.each(["no-migration", "pipeline-only", "main"])("writes an empty `added=` for %s, so migrations-bis-ci is skipped (mutation: list every migration file → FAILS)", (name) => {
+    const r = planWithOutput(name);
+    expect(r.status, r.output).toBe(0);
+    expect(r.written).toBe("added=\n");
+  });
+
+  it("writes nothing when the plan refuses, so a refused branch can never be due (mutation: write before the verdict → FAILS)", () => {
+    const r = planWithOutput("drop-column");
+    expect(r.status, r.output).toBe(1);
+    expect(r.written).toBe("");
   });
 });

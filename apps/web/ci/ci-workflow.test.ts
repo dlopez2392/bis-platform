@@ -26,8 +26,19 @@ const GUARD_LOCAL = `${GUARD} --local-stack`;
 /** verify's database: a throwaway stack in its own runner (ci-local-supabase.test.ts). */
 const INSTALL_CLI = "bash .github/scripts/ci-supabase-cli.sh";
 const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
-/** e2e's check that the CI project holds every migration of the branch (ci-migrations-applied.test.ts). */
-const MIGRATIONS_APPLIED = "bash .github/scripts/ci-migrations-applied.sh";
+/**
+ * migrations-bis-ci (2026-11-13, migration pipeline PR 4): the ONE step in
+ * ci.yml that holds bis-ci's DB URL. It applies the files the branch ADDS
+ * (migrations-plan's `added` output, split without globbing) with the runner,
+ * then checks bis-ci holds every file of the branch with the runner's
+ * `--check` (the history gate the e2e check requires). On main `added` is
+ * empty, so the runner applies nothing and the check runs alone.
+ */
+const APPLY_BIS_CI = 'read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target bis-ci "${files[@]}" && bash .github/scripts/migrations-apply.sh --target bis-ci --check "${files[@]}"';
+/** Owner answer Q1: only a ready PR's head reaches bis-ci (migrations-ready-pr.test.ts). */
+const READY_PR = "node .github/scripts/migrations-ready-pr.mjs";
+/** When migrations-bis-ci is due: on main (the check alone), or a branch that adds a migration. */
+const BIS_CI_DUE = "github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != ''";
 /** The credential-free migration plan check (migrations-plan part, 2026-11-13). */
 const MIGRATIONS_PLAN = "node .github/scripts/migrations-plan.mjs";
 /** e2e seeds the stack in its own runner, never the CI project (packages/db/src/ci-seed/config.ts ciSeedMode). */
@@ -63,9 +74,16 @@ const isDiagnostic = (s: { run?: string }) => s.run === DIAGNOSE_BASELINE || s.r
  */
 const GATES: Record<"verify" | "e2e", string[]> = {
   verify: ["verify-db", "verify-app"],
-  e2e: ["e2e-migrations", "e2e-shard", "migrations-plan"],
+  e2e: ["e2e-shard", "migrations-plan", "migrations-bis-ci"],
 };
 const PARTS = [...GATES.verify, ...GATES.e2e];
+/**
+ * Parts that run only when due (ci-gate.sh NAME@DUE): each has `needs` and a
+ * job-level `if`, and is pinned on its own below. Every other part needs
+ * nothing and has no `if`, so it starts the moment a runner is free.
+ */
+const DUE_PARTS = ["migrations-bis-ci"];
+const FREE_PARTS = PARTS.filter((p) => !DUE_PARTS.includes(p));
 /** The parts that start a Supabase stack in their own runner. */
 const STACK_PARTS = ["verify-db", "e2e-shard"];
 const GATE_SCRIPT = "bash .github/scripts/ci-gate.sh";
@@ -287,25 +305,25 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
   // four job envs a cloud value could be pasted into.
   it.each(Object.keys(ciJobs))("gives %s no cloud Supabase value: none in the workflow-level env, none in its job env (mutation: put NEXT_PUBLIC_SUPABASE_URL back in e2e-shard's env → FAILS)", (id) => {
     expect(SUPABASE_NAMES.filter((n) => n in ciEnv)).toEqual([]);
-    expect([...SUPABASE_NAMES, "BIS_CI_SUPABASE_DB_URL"].filter((n) => n in jobEnv(job(id)))).toEqual([]);
+    expect([...SUPABASE_NAMES, "BIS_CI_SUPABASE_DB_URL", "BIS_MIGRATIONS_DB_URL", "BIS_MIGRATIONS_BISCI_DB_URL"].filter((n) => n in jobEnv(job(id)))).toEqual([]);
   });
 
   it("never names the CI project's secret key at all: neither job writes to that project (mutation: map CI_SUPABASE_SECRET_KEY into e2e again → FAILS)", () => {
     expect(ciLines.filter((l) => l.includes("CI_SUPABASE_SECRET_KEY"))).toEqual([]);
   });
 
-  // The ONE place ci.yml still reads the CI project (2026-10-08): e2e's check
-  // that bis-ci holds every migration of the branch ("CI project FIRST"). It
-  // needs bis-ci's DB URL, read-only, and nothing else does, so the secret is
-  // scoped to that step under a name no app code reads; the guard refuses it
-  // in the job's scope (ci-target-guard.test.ts).
-  // e2e-migrations since 2026-11-12: the check left the e2e job when e2e was
-  // split into shards, so it reads bis-ci once per push, not once per shard.
-  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside e2e-migrations' migration check step's own env, as BIS_CI_SUPABASE_DB_URL (mutation: map it in a job env, or as SUPABASE_DB_URL → FAILS)", () => {
+  // The ONE place ci.yml reads the CI project ("CI project FIRST"). Until
+  // 2026-11-13 a read-only check in e2e-migrations; the secret is scoped to
+  // one step under a name no app code reads, and the guard refuses that name
+  // in any job's scope (ci-target-guard.test.ts).
+  // migrations-bis-ci since 2026-11-13 (PR 4): ONE step both applies and
+  // checks, so the URL that can WRITE bis-ci reaches one step of one job, and
+  // a push with no migration never reaches it at all (the job is skipped).
+  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside migrations-bis-ci's apply step's own env, as BIS_MIGRATIONS_DB_URL (mutation: map it in a job env, on a second step, or as SUPABASE_DB_URL → FAILS)", () => {
     const matches = ciLines.filter((l) => l.includes("secrets.CI_SUPABASE_DB_URL"));
-    expect(matches.map((l) => l.trim())).toEqual(["BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}"]);
-    expect(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
-    for (const id of Object.keys(ciJobs).filter((j) => j !== "e2e-migrations")) {
+    expect(matches.map((l) => l.trim())).toEqual(["BIS_MIGRATIONS_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}"]);
+    expect(stepEnv(job("migrations-bis-ci"), APPLY_BIS_CI).BIS_MIGRATIONS_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci")) {
       expect(job(id).filter((l) => /secrets\.CI_SUPABASE_/.test(l)), id).toEqual([]);
     }
   });
@@ -364,7 +382,7 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     // history the branch is checked against. A rebuilt project changes both
     // files together.
     expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
-    expect(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
+    expect(stepEnv(job("migrations-bis-ci"), APPLY_BIS_CI).BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
   });
 });
 
@@ -433,24 +451,24 @@ describe("ci.yml's jobs", () => {
   // `verify` and `e2e`. Each is now a GATE job whose parts run in parallel on
   // their own runners: verify = verify-db (the suites that need a database) +
   // verify-app (typecheck, lint, the web unit suite, the build); e2e =
-  // e2e-migrations (bis-ci holds every migration) + e2e-shard (Playwright in
-  // four shards, each on its own stack). No PART needs another: e2e starts
-  // beside verify as it has since 2026-10-08 (the b9f31dc timeouts that once
-  // made e2e wait for verify were two jobs racing for ONE database; every
-  // part now has its own or none), and the shards do not wait for the
-  // migration check (a red one is its own check run within a minute, and
-  // "Re-run failed jobs" after pushing the migration re-runs only it and the
-  // gate). A red part still blocks the merge: its gate is red.
-  it("keeps the job ids the main ruleset requires as gates, and each gate needs exactly its parts (mutation: drop e2e-migrations from e2e's needs → FAILS)", () => {
+  // e2e-shard (Playwright in four shards, each on its own stack) +
+  // migrations-plan (git only) + migrations-bis-ci (2026-11-13: applies a
+  // branch's migrations to bis-ci and checks its history). No FREE part needs
+  // another: e2e starts beside verify as it has since 2026-10-08 (the b9f31dc
+  // timeouts that once made e2e wait for verify were two jobs racing for ONE
+  // database). migrations-bis-ci alone waits, for verify and every shard,
+  // and is SKIPPED (no runner) on a push it does not concern. A red part
+  // still blocks the merge: its gate is red.
+  it("keeps the job ids the main ruleset requires as gates, and each gate needs exactly its parts (mutation: drop migrations-bis-ci from e2e's needs → FAILS)", () => {
     expect(Object.keys(ciJobs)).toEqual(expect.arrayContaining(["verify", "e2e", ...PARTS]));
     for (const [gate, parts] of Object.entries(GATES)) expect(jobNeeds(job(gate)), gate).toEqual(parts);
   });
 
-  it.each(PARTS)("%s needs nothing, so it starts the moment a runner is free (mutation: re-add `needs: verify-db` to e2e-shard, or `needs: e2e-migrations` → FAILS)", (id) => {
+  it.each(FREE_PARTS)("%s needs nothing, so it starts the moment a runner is free (mutation: re-add `needs: verify-db` to e2e-shard, or `needs: migrations-plan` → FAILS)", (id) => {
     expect(jobKeys(job(id))).not.toContain("needs");
   });
 
-  it.each(PARTS)("%s has no job-level name, if or continue-on-error", (id) => {
+  it.each(FREE_PARTS)("%s has no job-level name, if or continue-on-error", (id) => {
     // A part skipped by a job-level `if:` reports `skipped`, which the gate
     // refuses but which tells nobody why; `continue-on-error` turns a red part
     // green; a `name:` would make its check run harder to find from the gate.
@@ -477,9 +495,18 @@ describe("ci.yml's jobs", () => {
     const env = stepEnv(lines, check.run!);
     // One variable per part, holding that part's result, and the script
     // handed exactly those variables.
+    // A due part is handed as NAME@DUE, DUE holding the same condition as the
+    // part's own job-level `if` (ci-gate.sh: success when due, skipped when not).
     const parts = GATES[gate as keyof typeof GATES];
-    expect(Object.values(env)).toEqual(parts.map((p) => `\${{ needs.${p}.result }}`));
-    expect(check.run).toBe(`${GATE_SCRIPT} ${Object.keys(env).join(" ")}`);
+    const names = Object.keys(env).filter((k) => k !== "BIS_CI_DUE");
+    expect(names.map((k) => env[k])).toEqual(parts.map((p) => `\${{ needs.${p}.result }}`));
+    const args = names.map((k, i) => (DUE_PARTS.includes(parts[i]!) ? `${k}@BIS_CI_DUE` : k));
+    expect(check.run).toBe(`${GATE_SCRIPT} ${args.join(" ")}`);
+    if (parts.some((p) => DUE_PARTS.includes(p))) {
+      expect(env.BIS_CI_DUE).toBe(`\${{ (${BIS_CI_DUE}) && 'due' || '' }}`);
+    } else {
+      expect(env).not.toHaveProperty("BIS_CI_DUE");
+    }
   });
 
   it.each(PARTS)("%s runs the target guard straight after checkout, before anything else", (id) => {
@@ -491,7 +518,7 @@ describe("ci.yml's jobs", () => {
     expect([...(second?.keys ?? [])].sort()).toEqual(["name", "run"]);
   });
 
-  it.each(PARTS)("%s lets no step fail quietly, and skips a command on no condition but the docs-only one (mutation: `if: always()` on the db tests → FAILS)", (id) => {
+  it.each(FREE_PARTS)("%s lets no step fail quietly, and skips a command on no condition but the docs-only one (mutation: `if: always()` on the db tests → FAILS)", (id) => {
     const all = steps(job(id));
     expect(all.length).toBeGreaterThan(3);
     expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
@@ -506,14 +533,14 @@ describe("ci.yml's jobs", () => {
   // port numbers right after its suites, pass or fail, so a green run is the
   // baseline. Neither carries continue-on-error (the script exits 0 by
   // itself, which ci-stack-diagnostics.test.ts pins), and each is bounded.
-  // Only the parts that start a stack have one: verify-app and e2e-migrations
-  // have no stack to read.
+  // Only the parts that start a stack have one: verify-app, migrations-plan
+  // and migrations-bis-ci have no stack to read.
   it.each([
     ["verify-db", [DIAGNOSE_BASELINE, DIAGNOSE_FAILURE]],
     ["e2e-shard", [DIAGNOSE_FAILURE]],
     ["verify-app", []],
-    ["e2e-migrations", []],
     ["migrations-plan", []],
+    ["migrations-bis-ci", []],
   ] as const)("%s's stack diagnostics: the failure dump last, on failure() only; verify-db's baseline straight after its last suite, unless cancelled or docs-only; each bounded, nothing else on the step (mutation: drop the failure step, or give it `if: always()` → FAILS)", (id, expected) => {
     const all = steps(job(id));
     expect(all.filter(isDiagnostic).map((s) => s.run)).toEqual(expected);
@@ -556,18 +583,84 @@ describe("ci.yml's jobs", () => {
   // 2026-11-12: the ONE read of bis-ci, in a job of its own so it happens once
   // per push rather than once per shard. It needs only bash and psql: no
   // install, no stack.
-  it("e2e-migrations runs exactly the guard, the docs-only decision and the migration check, with the check's two values scoped to its step (mutation: drop the step, or move the check into e2e-shard → FAILS)", () => {
-    const all = steps(job("e2e-migrations"));
-    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_APPLIED]);
-    expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([expect.stringMatching(/^actions\/checkout@/)]);
-    const check = all.find((s) => s.run === MIGRATIONS_APPLIED);
-    expect(check?.if).toBe(DOCS_ONLY_IF);
-    expect(Object.keys(stepEnv(job("e2e-migrations"), MIGRATIONS_APPLIED)).sort()).toEqual(["BIS_CI_SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"]);
-    // No other job runs it: verify's parts hold no CI-project value, and the
-    // shards would read bis-ci four times.
-    for (const id of Object.keys(ciJobs).filter((j) => j !== "e2e-migrations")) {
-      expect(steps(job(id)).map((s) => s.run), id).not.toContain(MIGRATIONS_APPLIED);
+  // 2026-11-13 (migration pipeline PR 4, plan D2): bis-ci receives a branch's
+  // migrations from CI, never by hand. ORDER IS LOAD-BEARING: the guard; then
+  // the ready-PR check (owner answer Q1), holding the job's read-only token and
+  // no DB URL; then ONE step holding the DB URL, which applies and checks.
+  it("migrations-bis-ci runs exactly the guard, node, the ready-PR check (branches only) and the one apply-and-check step, with the token and the DB URL on different steps (mutation: drop the ready-PR step, or let it run on main's apply → FAILS)", () => {
+    const lines = job("migrations-bis-ci");
+    const all = steps(lines);
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, READY_PR, APPLY_BIS_CI]);
+    expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([
+      expect.stringMatching(/^actions\/checkout@/),
+      expect.stringMatching(/^actions\/setup-node@/),
+    ]);
+    const ready = all.find((s) => s.run === READY_PR)!;
+    expect(ready.if).toBe("github.ref != 'refs/heads/main'");
+    expect(stepEnv(lines, READY_PR)).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+    // The apply step runs whenever the job runs: no `if` can skip it into a
+    // green job, and nothing lets it fail quietly.
+    const apply = all.find((s) => s.run === APPLY_BIS_CI)!;
+    expect([...apply.keys].sort()).toEqual(["env", "name", "run"]);
+    expect(stepEnv(lines, APPLY_BIS_CI)).toEqual({
+      BIS_CI_SUPABASE_REF: setupEnv.BIS_CI_SUPABASE_REF,
+      BIS_MIGRATIONS_DB_URL: "${{ secrets.CI_SUPABASE_DB_URL }}",
+      MIGRATIONS_ADDED: "${{ needs.migrations-plan.outputs.added }}",
+    });
+    expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
+    expect(lines.filter((l) => /pnpm|npm (ci|install)/.test(l))).toEqual([]);
+    expect(jobKeys(lines)).not.toContain("environment");
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci")) {
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(APPLY_BIS_CI);
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(READY_PR);
     }
+  });
+
+  // D2: after verify (both parts) and EVERY e2e shard passed on this SHA, so a
+  // migration is built twice and run under the whole app before it reaches
+  // bis-ci; never for a branch whose plan was refused (a migration beside a
+  // pipeline change, owner answer Q6, is one of its refusals). On main it
+  // only checks. The same due condition is the e2e gate's BIS_CI_DUE.
+  it("migrations-bis-ci needs the plan, verify's parts and the shards, and runs only when due, after all of them passed (mutation: drop verify-db from needs, or the plan's success from the if → FAILS)", () => {
+    const lines = job("migrations-bis-ci");
+    expect(jobNeeds(lines)).toEqual(["migrations-plan", "verify-db", "verify-app", "e2e-shard"]);
+    expect(jobValue(lines, "if")).toBe(
+      "${{ always() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success'"
+      + " && (github.ref == 'refs/heads/main' || (needs.migrations-plan.outputs.added != ''"
+      + " && needs.verify-db.result == 'success' && needs.verify-app.result == 'success' && needs.e2e-shard.result == 'success')) }}",
+    );
+    // migrations-plan hands over the files through a job output of its plan step.
+    const plan = job("migrations-plan");
+    expect(plan.map((l) => l.trim())).toContain("added: ${{ steps.plan.outputs.added }}");
+    expect(steps(plan).find((s) => s.run === MIGRATIONS_PLAN)?.id).toBe("plan");
+  });
+
+  // Two runs never apply at once (D2): one repo-wide group that QUEUES and
+  // never cancels a run that may be inside a transaction on bis-ci. The
+  // runner's history lock serialises them as well; this keeps them from
+  // even trying.
+  it("migrations-bis-ci joins the one repo-wide bis-ci-migrations group, queueing, never cancelling (mutation: drop the group, or cancel-in-progress: true → FAILS)", () => {
+    const lines = job("migrations-bis-ci");
+    const at = lines.findIndex((l) => /^ {4}concurrency:\s*$/.test(l));
+    expect(at).toBeGreaterThanOrEqual(0);
+    const block = lines.slice(at + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => /^ {6}/.test(x)));
+    expect(block.map((l) => l.trim())).toEqual(["group: bis-ci-migrations", "queue: max", "cancel-in-progress: false"]);
+  });
+
+  // The job's token reads pull requests and nothing else: no write scope that
+  // a branch's code could use on the repository.
+  it("migrations-bis-ci's token may read contents and pull requests only (mutation: add `pull-requests: write` → FAILS)", () => {
+    const lines = job("migrations-bis-ci");
+    const at = lines.findIndex((l) => /^ {4}permissions:\s*$/.test(l));
+    expect(at).toBeGreaterThanOrEqual(0);
+    const block = lines.slice(at + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => /^ {6}/.test(x)));
+    expect(block.map((l) => l.trim())).toEqual(["contents: read", "pull-requests: read"]);
+  });
+
+  // D2's fork guard: ci.yml never runs for a pull request, so no fork's code
+  // ever runs with this repository's secrets (it is public).
+  it("ci.yml runs on push and workflow_dispatch only, never pull_request or pull_request_target (mutation: add `pull_request:` → FAILS)", () => {
+    expect(topLevelBlock(ciLines, "on").map((l) => l.trim()).filter(Boolean)).toEqual(["push:", "workflow_dispatch:"]);
   });
 
   // The migration plan check (2026-11-13) refuses what the pipeline cannot
@@ -637,14 +730,14 @@ describe("ci.yml's jobs", () => {
     expect(on).toEqual(["push:", "workflow_dispatch:"]);
   });
 
-  it.each(PARTS)("%s decides docs-only third, right after the guard, on no condition of its own (mutation: give the decision step an `if:` → FAILS)", (id) => {
+  it.each(FREE_PARTS)("%s decides docs-only third, right after the guard, on no condition of its own (mutation: give the decision step an `if:` → FAILS)", (id) => {
     const third = steps(job(id))[2];
     expect(third?.run).toBe(SCOPE);
     expect(third?.id).toBe("scope");
     expect([...(third?.keys ?? [])].sort()).toEqual(["id", "name", "run"]);
   });
 
-  it.each(PARTS)("%s skips nothing up to the decision, and every step after it on exactly the docs-only condition (mutation: drop the `if:` from one later step, or reword it to `== 'false'` → FAILS)", (id) => {
+  it.each(FREE_PARTS)("%s skips nothing up to the decision, and every step after it on exactly the docs-only condition (mutation: drop the `if:` from one later step, or reword it to `== 'false'` → FAILS)", (id) => {
     const all = steps(job(id));
     const decision = all.findIndex((s) => s.run === SCOPE);
     expect(decision).toBe(2);
@@ -671,7 +764,6 @@ describe("ci.yml's jobs", () => {
     guarded("verify-db", DB_TESTS);
     guarded("verify-db", WEB_LIVE_TESTS);
     guarded("verify-db", TYPES_CHECK);
-    guarded("e2e-migrations", MIGRATIONS_APPLIED);
     guarded("migrations-plan", MIGRATIONS_PLAN);
     guarded("e2e-shard", `${START_STACK} --trust-clerk-dev-instance`);
     guarded("e2e-shard", SEED_LOCAL);
@@ -689,7 +781,7 @@ describe("ci.yml's jobs", () => {
   // shards (2026-11-12) are four more runs side by side: each mints its own
   // Clerk users with Date.now() stamps, and the sweep deletes only what is 30
   // minutes old (e2e/fixtures/stale.ts), so a shard never touches another's.
-  it.each(Object.keys(ciJobs))("%s joins no job-level concurrency group (mutation: re-add `group: e2e-ci-supabase` → FAILS)", (id) => {
+  it.each(Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci"))("%s joins no job-level concurrency group (mutation: re-add `group: e2e-ci-supabase` → FAILS)", (id) => {
     expect(jobKeys(job(id))).not.toContain("concurrency");
     expect(job(id).filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
@@ -975,6 +1067,27 @@ describe("ci-project-setup.yml scopes the service-role secret to the dispatch th
       expect(offenders).toEqual([]);
     },
   );
+
+  // Migration pipeline PR 4 (2026-11-13): ONE applier writes bis-ci's
+  // history, the runner (migrations-apply.sh), whose rows carry the content
+  // digest the runner compares. The CLI push (`db:push:ci`) records rows the
+  // runner cannot compare, so a new migration is apply/apply-dry-run of the
+  // files the dispatched branch ADDS (the plan's `added`). The CLI stays for
+  // ONE case the runner cannot do, a rebuilt EMPTY project (it never applies
+  // the legacy numbered files), under a name that says so. Manual, always.
+  it("applies a new migration to bis-ci only through the runner, keeps the CLI for a rebuild only, by hand only (mutation: put back a plain `push`, or add an `on: push` → FAILS)", () => {
+    const block = topLevelBlock(setupLines, "on").map((l) => l.trim()).filter(Boolean);
+    expect(block[0]).toBe("workflow_dispatch:");
+    expect(block.filter((l) => /^(push|pull_request\w*|schedule|workflow_run):/.test(l))).toEqual([]);
+    const options = block.slice(block.indexOf("options:") + 1);
+    expect(options).toContain("- apply-dry-run");
+    expect(options).toContain("- apply");
+    expect(options.filter((o) => /push/.test(o))).toEqual(["- rebuild-push-dry-run", "- rebuild-push"]);
+    const run = stepBlock(setupLines, "- name: Run ${{ inputs.step }}").map((l) => l.trim());
+    const cases = run.filter((l) => /^[a-z|-]+\)$/.test(l));
+    expect(cases.filter((c) => /push/.test(c))).toEqual(["rebuild-push-dry-run)", "rebuild-push)"]);
+    expect(run).toContain('BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci $dry "${files[@]}" ;;');
+  });
 });
 
 // Production credentials live in a GitHub Environment named `production`

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The migration runner (docs/superpowers/plans/2026-11-13-migration-pipeline.md,
-# D1-D3, D5; PR 3). Nothing in CI calls it yet: PR 4 runs it against bis-ci,
-# PR 5 against production behind the owner's approval.
+# D1-D3, D5; PR 3). ci.yml's migrations-bis-ci runs it against bis-ci (PR 4);
+# PR 5 will run it against production behind the owner's approval.
 #
 #   migrations-apply.sh --target <target> [--dry-run | --check] [FILE...]
 #

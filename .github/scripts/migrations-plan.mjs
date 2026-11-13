@@ -37,7 +37,7 @@
 // Tested by apps/web/ci/migrations-plan.test.ts (collected by `pnpm check`).
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 const DIR = "packages/db/supabase/migrations/";
 const NEW_NAME = /^[0-9]{14}_[a-z][a-z0-9_]*\.sql$/;
@@ -407,3 +407,11 @@ if (errors.length > 0) {
 console.log(added.length === 0
   ? "Migration plan: this branch adds no migration file."
   : `Migration plan: this branch adds ${added.length} migration file(s): ${added.join(", ")}.`);
+
+// The job output (PR 4): migrations-bis-ci applies exactly these files, and
+// runs only when this is non-empty (or on main). Written only here, after the
+// verdict, so a refused branch can never be due. Paths are space-separated:
+// the runner itself refuses any name that is not YYYYMMDDHHMMSS_slug.sql.
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, `added=${added.join(" ")}\n`);
+}

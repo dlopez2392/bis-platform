@@ -29,17 +29,22 @@ on:
     inputs:
       step:
         description: >-
-          One step. Writes: bootstrap, push, seed. Everything else only reads.
-          Order: bootstrap, push-dry-run, push, migrations, fingerprint,
-          fingerprint-detail, seed.
+          One step. Writes: bootstrap, rebuild-push, apply, seed. Everything
+          else only reads. A REBUILT project (runbook section 8): bootstrap,
+          rebuild-push-dry-run, rebuild-push, migrations, fingerprint,
+          fingerprint-detail, seed. A new migration: CI's migrations-bis-ci
+          applies it for a ready PR; apply-dry-run and apply are the by-hand
+          fallback, on the files the dispatched branch ADDS.
         type: choice
         required: true
         # A read, so a stray click on "Run workflow" writes nothing.
         default: fingerprint
         options:
           - bootstrap
-          - push-dry-run
-          - push
+          - rebuild-push-dry-run
+          - rebuild-push
+          - apply-dry-run
+          - apply
           - migrations
           - fingerprint
           - fingerprint-detail
@@ -134,10 +139,23 @@ jobs:
           case "$STEP" in
             bootstrap)
               pnpm --filter @bis/db ci:sql supabase/bootstrap/ci-project.sql --allow-write ;;
-            push-dry-run)
+            # A rebuilt, EMPTY project only (runbook section 8): the runner
+            # applies timestamped files a branch adds, never the legacy
+            # numbered ones, so a new project still gets main's files from
+            # the CLI. Never on a live project: a new migration is `apply`.
+            rebuild-push-dry-run)
               pnpm --filter @bis/db db:push:ci --dry-run ;;
-            push)
+            rebuild-push)
               pnpm --filter @bis/db db:push:ci ;;
+            # The migration runner (2026-11-13, plan PR 4), the one applier
+            # of bis-ci's history, on the files the dispatched branch adds
+            # (migrations-plan.mjs, which also refuses what is unsafe). On
+            # main nothing is added: it applies nothing and checks coverage.
+            apply-dry-run|apply)
+              GITHUB_OUTPUT="$out/plan.out" node .github/scripts/migrations-plan.mjs
+              read -ra files <<< "$(sed -n 's/^added=//p' "$out/plan.out")"
+              dry=""; [ "$STEP" = apply ] || dry="--dry-run"
+              BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci $dry "${files[@]}" ;;
             migrations)
               pnpm --filter @bis/db db:migrations:ci ;;
             fingerprint|fingerprint-detail|migration-history)

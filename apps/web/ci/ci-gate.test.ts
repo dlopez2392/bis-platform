@@ -87,3 +87,48 @@ describe("ci-gate.sh: a required check is green only when every part it names su
     expect(r.output).toMatch(/::error::.*not a variable name/);
   });
 });
+
+// NAME@DUE (2026-11-13, migration pipeline PR 4): a part that runs only when
+// it is due. migrations-bis-ci applies to bis-ci only for a branch that adds a
+// migration (and checks bis-ci on main); for every other push it is skipped,
+// so a PR with no migration neither waits for it nor reaches bis-ci. DUE names
+// an env variable: non-empty means the part had to run and succeed; empty
+// means it had to be SKIPPED, and anything else means the job's `if` and the
+// gate disagree, which is a red, not a guess.
+describe("ci-gate.sh NAME@DUE: a part that must succeed when due and be skipped when not", () => {
+  it("passes a due part that succeeded", () => {
+    const r = gate(["BIS_CI@DUE"], { BIS_CI: "success", DUE: "packages/db/supabase/migrations/20261114093000_a.sql" });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/BIS_CI: success/);
+  });
+
+  it.each(["skipped", "failure", "cancelled", ""])("refuses a due part whose result is '%s', naming it (mutation: accept `skipped` when due → FAILS)", (result) => {
+    const r = gate(["BIS_CI@DUE"], { BIS_CI: result, DUE: "yes" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::BIS_CI /);
+  });
+
+  it("passes a part that was not due and was skipped, saying so", () => {
+    const r = gate(["BIS_CI@DUE"], { BIS_CI: "skipped", DUE: "" });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/BIS_CI: skipped, as it should be: not due/);
+  });
+
+  it.each(["success", "failure", "cancelled", ""])("refuses a part that was not due but whose result is '%s': the job's `if` and the gate disagree (mutation: pass anything when not due → FAILS)", (result) => {
+    const r = gate(["BIS_CI@DUE"], { BIS_CI: result, DUE: "" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::BIS_CI /);
+  });
+
+  it("still requires every plain part beside it", () => {
+    const r = gate(["E2E_SHARD", "BIS_CI@DUE"], { E2E_SHARD: "failure", BIS_CI: "skipped", DUE: "" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::E2E_SHARD is failure/);
+  });
+
+  it("refuses a DUE that is not a variable name", () => {
+    const r = gate(["BIS_CI@needs.x"], { BIS_CI: "skipped" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*not a variable name/);
+  });
+});
