@@ -144,6 +144,12 @@ beforeAll(() => {
   // A `-- contract:` line inside a string or a dollar body is no contract line.
   adds("contract-in-string", "comment on table b is '\n-- contract: not a comment\n';\nalter table b drop column old;\n");
   adds("contract-in-dollar-body", "do $$ begin\n-- contract: not top level\nperform 1; end $$;\nalter table b drop column old;\n");
+  // A function body runs only when called, and a comment in a DO body runs never.
+  adds("function-body-drop", "create function f() returns void language plpgsql as $$ begin drop table b; end $$;\n");
+  adds("do-comment-drop", "do $$ begin\n  -- drop table b\n  perform 1;\nend $$;\n");
+  adds("drop-sequence", "drop sequence if exists s;\n");
+  // 0066's shape: ON DELETE CASCADE is a foreign key's action, not DROP ... CASCADE.
+  adds("fk-on-delete-cascade", "alter table b\n  drop constraint b_a_fkey,\n  add constraint b_a_fkey foreign key (a) references a(id) on delete cascade on update cascade;\n");
 
   // Refused: what the branch does to files already on main.
   branch("edit-main-file", { [`${DIR}/0002_b.sql`]: "create table b (id int, x int);\n" });
@@ -183,6 +189,18 @@ beforeAll(() => {
   adds("drop-view", "drop view if exists v;\n");
   adds("drop-materialized-view", "drop materialized view mv;\n");
   adds("truncate", "create table t (id int);\ntruncate b;\n");
+  // Review of #366, round 2. DO with a LANGUAGE clause, or a long gap, is still a DO block.
+  adds("do-language", "do language plpgsql $x$ begin drop table b; end $x$;\n");
+  adds("do-language-quoted", "do language 'plpgsql' $$ begin drop table b; end $$;\n");
+  adds("do-long-gap", `do\n-- ${"a long comment ".repeat(10)}\n/* and a block comment */\n\n$$ begin drop table b; end $$;\n`);
+  // Dynamic SQL in a DO body runs too: its string contents are scanned.
+  adds("execute-string", "do $$ begin execute 'drop table public.b'; end $$;\n");
+  adds("execute-format", "do $$ begin execute format('drop table %I', 'b'); end $$;\n");
+  adds("execute-dollar", "do $$ begin execute $i$drop table b$i$; end $$;\n");
+  adds("alter-foreign-table", "alter foreign table ft drop c;\n");
+  adds("drop-type", "drop type public.status;\n");
+  adds("drop-schema", "drop schema legacy;\n");
+  adds("drop-cascade", "drop sequence s cascade;\n");
 
   // Refused: a migration and a pipeline change in one branch (owner Q6), one
   // branch per pipeline pattern.
@@ -272,8 +290,19 @@ describe("migrations-plan.mjs lets through what the pipeline can apply", () => {
     expect(r.status, r.output).toBe(0);
   });
 
-  it("passes dropping a constraint: only tables, columns and renames are contract changes", () => {
+  it("passes dropping a constraint: ALTER TABLE ... DROP CONSTRAINT removes no column", () => {
     expect(plan("drop-constraint").status).toBe(0);
+  });
+
+  it.each([
+    ["function-body-drop", "a CREATE FUNCTION body runs only when called (mutation: scan every dollar body as a DO body → FAILS)"],
+    ["do-comment-drop", "a comment inside a DO body never runs (mutation: keep comments when putting DO bodies back → FAILS)"],
+    ["drop-sequence", "DROP SEQUENCE without CASCADE is not a contract change"],
+    ["fk-on-delete-cascade", "ON DELETE / ON UPDATE CASCADE is a foreign key's action, not DROP ... CASCADE (legacy 0066)"],
+  ])("passes %s: %s", (name) => {
+    const r = plan(name);
+    expect(r.output).not.toContain("::error::");
+    expect(r.status, r.output).toBe(0);
   });
 
   it("passes ALTER TABLE's DROP CONSTRAINT / DEFAULT / NOT NULL / IDENTITY / EXPRESSION: none removes what the app reads (mutation: flag every ALTER TABLE ... DROP → FAILS)", () => {
@@ -371,7 +400,17 @@ describe("migrations-plan.mjs refuses a contract change with no `-- contract:` r
     ["drop-view", /::error::.*:1: DROP VIEW without/],
     ["drop-materialized-view", /::error::.*:1: DROP VIEW without/],
     ["truncate", /::error::.*:2: TRUNCATE without/],
-  ])("refuses %s (mutation: match case-sensitively → the upper-case case FAILS)", (name, pattern) => {
+    ["do-language", /::error::.*:1: DROP TABLE without/],
+    ["do-language-quoted", /::error::.*:1: DROP TABLE without/],
+    ["do-long-gap", /::error::.*:5: DROP TABLE without/],
+    ["execute-string", /::error::.*:1: DROP TABLE without/],
+    ["execute-format", /::error::.*:1: DROP TABLE without/],
+    ["execute-dollar", /::error::.*:1: DROP TABLE without/],
+    ["alter-foreign-table", /::error::.*:1: DROP COLUMN without/],
+    ["drop-type", /::error::.*:1: DROP TYPE without/],
+    ["drop-schema", /::error::.*:1: DROP SCHEMA without/],
+    ["drop-cascade", /::error::.*:1: DROP \.\.\. CASCADE without/],
+  ])("refuses %s, naming the kind and line", (name, pattern) => {
     refused(plan(name), pattern);
   });
 });

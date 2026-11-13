@@ -135,10 +135,12 @@ for (const c of migrationChanges) {
  * dollar-quoted body replaced by spaces (newlines kept), so what is left is
  * what psql reads as statements, at the same offsets and line numbers.
  * `keepLineComments` leaves `--` comments in (to find a real `-- contract:`
- * line). `doBodies` are the [start, end) offsets of each dollar-quoted body
- * that directly follows DO: an anonymous block, whose statements run.
+ * line); `keepStrings` leaves strings, quoted identifiers and dollar bodies in
+ * and blanks comments only (to read a DO body's dynamic SQL). `doBodies` are
+ * the [start, end) offsets of each dollar-quoted body that follows DO (with or
+ * without LANGUAGE): an anonymous block, whose statements run.
  */
-function mask(sql, { keepLineComments = false } = {}) {
+function mask(sql, { keepLineComments = false, keepStrings = false } = {}) {
   const out = sql.split("");
   const doBodies = [];
   const blank = (from, to) => { for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " "; };
@@ -173,7 +175,7 @@ function mask(sql, { keepLineComments = false } = {}) {
         }
         j++;
       }
-      blank(i, j + 1);
+      if (!keepStrings) blank(i, j + 1);
       i = j + 1;
     } else if (ch === "\"") {
       let j = i + 1;
@@ -184,18 +186,18 @@ function mask(sql, { keepLineComments = false } = {}) {
         }
         j++;
       }
-      blank(i, j + 1);
+      if (!keepStrings) blank(i, j + 1);
       i = j + 1;
     } else if (ch === "$" && !isIdent(sql[i - 1])) {
       const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i))?.[0];
       if (!tag) { i++; continue; }
       const close = sql.indexOf(tag, i + tag.length);
       const stop = close < 0 ? sql.length : close + tag.length;
-      // What psql has read so far: DO followed by this body is a statement.
-      if (close >= 0 && /(?:^|[^A-Za-z0-9_$])do\s*$/i.test(out.slice(Math.max(0, i - 64), i).join(""))) {
-        doBodies.push([i + tag.length, close]);
-      }
-      blank(i, stop);
+      // DO, optionally with LANGUAGE <name> (its quoted name is already
+      // blanked), followed by this body: an anonymous block, whose statements
+      // run. Read back over whitespace and blanked comments, however long.
+      if (close >= 0 && isDoBody(wordsBefore(out, i))) doBodies.push([i + tag.length, close]);
+      if (!keepStrings) blank(i, stop);
       i = stop;
     } else {
       i++;
@@ -204,14 +206,41 @@ function mask(sql, { keepLineComments = false } = {}) {
   return { text: out.join(""), doBodies };
 }
 
+/**
+ * Up to the last three words before `at` in the text masked so far (oldest
+ * first), skipping whitespace and blanked comments and strings; stops at
+ * anything that is neither a word nor whitespace (`;`, `(`, `=`...).
+ */
+function wordsBefore(out, at) {
+  const words = [];
+  let k = at - 1;
+  while (words.length < 3) {
+    while (k >= 0 && /\s/.test(out[k])) k--;
+    const end = k + 1;
+    while (k >= 0 && /[A-Za-z0-9_]/.test(out[k])) k--;
+    if (k + 1 === end) break;
+    words.unshift(out.slice(k + 1, end).join("").toLowerCase());
+  }
+  return words;
+}
+
+/** `do`, `do language`, `do language <name>`: a quoted name leaves `language` alone. */
+function isDoBody(words) {
+  const [a, b, c] = [words[words.length - 3], words[words.length - 2], words[words.length - 1]];
+  return c === "do" || (b === "do" && c === "language") || (a === "do" && b === "language");
+}
+
 const lineAt = (text, offset) => text.slice(0, offset).split("\n").length;
 
 const TRANSACTION_CONTROL = /^(begin|commit|rollback|abort|end|start\s+transaction|savepoint|release|prepare\s+transaction|commit\s+prepared|rollback\s+prepared)\b/i;
 /**
  * What removes or renames something the app on main may read. Each finds its
- * first match in the text with DO bodies put back (their statements run).
- * TRUNCATE only where a statement can start: the word also appears in GRANT
- * and REVOKE privilege lists, which change no data.
+ * first match in the text with DO bodies put back, their string contents
+ * included (their statements run, `execute '...'` too). TRUNCATE only where a
+ * statement can start: the word also appears in GRANT and REVOKE privilege
+ * lists, which change no data. Any DROP ... CASCADE, since CASCADE removes
+ * whatever depends on the dropped object (columns, views); DROP SEQUENCE
+ * without it is not one.
  */
 const CONTRACT = [
   ["DROP TABLE", (t) => /\bdrop\s+table\b/i.exec(t)?.index],
@@ -219,6 +248,9 @@ const CONTRACT = [
   ["DROP VIEW", (t) => /\bdrop\s+(?:materialized\s+)?view\b/i.exec(t)?.index],
   ["DROP FUNCTION", (t) => /\bdrop\s+function\b/i.exec(t)?.index],
   ["DROP PROCEDURE", (t) => /\bdrop\s+procedure\b/i.exec(t)?.index],
+  ["DROP TYPE", (t) => /\bdrop\s+type\b/i.exec(t)?.index],
+  ["DROP SCHEMA", (t) => /\bdrop\s+schema\b/i.exec(t)?.index],
+  ["DROP ... CASCADE", (t) => dropCascade(t)],
   ["RENAME", (t) => /\brename\b/i.exec(t)?.index],
   ["TRUNCATE", (t) => {
     const m = /(?:^|;|\b(?:begin|then|else|loop))\s*(truncate)\b/i.exec(t);
@@ -233,7 +265,7 @@ const CONTRACT = [
 function alterTableDrop(text) {
   let start = 0;
   for (const statement of text.split(";")) {
-    const alter = /\balter\s+table\b/i.exec(statement);
+    const alter = /\balter\s+(?:foreign\s+)?table\b/i.exec(statement);
     if (alter) {
       const drops = /\bdrop\b\s*/gi;
       drops.lastIndex = alter.index;
@@ -242,6 +274,20 @@ function alterTableDrop(text) {
         if (!/^(?:constraint|default|not\s+null|identity|expression)\b/i.test(rest)) return start + m.index;
       }
     }
+    start += statement.length + 1;
+  }
+  return undefined;
+}
+/**
+ * The first DROP in a statement that also says CASCADE after it. ON DELETE /
+ * ON UPDATE CASCADE is a foreign key's action, not the drop's (legacy 0066
+ * drops and re-adds a key that way).
+ */
+function dropCascade(text) {
+  let start = 0;
+  for (const statement of text.split(";")) {
+    const drop = /\bdrop\b/i.exec(statement);
+    if (drop && /(?<!\bon\s+(?:delete|update)\s+)\bcascade\b/i.test(statement.slice(drop.index))) return start + drop.index;
     start += statement.length + 1;
   }
   return undefined;
@@ -305,16 +351,19 @@ function checkSql(file, sql) {
   // statement from this lexer and from psql's. Refused wherever it appears.
   const scs = /standard_conforming_strings/i.exec(sql);
   if (scs) {
-    refuse(`${file}:${lineAt(sql, scs.index)}: standard_conforming_strings changes how strings are read, which can hide statements from this check and from psql. A migration never sets it.`);
+    refuse(`${file}:${lineAt(sql, scs.index)}: standard_conforming_strings changes how strings are read, which can hide statements from this check and from psql. A migration never mentions or sets it, not even in a comment.`);
   }
 
   // Contract changes are looked for in the statements psql runs, DO blocks'
-  // included (their bodies put back, with their own comments and strings
-  // blanked); the reason in a real `--` comment line, never one inside a
-  // string or a body. One reason line covers the whole file.
+  // included: their bodies put back with comments blanked but strings KEPT,
+  // so dynamic SQL (`execute format('alter table %I drop ...', t)`) counts.
+  // Known gaps: SQL assembled by concatenation ('drop ' || 'table') and a
+  // plpgsql label before TRUNCATE (`<<l>> truncate t`). The reason is read
+  // from a real `--` comment line, never one inside a string or a body. One
+  // reason line covers the whole file.
   let contractText = masked;
   for (const [from, to] of doBodies) {
-    contractText = contractText.slice(0, from) + mask(sql.slice(from, to)).text + contractText.slice(to);
+    contractText = contractText.slice(0, from) + mask(sql.slice(from, to), { keepStrings: true }).text + contractText.slice(to);
   }
   if (!CONTRACT_REASON.test(mask(sql, { keepLineComments: true }).text)) {
     for (const [kind, find] of CONTRACT) {

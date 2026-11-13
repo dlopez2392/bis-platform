@@ -63,7 +63,8 @@ job with "mark the PR ready, then Re-run failed jobs", so a re-run re-checks it)
 `migrations-plan` job (git only, main's history fetched by the script itself, diff against the merge base) refuses:
 any modified, deleted or renamed file on main; an added 4-digit name; top-level transaction control, `concurrently`,
 `vacuum`, any unquoted backslash, `:bis_mig_`, `standard_conforming_strings` (psql runner, D3); DROP TABLE / COLUMN
-(incl. `alter table x drop y`) / VIEW / FUNCTION / PROCEDURE, RENAME or a TRUNCATE statement, DO bodies included,
+(incl. `alter table x drop y`) / VIEW / FUNCTION / PROCEDURE / TYPE / SCHEMA, any DROP … CASCADE, RENAME or a TRUNCATE
+statement, DO bodies (and their `execute` strings) included,
 without a `-- contract: <why>` comment line (production gets the schema before the app); and a migration plus a
 pipeline change (`.github/workflows`, `scripts/ci-*`, `scripts/migrations-*`, parity, bootstrap, `config.toml`, `src/{migrations,ci}`).
 - Guards: `push` trigger only (forks never run here; a test pins no `pull_request`/`pull_request_target`);
