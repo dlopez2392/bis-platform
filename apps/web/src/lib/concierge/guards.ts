@@ -47,9 +47,9 @@ export const CONCIERGE_MAX_MESSAGE_CHARS = 2_000;
  * 2 * CONCIERGE_MAX_TURNS = 48 calls. Still bounded: each follow-up carries
  * the same transcript plus one tool exchange, is capped by this same
  * `max_tokens`, and is skipped when the invocation is near `maxDuration`.
+ *
+ * The web_chat task's row (lib/ai/tasks.ts) sends this cap, under the field its model takes. The model itself
+ * (SD6) is that row's too: the turn route and the corpus runner both read it, so the corpus always plays the
+ * model the chat really uses.
  */
 export const CONCIERGE_MAX_REPLY_TOKENS = 500;
-
-/** The website chat's model (SD6): the turn route and the corpus runner read this ONE constant, so the
- *  corpus always plays the model the chat really uses. */
-export const CONCIERGE_MODEL = "gpt-4o-mini";

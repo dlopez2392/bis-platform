@@ -198,7 +198,7 @@ Migration **0087** (`record_summaries`):
 | `AI_PROVIDER` | new, optional | `openai` (default) or `fake` (§8.1). **Ignored when `VERCEL_ENV=production`**: production always uses OpenAI, so a stray value cannot silence production's AI or fake its output |
 | `AI_GATEWAY_OFF` | new, optional | `1` turns every gateway call off with no database read. The deploy-time brake for when the database itself is the problem; the Settings switch is the everyday one |
 
-Both new names go into `.env.example` with a comment. The e2e job sets `AI_PROVIDER=fake` for the app it builds. The job's existing `OPENAI_API_KEY` (ci.yml:320) stays for the web chat test, which the gateway does not touch.
+Both new names go into `.env.example` with a comment. The e2e job sets `AI_PROVIDER=fake` for the app it builds. The job's existing `OPENAI_API_KEY` (ci.yml:320) stays for the web chat test, which the gateway does not touch. *(Superseded by #362, 2026-11-13: the web chat answers through the gateway, its e2e test asserts the fake provider's reply, and the job's key is unused there.)*
 
 ## 7. Reads and the drawer
 

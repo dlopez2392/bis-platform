@@ -1,11 +1,10 @@
-import type { AiMessage } from "@/lib/ai/gateway";
+import type { AiTextMessage } from "@/lib/ai/gateway";
 import { m, type MessageKey } from "@/lib/messages";
 import type { SummaryInputs } from "./ai-summary-inputs";
 
 /** Item 8a-2 (spec 4.7; I5). Bump SUMMARY_PROMPT_VERSION with any change here: the digest carries it (plan deviation 12). */
 export const SUMMARY_PROMPT_VERSION = 1;
-export const SUMMARY_MODEL = "gpt-4o-mini";
-export const SUMMARY_MAX_TOKENS = 400;
+// The model and its 400-token cap are the record_summary task's row (lib/ai/tasks.ts).
 export const SUMMARY_TIMEOUT_MS = 10_000;
 export const SUMMARY_MAX_CHARS = 2000;
 
@@ -44,7 +43,7 @@ function modelFacts(i: SummaryInputs): SummaryInputs {
   };
 }
 
-export function summaryMessages(inputs: SummaryInputs, language: "en" | "es"): AiMessage[] {
+export function summaryMessages(inputs: SummaryInputs, language: "en" | "es"): AiTextMessage[] {
   return [
     { role: "system", content: [...RULES, LANGUAGE_LINE[language]].join("\n") },
     { role: "user", content: JSON.stringify({ facts: modelFacts(inputs) }) },

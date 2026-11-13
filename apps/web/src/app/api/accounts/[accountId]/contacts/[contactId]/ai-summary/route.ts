@@ -17,7 +17,8 @@ import { periodKeys } from "@/lib/ai/period";
 import { safeZone } from "@/lib/billing/billing-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { buildSummaryInputs, hasSomethingToSay, type SummaryContact } from "@/lib/record/ai-summary-inputs";
-import { SUMMARY_MAX_TOKENS, SUMMARY_MODEL, SUMMARY_TIMEOUT_MS } from "@/lib/record/ai-summary-prompt";
+import { AI_TASKS } from "@/lib/ai/tasks";
+import { SUMMARY_TIMEOUT_MS } from "@/lib/record/ai-summary-prompt";
 import { serveRecordSummary } from "@/lib/record/ai-summary-service";
 import { aiSummaryStamp, type AiSummaryResponse } from "@/lib/record/ai-summary-view";
 
@@ -78,6 +79,8 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
 
     const svc = serviceDb();
     const key = { accountId, contactId, language: locale };
+    // The stored paragraph names the model that wrote it: the task's fallback's, when that one answered.
+    let answeredBy: string = AI_TASKS.record_summary.primary.model;
     const body = await serveRecordSummary({
       // The cap's day and the budget's month in the ACCOUNT's zone, through the same safeZone aiComplete uses,
       // so this gate and the gateway's own read the same day (never the UTC day).
@@ -93,11 +96,15 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
       },
       cached: () => getRecordSummary(db, key),
       claim: (digest, f) => claimRecordSummary(svc, { ...key, digest, force: f }),
-      complete: (messages) => aiComplete(svc, {
-        accountId, feature: "record_summary", model: SUMMARY_MODEL, messages, maxTokens: SUMMARY_MAX_TOKENS,
-        timeoutMs: SUMMARY_TIMEOUT_MS, timezone: zone, language: locale, ref: `contact ${contactId}`,
-      }),
-      save: (s) => saveRecordSummary(svc, { ...key, ...s, model: SUMMARY_MODEL }),
+      complete: async (messages) => {
+        const completion = await aiComplete(svc, {
+          accountId, task: "record_summary", messages,
+          timeoutMs: SUMMARY_TIMEOUT_MS, timezone: zone, language: locale, ref: `contact ${contactId}`,
+        });
+        if (completion.ok) answeredBy = completion.model;
+        return completion;
+      },
+      save: (s) => saveRecordSummary(svc, { ...key, ...s, model: answeredBy }),
       release: (leaseId) => releaseRecordSummaryLease(svc, { ...key, leaseId }),
       now: () => new Date(),
       log: (line) => console.error(`record summary: account ${accountId} contact ${contactId}: ${line}`),

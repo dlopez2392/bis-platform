@@ -4,8 +4,8 @@
 // counter. A design where the client posts both hands the cap to whoever
 // wants to ignore it.
 //
-// ORDER IS THE POINT. Every cost check runs before the fetch to
-// api.openai.com, and a throwing counter REFUSES rather than continuing —
+// ORDER IS THE POINT. Every cost check runs before the model call (the AI
+// gateway, lib/ai/gateway.ts), and a throwing counter REFUSES rather than continuing —
 // the same asymmetry `api/voice/web/session` documents: a guard failing open
 // here costs an unbounded number of model calls, not one.
 //
@@ -41,6 +41,7 @@ import { NextResponse, after } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy imports in the handler below).
 import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow, BusinessStatusRow } from "@bis/db";
+import type { AiMessage } from "@/lib/ai/gateway";
 import { plainText } from "@/lib/concierge/plain-text";
 import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
@@ -52,7 +53,6 @@ import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
   CONCIERGE_IP_WINDOW_MS, CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY,
   CONCIERGE_ACCOUNT_WINDOW_MS, CONCIERGE_MAX_MESSAGE_CHARS,
-  CONCIERGE_MAX_REPLY_TOKENS, CONCIERGE_MODEL,
 } from "@/lib/concierge/guards";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
@@ -72,11 +72,10 @@ export const runtime = "nodejs";
  *  waits on a person, unlike the phone path's whole-call socket. */
 export const maxDuration = 30;
 
-/** Same model the rest of this repo's text work uses (`summary-service.ts`,
- *  `proposals/generate.ts`) — a receptionist answering questions from a
- *  facts block is not a reasoning workload. One constant (S-47b, SD6), so the
- *  corpus runner plays the model this chat really uses. */
-const MODEL = CONCIERGE_MODEL;
+/** The model is the web_chat task's row (lib/ai/tasks.ts): the same model the
+ *  rest of this repo's text work uses — a receptionist answering questions
+ *  from a facts block is not a reasoning workload — and the one row the corpus
+ *  runner reads too (S-47b, SD6), so it plays the model this chat really uses. */
 const MODEL_TIMEOUT_MS = 20_000;
 /** D-047's second call, the one that hears the capture's result. Shorter
  *  than the first: it writes one sentence from a known outcome. */
@@ -85,17 +84,15 @@ const FOLLOWUP_TIMEOUT_MS = 8_000;
  *  certain to time out only delays the fixed fallback line. */
 const FOLLOWUP_MIN_MS = 2_000;
 /** Everything this handler does must finish inside `maxDuration` (30s);
- *  three seconds are left for the reads and writes after the model. */
+ *  three seconds are left for the reads and writes after the model. The
+ *  follow-up's own gate read, when the web_chat task has one (aiGateMs: none
+ *  today, 3 s once its gates apply), comes out of this budget BEFORE the
+ *  follow-up's time limit is set, so the gate and the call fit together. */
 const TURN_BUDGET_MS = 27_000;
 // minors-1b item 6: the phone route's own shape (api/voice/incoming/route.ts) for telling "the read
 // failed" apart from "there is no row" — a failed read must answer effective=null directly, never fold
 // into row: null and hand it to effectiveStatusOrUnknown as if nothing had gone wrong.
 const FAILED = Symbol("failed");
-
-type ModelMessage = {
-  content?: string | null;
-  tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
-};
 
 type Db = ReturnType<typeof serviceDbType>;
 
@@ -200,6 +197,8 @@ export async function POST(
     listVoiceServices, ensureKnowledgeSnapshot, getKnowledgeSnapshot,
     getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount, readBillingStanding,
   } = await import("@bis/db");
+  // Lazy for the same reason: the gateway imports `@bis/db` at its module scope.
+  const { aiComplete, aiGateMs, aiReadiness } = await import("@/lib/ai/gateway");
 
   const ipHash = hashIp(clientIp(req.headers));
   const origin = req.headers.get("origin");
@@ -242,7 +241,7 @@ export async function POST(
       }
     }
 
-    // The business name, timezone and OpenAI key, resolved together and
+    // The business name, timezone and whether AI can answer at all, resolved together and
     // ALWAYS before anything that spends a visitor's budget or inflates a
     // counter. Minor (review of commit 129b43f): on turn 1 this used to run
     // AFTER `createConciergeConversation`, so a misconfigured deployment (a
@@ -257,7 +256,7 @@ export async function POST(
     // reach a nested function body, so a closure over `profile` re-widens to
     // `VoiceProfileRow | null` here.
     async function resolveAccountContext(accountId: string): Promise<
-      | { ok: true; businessName: string; timezone: string; apiKey: string }
+      | { ok: true; businessName: string; timezone: string }
       | { ok: false; response: Response }
     > {
       // The name the visitor is told, and the zone "are you open now" is
@@ -284,14 +283,17 @@ export async function POST(
         brandNeutral: null, brandCorners: null, brandType: null,
         brandMode: null, replyToEmail: null,
       } as Branding);
-      // The key is checked BEFORE the claim: a turn claimed against an
-      // unconfigured deployment would spend a visitor's budget on nothing.
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) {
-        log("refused: no OPENAI_API_KEY");
+      // The provider's key and the AI kill switch (AI_GATEWAY_OFF) are checked
+      // BEFORE the claim: a turn claimed against an unconfigured or switched-off
+      // deployment would spend a visitor's budget on nothing. The account's AI
+      // switch, the global one and the budget do not apply to the chat yet
+      // (lib/ai/tasks.ts: the web_chat task has no ledger feature).
+      const notReady = aiReadiness();
+      if (notReady) {
+        log(notReady === "no_key" ? "refused: no OPENAI_API_KEY" : "refused: AI_GATEWAY_OFF");
         return { ok: false, response: NextResponse.json({ error: "unavailable" }, { status: 503 }) };
       }
-      return { ok: true, businessName, timezone: acct.timezone, apiKey };
+      return { ok: true, businessName, timezone: acct.timezone };
     }
 
     let conversationId: string;
@@ -306,7 +308,6 @@ export async function POST(
     let closedDaysUnavailable = false;
     let businessName: string;
     let timezone: string;
-    let apiKey: string;
 
     if (!priorId) {
       // ── TURN 1 ──────────────────────────────────────────────────────────
@@ -391,7 +392,7 @@ export async function POST(
       // `resolveAccountContext` above.
       const ctx1 = await resolveAccountContext(profile.account_id);
       if (!ctx1.ok) return ctx1.response;
-      businessName = ctx1.businessName; timezone = ctx1.timezone; apiKey = ctx1.apiKey;
+      businessName = ctx1.businessName; timezone = ctx1.timezone;
 
       // Re-parsed here rather than trusted: the page sends `parseAttribution`
       // output, but this is a public POST and anything can send anything.
@@ -491,7 +492,7 @@ export async function POST(
       // thing that spends on this branch.
       const ctx2 = await resolveAccountContext(profile.account_id);
       if (!ctx2.ok) return ctx2.response;
-      businessName = ctx2.businessName; timezone = ctx2.timezone; apiKey = ctx2.apiKey;
+      businessName = ctx2.businessName; timezone = ctx2.timezone;
 
       // S-47c (C4, SD12, SD13): a stamped chat keeps its starting knowledge, its zone included. A read ERROR throws
       // into the route's catch below (503, no turn spent: this runs before the claim); a missing or unreadable
@@ -625,43 +626,35 @@ export async function POST(
       // answers `ended: true`.
       + budgetNotice(CONCIERGE_MAX_TURNS - claimed + 1);
 
-    const messages = [
+    const messages: AiMessage[] = [
       { role: "system", content: system },
-      ...conversation.transcript.map((t) => ({
-        role: t.role === "visitor" ? "user" : "assistant", content: t.text,
-      })),
+      ...conversation.transcript.map((t): AiMessage => (
+        t.role === "visitor" ? { role: "user", content: t.text } : { role: "assistant", content: t.text })),
       { role: "user", content: text },
     ];
 
-    // One chat-completions call. Throws on a transport failure, a non-2xx,
-    // or the timeout; the two callers below decide what a throw costs.
-    async function complete(
-      msgs: unknown[], timeoutMs: number, extra: Record<string, unknown> = {},
-    ): Promise<ModelMessage | undefined> {
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: MODEL, messages: msgs, tools: [CAPTURE_LEAD_TOOL],
-          // I2 (whole-branch review): with no bound here, gpt-4o-mini can
-          // emit up to 16,384 output tokens, and every reply is replayed
-          // into every LATER turn's transcript — unbounded, a single
-          // runaway completion multiplies across the rest of the
-          // conversation's calls. `concierge/guards.ts` states the
-          // arithmetic; `proposals/generate.ts` already answered this same
-          // question for its own OpenAI call.
-          max_tokens: CONCIERGE_MAX_REPLY_TOKENS,
-          ...extra,
-        }),
-        // A hung connection never rejects and never resolves; without this the
-        // invocation stalls until Vercel kills it and the visitor sees
-        // nothing. Same defence `summary-service.ts` already runs in
-        // production.
-        signal: AbortSignal.timeout(timeoutMs),
+    // One completion through the AI gateway (lib/ai/gateway.ts), the web_chat
+    // task: its model and its reply cap are that task's row (lib/ai/tasks.ts).
+    // I2 (whole-branch review): with no cap, the model can emit thousands of
+    // output tokens, and every reply is replayed into every LATER turn's
+    // transcript — `concierge/guards.ts` states the arithmetic. The gateway
+    // also holds the kill switch (the only one of its switches the chat obeys
+    // until the web_chat task has a ledger feature; lib/ai/tasks.ts). The
+    // time limit bounds the request: a hung connection never rejects and never
+    // resolves, and without it the invocation stalls until Vercel kills it.
+    // Throws on every refusal or failure (the kill switch, a transport
+    // failure, a non-2xx, the timeout), already logged by the gateway with ids
+    // only; the two callers below decide what a throw costs, as they did when
+    // this was a direct fetch.
+    const accountId = profile.account_id;
+    const ref = `conversation ${conversationId}`;
+    async function complete(msgs: AiMessage[], timeoutMs: number, toolChoice?: "none") {
+      const answer = await aiComplete(db, {
+        accountId, task: "web_chat", messages: msgs, tools: [CAPTURE_LEAD_TOOL],
+        ...(toolChoice ? { toolChoice } : {}), timeoutMs, timezone, language: locale, ref,
       });
-      if (!r.ok) throw new Error(`openai ${r.status}`);
-      const data = await r.json() as { choices?: { message?: ModelMessage }[] };
-      return data?.choices?.[0]?.message;
+      if (!answer.ok) throw new Error(`ai ${answer.reason}`);
+      return answer;
     }
 
     let reply = "";
@@ -671,9 +664,9 @@ export async function POST(
       const message = await complete(messages, MODEL_TIMEOUT_MS);
       // Plain text before it goes anywhere: the bubble shows markdown as
       // stray symbols, and the transcript is what the operator reads later.
-      reply = plainText(message?.content ?? "");
-      const call = message?.tool_calls?.find((c) => c.function?.name === "capture_lead");
-      toolArgs = call?.function?.arguments ?? null;
+      reply = plainText(message.text);
+      const call = message.toolCalls?.find((c) => c.name === "capture_lead");
+      toolArgs = call?.arguments ?? null;
       toolCallId = call?.id ?? "";
     } catch (e) {
       log("model call failed", { error: String(e) });
@@ -769,7 +762,7 @@ export async function POST(
     // happened, never to the pre-result words.
     if (toolArgs) {
       reply = "";
-      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
+      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt) - aiGateMs("web_chat");
       const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
       if (followupTimeout >= FOLLOWUP_MIN_MS) {
         const result = withDroppedNote(captureResult(outcome), dropped, "web");
@@ -778,14 +771,11 @@ export async function POST(
             ...messages,
             {
               role: "assistant", content: null,
-              tool_calls: [{
-                id: toolCallId, type: "function",
-                function: { name: "capture_lead", arguments: toolArgs },
-              }],
+              toolCalls: [{ id: toolCallId, name: "capture_lead", arguments: toolArgs }],
             },
-            { role: "tool", tool_call_id: toolCallId, content: JSON.stringify(result) },
-          ], followupTimeout, { tool_choice: "none" });
-          reply = plainText(message?.content ?? "");
+            { role: "tool", toolCallId, content: JSON.stringify(result) },
+          ], followupTimeout, "none");
+          reply = plainText(message.text);
         } catch (e) {
           log("capture follow-up failed", { conversationId, filed, error: String(e) });
         }
@@ -806,7 +796,7 @@ export async function POST(
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
     const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
-    // I2, second half: `max_tokens: CONCIERGE_MAX_REPLY_TOKENS` (500) above
+    // I2, second half: the web_chat task's cap, CONCIERGE_MAX_REPLY_TOKENS (500),
     // already bounds a completion to roughly 2,000-2,500 characters of
     // English, so this slice does not CREATE the bound — it TIGHTENS it,
     // from that ~2,500 ceiling down to the exact CONCIERGE_MAX_MESSAGE_CHARS

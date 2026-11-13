@@ -27,12 +27,12 @@ describe("readCallForCard on the gateway (spec 3.2, choice I1)", () => {
     expect(await readCallForCard(transcript, GATE)).toEqual(NO_READING);
   });
 
-  it("asks for call_card in JSON mode, 300 tokens, 10 s, naming the call in its log ref (mutation: feature 'call_summary' -> FAILS)", async () => {
+  it("asks for the call_card task (its row: JSON mode, 300 tokens), 10 s, naming the call in its log ref (mutation: task 'call_summary' -> FAILS)", async () => {
     gw.aiComplete.mockResolvedValue({ ok: true, text: JSON.stringify({ reason: null, quote: null }), usage: { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 } });
     await readCallForCard(transcript, { ...GATE, label: "finishCall call1" });
     expect(gw.aiComplete).toHaveBeenCalledWith(GATE.db, expect.objectContaining({
-      accountId: "acct", feature: "call_card", model: "gpt-4o-mini", responseFormat: { type: "json_object" },
-      maxTokens: 300, timeoutMs: 10_000, timezone: "America/Chicago", ref: "finishCall call1",
+      accountId: "acct", task: "call_card",
+      timeoutMs: 10_000, timezone: "America/Chicago", ref: "finishCall call1",
     }));
   });
 });

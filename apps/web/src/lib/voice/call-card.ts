@@ -215,13 +215,10 @@ export async function readCallForCard(
   try {
     const answer = await aiComplete(opts.db, {
       accountId: opts.accountId,
-      feature: "call_card",
-      model: "gpt-4o-mini",
-      // JSON mode: generate.ts's reason — without it the model routinely
-      // wraps JSON in a code fence, and this parse has no fallback of its
-      // own beyond "nothing".
-      responseFormat: { type: "json_object" },
-      maxTokens: 300,
+      // The model, JSON mode and the 300-token cap are the task's row (lib/ai/tasks.ts). JSON mode:
+      // generate.ts's reason — without it the model routinely wraps JSON in a code fence, and this parse has
+      // no fallback of its own beyond "nothing".
+      task: "call_card",
       messages: [
         { role: "system", content: opts.protectIds ? `${SYSTEM} ${ID_RULE}` : SYSTEM },
         { role: "user", content: transcript.map((e) => `${e.role}: ${e.text}`).join("\n") },
