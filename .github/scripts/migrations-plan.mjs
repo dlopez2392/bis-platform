@@ -47,6 +47,10 @@ const PIPELINE = [
   /^\.github\/workflows\//,
   /^\.github\/scripts\/(ci-|migrations-)/,
   /^packages\/db\/supabase\/(parity|bootstrap)\//,
+  // [db.migrations] enabled and major_version decide whether and how the CI
+  // stacks apply migrations. (Not packages/db/package.json: a dependency bump
+  // in a schema PR is ordinary.)
+  /^packages\/db\/supabase\/config\.toml$/,
   /^packages\/db\/src\/(migrations|ci)\//,
 ];
 
@@ -63,6 +67,15 @@ function git(args) {
 }
 
 // ---- the branch ------------------------------------------------------------
+
+// Every path below is relative to the repository root. Started from a
+// subdirectory, the pathspec would match nothing and the check would pass on
+// a branch it never read.
+try {
+  process.chdir(git(["rev-parse", "--show-toplevel"]).trim());
+} catch {
+  fail("this is not inside a git checkout.");
+}
 
 // actions/checkout fetches one commit; the merge base needs main's history.
 try {
@@ -106,7 +119,8 @@ for (const c of migrationChanges) {
   if (c.status === "A") {
     if (name.endsWith(".sql")) added.push(c.path);
     continue;
-  }  const what = c.status.startsWith("R") ? `renames it to ${c.to}`
+  }
+  const what = c.status.startsWith("R") ? `renames it to ${c.to}`
     : c.status === "M" ? "modifies it"
     : c.status === "D" ? "deletes it"
     : c.status === "T" ? "changes its type"
@@ -120,9 +134,13 @@ for (const c of migrationChanges) {
  * The SQL with every comment, string literal, quoted identifier and
  * dollar-quoted body replaced by spaces (newlines kept), so what is left is
  * what psql reads as statements, at the same offsets and line numbers.
+ * `keepLineComments` leaves `--` comments in (to find a real `-- contract:`
+ * line). `doBodies` are the [start, end) offsets of each dollar-quoted body
+ * that directly follows DO: an anonymous block, whose statements run.
  */
-function mask(sql) {
+function mask(sql, { keepLineComments = false } = {}) {
   const out = sql.split("");
+  const doBodies = [];
   const blank = (from, to) => { for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " "; };
   const isIdent = (ch) => ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
   let i = 0;
@@ -132,7 +150,7 @@ function mask(sql) {
     if (ch === "-" && next === "-") {
       const end = sql.indexOf("\n", i);
       const stop = end < 0 ? sql.length : end;
-      blank(i, stop);
+      if (!keepLineComments) blank(i, stop);
       i = stop;
     } else if (ch === "/" && next === "*") {
       let depth = 1;
@@ -173,27 +191,66 @@ function mask(sql) {
       if (!tag) { i++; continue; }
       const close = sql.indexOf(tag, i + tag.length);
       const stop = close < 0 ? sql.length : close + tag.length;
+      // What psql has read so far: DO followed by this body is a statement.
+      if (close >= 0 && /(?:^|[^A-Za-z0-9_$])do\s*$/i.test(out.slice(Math.max(0, i - 64), i).join(""))) {
+        doBodies.push([i + tag.length, close]);
+      }
       blank(i, stop);
       i = stop;
     } else {
       i++;
     }
   }
-  return out.join("");
+  return { text: out.join(""), doBodies };
 }
 
 const lineAt = (text, offset) => text.slice(0, offset).split("\n").length;
 
 const TRANSACTION_CONTROL = /^(begin|commit|rollback|abort|end|start\s+transaction|savepoint|release|prepare\s+transaction|commit\s+prepared|rollback\s+prepared)\b/i;
+/**
+ * What removes or renames something the app on main may read. Each finds its
+ * first match in the text with DO bodies put back (their statements run).
+ * TRUNCATE only where a statement can start: the word also appears in GRANT
+ * and REVOKE privilege lists, which change no data.
+ */
 const CONTRACT = [
-  ["DROP TABLE", /\bdrop\s+table\b/i],
-  ["DROP COLUMN", /\bdrop\s+column\b/i],
-  ["RENAME", /\brename\b/i],
+  ["DROP TABLE", (t) => /\bdrop\s+table\b/i.exec(t)?.index],
+  ["DROP COLUMN", (t) => alterTableDrop(t)],
+  ["DROP VIEW", (t) => /\bdrop\s+(?:materialized\s+)?view\b/i.exec(t)?.index],
+  ["DROP FUNCTION", (t) => /\bdrop\s+function\b/i.exec(t)?.index],
+  ["DROP PROCEDURE", (t) => /\bdrop\s+procedure\b/i.exec(t)?.index],
+  ["RENAME", (t) => /\brename\b/i.exec(t)?.index],
+  ["TRUNCATE", (t) => {
+    const m = /(?:^|;|\b(?:begin|then|else|loop))\s*(truncate)\b/i.exec(t);
+    return m ? m.index + m[0].length - m[1].length : undefined;
+  }],
 ];
+/**
+ * The first DROP inside an ALTER TABLE statement that can remove a column:
+ * DROP COLUMN, or a bare `DROP x` / `DROP IF EXISTS x` (COLUMN is optional).
+ * DROP CONSTRAINT, DEFAULT, NOT NULL, IDENTITY and EXPRESSION remove no column.
+ */
+function alterTableDrop(text) {
+  let start = 0;
+  for (const statement of text.split(";")) {
+    const alter = /\balter\s+table\b/i.exec(statement);
+    if (alter) {
+      const drops = /\bdrop\b\s*/gi;
+      drops.lastIndex = alter.index;
+      for (let m = drops.exec(statement); m; m = drops.exec(statement)) {
+        const rest = statement.slice(m.index + m[0].length);
+        if (!/^(?:constraint|default|not\s+null|identity|expression)\b/i.test(rest)) return start + m.index;
+      }
+    }
+    start += statement.length + 1;
+  }
+  return undefined;
+}
+/** A contract line: a real `--` comment at the start of a line, with a reason. */
 const CONTRACT_REASON = /^[ \t]*--[ \t]*contract:[ \t]*\S/im;
 
 function checkSql(file, sql) {
-  const masked = mask(sql);
+  const { text: masked, doBodies } = mask(sql);
 
   // Statements as psql sends them, each with the offset of its first word. A
   // SQL-standard function body (BEGIN ATOMIC ... END) holds `;`s of its own:
@@ -244,11 +301,26 @@ function checkSql(file, sql) {
     }
   }
 
-  if (!CONTRACT_REASON.test(sql)) {
-    for (const [kind, pattern] of CONTRACT) {
-      const m = pattern.exec(masked);
-      if (m) {
-        refuse(`${file}:${lineAt(sql, m.index)}: ${kind} without a "-- contract: <why>" line. Production gets a migration BEFORE the app that needs it deploys, so the app on main must keep working once it is applied: say why in a "-- contract:" line (for example, nothing on main reads it any more).`);
+  // It changes what a backslash in a plain string means, so it can hide a
+  // statement from this lexer and from psql's. Refused wherever it appears.
+  const scs = /standard_conforming_strings/i.exec(sql);
+  if (scs) {
+    refuse(`${file}:${lineAt(sql, scs.index)}: standard_conforming_strings changes how strings are read, which can hide statements from this check and from psql. A migration never sets it.`);
+  }
+
+  // Contract changes are looked for in the statements psql runs, DO blocks'
+  // included (their bodies put back, with their own comments and strings
+  // blanked); the reason in a real `--` comment line, never one inside a
+  // string or a body. One reason line covers the whole file.
+  let contractText = masked;
+  for (const [from, to] of doBodies) {
+    contractText = contractText.slice(0, from) + mask(sql.slice(from, to)).text + contractText.slice(to);
+  }
+  if (!CONTRACT_REASON.test(mask(sql, { keepLineComments: true }).text)) {
+    for (const [kind, find] of CONTRACT) {
+      const at = find(contractText);
+      if (at !== undefined) {
+        refuse(`${file}:${lineAt(sql, at)}: ${kind} without a "-- contract: <why>" line. Production gets a migration BEFORE the app that needs it deploys, so the app on main must keep working once it is applied: say why in a "-- contract:" line (for example, nothing on main reads it any more).`);
       }
     }
   }

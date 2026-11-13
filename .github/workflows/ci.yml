@@ -81,9 +81,10 @@ name: CI
 #           any more). Bash and psql only.
 #     migrations-plan (2026-11-13) no credential at all: refuses a branch that
 #           changes a migration already on main, adds a numbered one, adds SQL
-#           the runner cannot apply in one transaction, drops or renames
-#           without a `-- contract:` reason, or adds a migration AND changes
-#           the pipeline. Git and node only, beside everything else.
+#           the runner cannot apply in one transaction, removes or renames
+#           something the app may read without a `-- contract:` reason, or
+#           adds a migration AND changes the pipeline. Git and node only,
+#           beside everything else.
 #     e2e-shard  four runners, each its own stack, seeded (`ci:seed:local`:
 #           "Test Client One" and the rows the specs assume), then its quarter
 #           of the Playwright journey (`--shard=N/4`). Starts beside verify,
@@ -432,7 +433,8 @@ jobs:
   # fetched as ci-docs-only.sh fetches it) and node's built-ins (no install).
   # Its own part, not a step of e2e-migrations, because that job holds the
   # CI project's DB URL on a later step. It needs nothing and runs beside the
-  # shards, about a minute against their several, so it makes no push slower.
+  # shards, about 12 seconds of work against their several minutes, so it
+  # makes no push slower.
   migrations-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
