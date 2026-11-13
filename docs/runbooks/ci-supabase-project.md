@@ -264,6 +264,33 @@ CI first, then production.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
+**The migration runner (since 2026-11-13; nothing in CI calls it yet).**
+`.github/scripts/migrations-apply.sh --target <bis-ci|production> [--dry-run|--check] FILE...`
+applies the timestamped files a branch adds. The pipeline's PR 4 will run it
+against this project, and PR 5 against production behind the owner's approval.
+- **It refuses before writing anything** when:
+  - a file on main is missing from the target's history (behind main);
+  - an applied file's content changed;
+  - a pending file's version is taken by another name;
+  - on bis-ci, a pending file is older than a version already there;
+  - on production, a pending file is not on bis-ci with the same content.
+- **How it applies.** Each pending file runs in ONE transaction: the history
+  table locked, `lock_timeout` 5 s, `statement_timeout` 10 min, terse errors.
+  The row it records is (version, slug, [the file's exact text, a runner
+  marker]).
+- **When a file fails.** It leaves neither its changes nor its row; files
+  before it stay applied. Nothing is retried.
+- **Which rows count** (the production rows are the three forms in step 5
+  above):
+  - on production, a numbered file is found by its pair, its whole stem, or
+    its slug alone (only if exactly one such row has it), and a timestamped
+    file by its pair or its whole stem;
+  - on bis-ci, only by the pair.
+- **Content check.** Only the runner's own rows (the marker) have content to
+  compare.
+- **Targets.** `--target production` runs only inside GitHub Actions; by
+  hand, production is still step 5's MCP procedure.
+
 **What every push refuses before anything is applied (since 2026-11-13).**
 The `migrations-plan` part of the `e2e` check
 (`.github/scripts/migrations-plan.mjs`) holds no credential and reads only git.

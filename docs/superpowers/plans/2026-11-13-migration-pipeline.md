@@ -228,8 +228,8 @@ bash is fragile). `migrations-plan` is its own credential-free PART of the `e2e`
 
 **PR 3 — The runner** (HIGH, ~750). `.github/scripts/ci-db-target.sh` (shared target rules: `bis-ci`,
 `production`, `loopback`), `migrations-apply.sh` (D2/D3 steps; `--dry-run` lists pending and applies nothing),
-`ci-migrations-applied.sh --target production` support with D1's three row forms. Nothing in CI calls the runner
-yet. Its pending set uses the same cover rule, so no legacy file is ever re-applied on production.
+D1's three row forms (built: in the runner itself, with `--check` as the history gate for PRs 4-5, instead of a
+production mode in `ci-migrations-applied.sh`; runner rows carry a marker, so only they are digest-compared). Not in CI.
 - Tests (production matching, fake psql, rows shaped like A3's evidence): a legacy file covered by a slug-only
   row; by a stem row; a slug-only row whose slug two rows share → refused as ambiguous; a timestamped file
   covered by a hand-applied stem row and by the runner's pair, never by its slug alone. Probe: accept slug-only
