@@ -34,6 +34,7 @@
 // path ignores both and re-resolves the account itself.
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
+import { loggablePhone } from "@/lib/loggable-error";
 import {
   actionOrigin, answer, bridgeAfterFailure, screenActionUrl, screenGoodbyeXml, screenSecondAskXml, xmlResponse,
   type Languages,
@@ -62,7 +63,7 @@ async function decide(
   try {
     const rawAccount = query.get("a") ?? "";
     const accountLabel = ACCOUNT_ID.test(rawAccount) ? rawAccount : "unknown";
-    const who = `for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${accountLabel}`;
+    const who = `for ${calledE164}, caller ${loggablePhone(callerE164)}, accountId ${accountLabel}`;
     if (!calledE164) {
       console.log("texml screen: no called number on the keypress request — bridging");
       return await answer(null, callerE164, origin, authenticated, { skipScreen: true, skipOwnerLine: true });
