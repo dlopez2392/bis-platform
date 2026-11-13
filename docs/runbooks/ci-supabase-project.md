@@ -56,11 +56,13 @@ In CI, and in the CI-only tools, a check names the CI project by
   loopback; both refuse the migration check's `BIS_CI_SUPABASE_REF` and
   `BIS_CI_SUPABASE_DB_URL` anywhere in job scope. Tested by
   `apps/web/ci/ci-target-guard.test.ts`.
-- `.github/scripts/ci-migrations-applied.sh` (e2e's read of this project):
-  refuses production's ref anywhere, and any DB URL that is not
-  `postgres.<ref>` on a `*.pooler.supabase.com` host, before psql sees it,
-  then reads in one read-only transaction sent as one command (safe through
-  the 6543 transaction pooler too).
+- `.github/scripts/migrations-apply.sh --target bis-ci` (CI's one write to
+  this project, `migrations-bis-ci`; `ci-db-target.sh`): refuses production's
+  ref anywhere, and any DB URL that is not `postgres.<ref>` on a
+  `*.pooler.supabase.com` host, port 5432, before psql sees it. Its
+  `--require-empty` read guards `ci-project-setup.yml`'s `rebuild-push`.
+  (`ci-migrations-applied.sh`, the read-only check it replaced, retired in
+  PR 4.)
 - `packages/db/src/ci/target.ts` (`assertCiTarget`), inside `db:push:ci`,
   `db:migrations:ci`, `ci:sql` and `ci:seed`: a narrower check of the ref, the
   API URL and the DB URL only (refuses production's ref, a URL or DB user for
@@ -392,7 +394,7 @@ and a migration pushed to the CI project no longer turns other branches'
 `verify` red, because its db suite ran here. Neither job runs here any more,
 so the `e2e` check carries the gate, through its `migrations-bis-ci` part
 (since 2026-11-13; until then a read-only `e2e-migrations` part ran
-`.github/scripts/ci-migrations-applied.sh` on every push). For a branch that
+`ci-migrations-applied.sh`, retired, on every push). For a branch that
 adds a migration it must SUCCEED: its one step applies the branch's files and
 then runs `migrations-apply.sh --target bis-ci --check`, which fails naming
 each file of the branch this project does not hold, by the pair (version,

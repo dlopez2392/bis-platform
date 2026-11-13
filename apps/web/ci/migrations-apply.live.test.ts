@@ -120,6 +120,23 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh applies each file in one transac
     expect(history(db)).toBe(`20261114093000|widgets|${md5(A_SQL)}|${MARKER}`);
   });
 
+  // The rebuild-push guard's SQL against a real Postgres: an absent table is
+  // not a parse error, an empty one is 0, one row refuses.
+  it("--require-empty passes an absent or empty history and refuses one with a row", () => {
+    const db = scratchDatabase();
+    const dir = tree({ [A]: A_SQL });
+    const empty = apply(dir, "local-as-bis-ci", [], { BIS_MIGRATIONS_DB_URL: db }, ["--require-empty"]);
+    expect(empty.status, empty.output).toBe(0);
+    sql(db, "drop schema supabase_migrations cascade");
+    const absent = apply(dir, "local-as-bis-ci", [], { BIS_MIGRATIONS_DB_URL: db }, ["--require-empty"]);
+    expect(absent.status, absent.output).toBe(0);
+    const live = scratchDatabase();
+    expect(apply(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: live }).status).toBe(0);
+    const refused = apply(dir, "local-as-bis-ci", [], { BIS_MIGRATIONS_DB_URL: live }, ["--require-empty"]);
+    expect(refused.status, refused.output).toBe(1);
+    expect(refused.output).toMatch(/history holds 1 row\(s\)/);
+  });
+
   it("a second run applies nothing", () => {
     const db = scratchDatabase();
     const dir = tree({ [A]: A_SQL });

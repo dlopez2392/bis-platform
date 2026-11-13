@@ -2,8 +2,8 @@
 // (docs/superpowers/plans/2026-11-13-migration-pipeline.md, D2; owner answer
 // Q1, 2026-11-13: bis-ci gets a migration when the PR is marked ready.)
 //
-// ci.yml runs on `push` only (never `pull_request`, so no fork ever runs it),
-// so the push carries no PR. migrations-bis-ci asks the REST API which pull
+// ci.yml runs on `push` or `workflow_dispatch` (never `pull_request`, so no
+// fork ever runs it), and neither event carries a PR. migrations-bis-ci asks the REST API which pull
 // requests have this commit, with the job's own GITHUB_TOKEN (read-only:
 // the job grants `pull-requests: read`), and passes only when one is open,
 // not a draft, into main, from this repository, with this branch as its head

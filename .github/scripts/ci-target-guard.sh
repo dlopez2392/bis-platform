@@ -149,7 +149,8 @@ done
 # --- 1b. before the local stack: no Supabase value at all ----------------------
 if [ "$mode" = "before-local-stack" ]; then
   for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
-    SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL BIS_CI_SUPABASE_DB_URL     BIS_MIGRATIONS_DB_URL BIS_MIGRATIONS_BISCI_DB_URL; do
+    SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL BIS_CI_SUPABASE_DB_URL \
+    BIS_MIGRATIONS_DB_URL BIS_MIGRATIONS_BISCI_DB_URL; do
     if [ -n "${!name:-}" ]; then
       fail "$name is set before this job's local Supabase stack exists. verify and e2e each run on a stack they start inside their own runner and hold no cloud project's value; the only CI-project values ci.yml may read are migrations-bis-ci's BIS_CI_SUPABASE_REF and BIS_MIGRATIONS_DB_URL, in its one apply step's own env, never the job's or the workflow's."
     fi

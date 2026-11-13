@@ -625,7 +625,7 @@ describe("ci.yml's jobs", () => {
     const lines = job("migrations-bis-ci");
     expect(jobNeeds(lines)).toEqual(["migrations-plan", "verify-db", "verify-app", "e2e-shard"]);
     expect(jobValue(lines, "if")).toBe(
-      "${{ always() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success'"
+      "${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success'"
       + " && (github.ref == 'refs/heads/main' || (needs.migrations-plan.outputs.added != ''"
       + " && needs.verify-db.result == 'success' && needs.verify-app.result == 'success' && needs.e2e-shard.result == 'success')) }}",
     );
@@ -1086,6 +1086,14 @@ describe("ci-project-setup.yml scopes the service-role secret to the dispatch th
     const run = stepBlock(setupLines, "- name: Run ${{ inputs.step }}").map((l) => l.trim());
     const cases = run.filter((l) => /^[a-z|-]+\)$/.test(l));
     expect(cases.filter((c) => /push/.test(c))).toEqual(["rebuild-push-dry-run)", "rebuild-push)"]);
+    // Each push is behind the runner's read-only emptiness check, joined by
+    // `&&` so a refusal stops it (migrations-apply.test.ts pins what the check
+    // refuses; review of #369).
+    const guard = 'BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci --require-empty';
+    expect(run.filter((l) => /db:push:ci/.test(l))).toEqual([
+      `${guard} && pnpm --filter @bis/db db:push:ci --dry-run ;;`,
+      `${guard} && pnpm --filter @bis/db db:push:ci ;;`,
+    ]);
     expect(run).toContain('BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci $dry "${files[@]}" ;;');
   });
 });

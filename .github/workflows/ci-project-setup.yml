@@ -142,11 +142,13 @@ jobs:
             # A rebuilt, EMPTY project only (runbook section 8): the runner
             # applies timestamped files a branch adds, never the legacy
             # numbered ones, so a new project still gets main's files from
-            # the CLI. Never on a live project: a new migration is `apply`.
+            # the CLI. Never on a live project: the runner first reads the
+            # history read-only and refuses unless it is absent or empty (a
+            # new migration is `apply`).
             rebuild-push-dry-run)
-              pnpm --filter @bis/db db:push:ci --dry-run ;;
+              BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci --require-empty && pnpm --filter @bis/db db:push:ci --dry-run ;;
             rebuild-push)
-              pnpm --filter @bis/db db:push:ci ;;
+              BIS_MIGRATIONS_DB_URL="$SUPABASE_DB_URL" bash .github/scripts/migrations-apply.sh --target bis-ci --require-empty && pnpm --filter @bis/db db:push:ci ;;
             # The migration runner (2026-11-13, plan PR 4), the one applier
             # of bis-ci's history, on the files the dispatched branch adds
             # (migrations-plan.mjs, which also refuses what is unsafe). On

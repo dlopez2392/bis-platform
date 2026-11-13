@@ -1,5 +1,6 @@
-# Target rules for the migration runner and the bis-ci history check (sourced
-# by migrations-apply.sh and ci-migrations-applied.sh; plan
+# Target rules for the migration runner (sourced by migrations-apply.sh, whose
+# --check is the bis-ci history check since ci-migrations-applied.sh retired
+# in PR 4; plan
 # docs/superpowers/plans/2026-11-13-migration-pipeline.md, D2, D3, D6).
 #
 # `db_target <target>` checks the environment for that target BEFORE anything

@@ -403,3 +403,40 @@ describe("migrations-apply.sh decides which files are applied by D1's rules", ()
     expect(done.status, done.output).toBe(0);
   });
 });
+
+// Review of #369 (2026-11-13): ci-project-setup.yml's rebuild-push runs the
+// Supabase CLI's `db push`, which writes history rows the runner cannot
+// compare. It is for a rebuilt, EMPTY project only, so the dispatch first
+// asks the runner, read-only, whether bis-ci's history is absent or empty, and
+// refuses a live project, pointing at `apply`.
+describe("migrations-apply.sh --require-empty: rebuild-push runs only on an empty project", () => {
+  it("passes when the history table is absent or empty, in one read-only transaction, writing nothing", () => {
+    const r = run(["--target", "local-as-bis-ci", "--require-empty"], asLocalBisCi("0\n"));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/history is empty or absent: a rebuild may push/);
+    expect(r.log).toHaveLength(1);
+    expect(r.log[0]).toMatch(/begin transaction read only;.*to_regclass\('supabase_migrations\.schema_migrations'\) is null then 0/);
+    expect(r.log[0]).not.toContain("[[-f]]");
+  });
+
+  it("refuses a project whose history holds rows, saying to use apply (mutation: pass any count → FAILS)", () => {
+    const r = run(["--target", "local-as-bis-ci", "--require-empty"], asLocalBisCi("117\n"));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*history holds 117 row\(s\): rebuild-push is for a rebuilt, EMPTY project only.*apply-dry-run then apply/);
+  });
+
+  it.each([
+    ["a read that fails", { FAKE_PSQL_EXIT: "2" }, /::error::Could not read/],
+    ["an answer that is not a count", { FAKE_TARGET_ROWS: "oops" }, /::error::.*not a row count/],
+    ["an empty answer", { FAKE_TARGET_ROWS: "" }, /::error::.*not a row count/],
+  ])("fails closed on %s, never reading it as empty", (_label, extra, pattern) => {
+    const r = run(["--target", "local-as-bis-ci", "--require-empty"], { ...asLocalBisCi("0\n"), ...extra });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(pattern);
+  });
+
+  it("takes no files beside it", () => {
+    const r = run(["--target", "local-as-bis-ci", "--require-empty", `${DIR}/${NEW}`], asLocalBisCi("0\n"));
+    expect(r.status, r.output).toBe(2);
+  });
+});

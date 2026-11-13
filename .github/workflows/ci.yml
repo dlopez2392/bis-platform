@@ -452,7 +452,7 @@ jobs:
   # rolls back its file's transaction, so nothing is left half-applied.
   migrations-bis-ci:
     needs: [migrations-plan, verify-db, verify-app, e2e-shard]
-    if: ${{ always() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success' && (github.ref == 'refs/heads/main' || (needs.migrations-plan.outputs.added != '' && needs.verify-db.result == 'success' && needs.verify-app.result == 'success' && needs.e2e-shard.result == 'success')) }}
+    if: ${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success' && (github.ref == 'refs/heads/main' || (needs.migrations-plan.outputs.added != '' && needs.verify-db.result == 'success' && needs.verify-app.result == 'success' && needs.e2e-shard.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

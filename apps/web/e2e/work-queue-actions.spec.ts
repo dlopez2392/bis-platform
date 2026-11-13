@@ -25,7 +25,7 @@ loadEnv({ path: ".env.local" });
  * 2026-11-11, per the plan's Global Constraints and Orchestrator checklist). A local run against bis-ci
  * fails before this spec's first assertion: every seed write below names a column bis-ci's `calls` and
  * `ai_acts` tables do not yet have. CI's `e2e` job is separately blocked by the same migration-history
- * check (`ci-migrations-applied.sh`) until the orchestrator pushes 0113 then 0114. This file is written
+ * check (then `ci-migrations-applied.sh`, retired 2026-11-13) until the orchestrator pushes 0113 then 0114. This file is written
  * and typechecked now, per plan Task 7, and is not run until both land (see this file's own header and
  * the plan's Orchestrator checklist).
  *

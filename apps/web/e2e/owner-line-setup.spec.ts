@@ -32,7 +32,7 @@ loadEnv({ path: ".env.local" });
  * so a failure early in the file skips the rest rather than asserting against whatever state it left behind.
  *
  * Cannot run yet (orchestrator note): migration 0115 is not in bis-ci's history until after 2026-11-11, and the
- * e2e job's own migration check (`ci-migrations-applied.sh`) refuses the branch before any spec runs, local or CI
+ * e2e job's own migration check (then `ci-migrations-applied.sh`, retired 2026-11-13) refuses the branch before any spec runs, local or CI
  * (`docs/runbooks/ci-supabase-project.md` section 9). This file is written and typechecked now; the orchestrator
  * runs `pnpm --filter web exec playwright test e2e/owner-line-setup.spec.ts` once 0115 is on bis-ci, after checking
  * for an in-progress `screenshots.yml` run (CLAUDE.md — a local run shares bis-ci's seeded account with it).

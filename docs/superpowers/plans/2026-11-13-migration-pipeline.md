@@ -49,7 +49,8 @@ stay as they are, frozen.
   is the slug alone and exactly one slug-only row has that name (A3 is false: 61 production rows are slug-only).
   Never by version alone: an MCP row's version is its apply time and could equal a new file's version; a
   version taken by another name is refused ("rename the file").
-- `ci-migrations-applied.sh` moves to the pair rule and gains a content check for timestamped files (D2).
+- `ci-migrations-applied.sh` moved to the pair rule (PR 1), then RETIRED in PR 4: the runner's `--check`
+  (pair, plus the content digest of runner-applied files) is the bis-ci history check now.
 - Refusal of a new numbered file, twice: a directory test (exactly 116 legacy files, `0001`..`0116`
   contiguous, no other 4-digit name, no duplicate version, every other name 14 digits that parse as a UTC time
   no later than tomorrow), and the plan job (D2) refusing an ADDED file with a 4-digit prefix.
@@ -58,8 +59,10 @@ stay as they are, frozen.
 **D2. bis-ci, automatically.** A new job in `ci.yml`, `migrations-bis-ci`, applies the branch's new migration
 files to bis-ci when ALL hold: the push is not to `main`; `verify` and every `e2e-shard` passed on this SHA
 (the migration has been built twice from the files and run under the whole app: the Review's "after the e2e
-tests"); an open, non-draft PR has this SHA as its head (REST `commits/{sha}/pulls`; a draft or no PR fails the
-job with "mark the PR ready, then Re-run failed jobs", so a re-run re-checks it). Before it, a credential-free
+tests"); an open, ready (non-draft) PR INTO MAIN, from this repository and this branch, has this SHA as its head
+(REST `commits/{sha}/pulls`; a draft or no PR fails the job with "mark the PR ready, then Re-run failed jobs", so a
+re-run re-checks it). A stacked PR (base another branch) is not into main, so it fails too: after retargeting it
+to main, re-run the failed jobs. Before it, a credential-free
 `migrations-plan` job (git only, main's history fetched by the script itself, diff against the merge base) refuses:
 any modified, deleted or renamed file on main; an added 4-digit name; top-level transaction control, `concurrently`,
 `vacuum`, any unquoted backslash, `:bis_mig_`, `standard_conforming_strings` (psql runner, D3); DROP TABLE / COLUMN
@@ -98,8 +101,9 @@ commit SHA, then bash and psql), and runs `migrations-apply.sh --target producti
    a public log;
 4. run parity (D4), then the full-tree history check against production (every file in the branch, by D1's
    pair rule, plus the digest for timestamped files).
-- ORDER guarantee: the history gate is `e2e-migrations` (existing name, inside the required `e2e`), now
-  `needs: [migrations-plan, migrations-bis-ci, migrations-production]`, `if: always()`. Green only when bis-ci
+- ORDER guarantee (amended by PR 4): `e2e-migrations` is retired. The history gate is `migrations-bis-ci`'s own
+  `--check` (in its one secret step, after the apply) plus, from PR 5, `migrations-production`, both read by the
+  `e2e` gate as due parts (`ci-gate.sh` `NAME@DUE`: success when due, skipped when not). Green only when bis-ci
   holds every file of the branch (pair and digest) AND, if the branch adds migrations, `migrations-production`
   succeeded in this run (or, after PR 6, an earlier success on identical migration files). The ruleset already
   requires `e2e` on the head SHA, so a branch cannot merge, and so cannot deploy, before production holds its
@@ -146,7 +150,8 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
   (`if exists` throughout, so it is a no-op where the original never landed); until then the gate's notice
   names the orphan on every run.
 
-**D6. Security.**
+**D6. Security.** (The bis-ci half of D6's CLAUDE.md wording landed in PR 4: CI writes to bis-ci through
+`migrations-bis-ci`; production stays by hand until PR 5.)
 - Blast radius: `PROD_MIGRATIONS_DB_URL` is the `postgres` role (full DDL and data). It exists in ONE
   environment, is released only after danlo's approval, reaches ONE step's env, and the job runs no installed
   code. Rotation: reset production's database password and update the secret. Today no secret holds a
@@ -245,11 +250,14 @@ production mode in `ci-migrations-applied.sh`; runner rows carry a marker, so on
   digest compare always true → "edited file refused" fails; delete the production-ref refusal from the bis-ci
   target → its refusal test fails; drop `VERBOSITY terse` → a test asserting no `DETAIL:` line fails.
 
-**PR 4 — bis-ci applied by CI** (HIGH, ~450). `migrations-bis-ci` job (D2), `e2e-migrations` needs it and
-reads the digest, `ci-project-setup.yml` `push`/`push-dry-run` replaced by the runner (`apply`/`apply-dry-run`)
-so one applier writes bis-ci's history, `ci-workflow.test.ts` pins (secret on exactly the two steps, needs
-order, concurrency, no artifact), runbook sections 3, 6 and 8.
-- Tests: the workflow pins; `ci-gate` cases for the new needs; the ready-PR check with a fake `gh`.
+**PR 4 — bis-ci applied by CI** (HIGH, ~450). `migrations-bis-ci` job (D2) REPLACED `e2e-migrations`: one step
+applies the branch's files and runs `--check`, so `CI_SUPABASE_DB_URL` is on ONE step (not two) and a push with no
+migration never reaches it. `ci-project-setup.yml` gained `apply`/`apply-dry-run` through the runner; the CLI push
+stays only as `rebuild-push` for an EMPTY project (the runner never applies legacy numbered files, so it cannot
+build one), refused by the runner's read-only `--require-empty` otherwise. `ci-migrations-applied.sh` retired.
+`ci-workflow.test.ts` pins (secret on one line of one step, needs order, concurrency, token permissions, no
+`pull_request` trigger), runbook sections 3, 6 and 8, the bis-ci half of CLAUDE.md (D6).
+- Tests: the workflow pins; `ci-gate` `NAME@DUE` cases; the ready-PR check against a fake REST API.
 - Probes: drop `needs: verify` → its pin fails; map `CI_SUPABASE_DB_URL` at job level → the guard test fails.
 - Ships alone: production stays manual, as in section 3's interim rule.
 

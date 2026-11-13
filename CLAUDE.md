@@ -29,24 +29,34 @@
   developer's own machine before the server has to; it is a courtesy, not
   the control, and it does not exist in a fresh clone until that command is
   run.
-- CI runs on neither production's Supabase (`tlbkbmlrfafquucsmsmm`) nor,
-  since 2026-10-08, the shared CI project (`odnobiodsftffphuuosz`, `bis-ci`):
+- CI's suites run on neither production's Supabase (`tlbkbmlrfafquucsmsmm`)
+  nor, since 2026-10-08, the shared CI project (`odnobiodsftffphuuosz`,
+  `bis-ci`):
   since 2026-11-12 `verify` and `e2e` are GATE jobs (`ci-gate.sh`,
   `if: always()`) that are green only when every part they need succeeded,
   and the parts run in parallel: `verify` = `verify-db` (its own stack: the
   db suite and the web tests that need a database, vitest project `live`) +
   `verify-app` (no stack: typecheck, lint, the web `unit` project, the
-  build); `e2e` = `e2e-migrations` + four `e2e-shard` runners, each with
+  build); `e2e` = four `e2e-shard` runners + `migrations-plan` +
+  `migrations-bis-ci` (below); each shard has
   its own stack started with `--trust-clerk-dev-instance` (so its PostgREST
   verifies the Clerk development instance's tokens as bis-ci does), seeded
   by `ci:seed:local`, running `--shard=N/4`. Stacks come from
-  `.github/scripts/ci-local-supabase.sh` (bootstrap then migrations). No job
-  joins a repo-wide queue: a push is green in about 11 minutes (was ~22 with
-  one serial e2e job; the longest shard holds billing-pause.spec.ts). Read a
-  red gate through the PART it names. A guard in every part refuses
-  production and any cloud Supabase value for the suites or the app. The
-  ONE read of bis-ci in CI is e2e-migrations' check: read-only, its DB URL
-  scoped to that step. Since
+  `.github/scripts/ci-local-supabase.sh` (bootstrap then migrations). No
+  test job joins a repo-wide queue: a push is green in about 11 minutes (was
+  ~22 with one serial e2e job; the longest shard holds billing-pause.spec.ts).
+  Read a red gate through the PART it names. A guard in every part refuses
+  production and any cloud Supabase value for the suites or the app.
+  **Since 2026-11-13 (migration pipeline PR 4) CI WRITES to bis-ci**, in ONE
+  place: `migrations-bis-ci`, for a branch that adds a migration, once
+  `verify-db`, `verify-app` and every `e2e-shard` passed on its head SHA and
+  only when an open, non-draft PR into main has that SHA as its head (a draft
+  or no PR fails it: mark it ready, then Re-run failed jobs). It applies ONLY
+  the branch's added files with `.github/scripts/migrations-apply.sh --target
+  bis-ci`, then `--check`s that bis-ci holds every file of the branch, in ONE
+  step that alone holds bis-ci's DB URL, in a repo-wide queue
+  (`bis-ci-migrations`, never cancelled). A push that adds no migration skips
+  it and never reaches bis-ci; on main it only checks. Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the six live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
@@ -62,13 +72,12 @@
   numbered file. A production apply through the Supabase MCP passes `name` =
   the file's WHOLE stem (`20261114093000_work_queue`), never the slug alone
   (0060..0115 were applied slug-only; do not copy that). Every new migration
-  goes to the CI project FIRST (the
-  `ci-project-setup.yml` workflow), then production, then a parity check
+  goes to the CI project FIRST (CI's `migrations-bis-ci`, above; by hand
+  only through `ci-project-setup.yml`'s `apply`, never `migration repair`),
+  then production, then a parity check
   (`docs/runbooks/ci-supabase-project.md`). The `e2e` check enforces the
-  first part: its e2e-migrations part fails, naming each file, when a
-  migration in the branch is
-  not in the CI project's history (`.github/scripts/ci-migrations-applied.sh`).
-  Production and parity are still checked by hand. That check proves only
+  first part through `migrations-bis-ci`. Production and parity are still
+  done by hand (the MCP procedure) until the pipeline's PR 5. That check proves only
   that each migration's (version, name) is in bis-ci's history, not that bis-ci's
   schema works with the app: no CI test runs on bis-ci any more, so Vercel
   Preview (plus local runs and a dispatched capture) is the only thing that

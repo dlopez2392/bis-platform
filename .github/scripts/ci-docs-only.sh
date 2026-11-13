@@ -8,7 +8,7 @@
 # those suites measure, so it should not pay for them.
 #
 # How ci.yml uses it: every part of the two required checks (verify-db,
-# verify-app, e2e-migrations and each e2e-shard, since 2026-11-12) runs this
+# verify-app, migrations-plan and each e2e-shard, since 2026-11-12) runs this
 # as its third step (after checkout and the target guard, `id: scope`), and
 # every later step carries `if: steps.scope.outputs.docs_only != 'true'`.
 # Every part therefore always RUNS and ends `success`, so the `verify` and

@@ -3,7 +3,7 @@
 # D1-D3, D5; PR 3). ci.yml's migrations-bis-ci runs it against bis-ci (PR 4);
 # PR 5 will run it against production behind the owner's approval.
 #
-#   migrations-apply.sh --target <target> [--dry-run | --check] [FILE...]
+#   migrations-apply.sh --target <target> [--dry-run | --check | --require-empty] [FILE...]
 #
 # FILE: the timestamped migrations this branch ADDS
 # (packages/db/supabase/migrations/YYYYMMDDHHMMSS_slug.sql). Every other file
@@ -60,7 +60,7 @@ SEP=$'\x1f'
 MARKER="-- applied by .github/scripts/migrations-apply.sh"
 
 usage() {
-  echo "usage: migrations-apply.sh --target <bis-ci|production|local-as-bis-ci|local-as-production> [--dry-run|--check] [FILE...]"
+  echo "usage: migrations-apply.sh --target <bis-ci|production|local-as-bis-ci|local-as-production> [--dry-run|--check|--require-empty] [FILE...]"
   exit 2
 }
 
@@ -74,6 +74,7 @@ while [ "$#" -gt 0 ]; do
     --target) [ "$#" -ge 2 ] && [ -z "$target" ] || usage; target="$2"; shift 2 ;;
     --dry-run) [ "$mode" = "apply" ] || usage; mode="dry-run"; shift ;;
     --check) [ "$mode" = "apply" ] || usage; mode="check"; shift ;;
+    --require-empty) [ "$mode" = "apply" ] || usage; mode="require-empty"; shift ;;
     -*) usage ;;
     *) args+=("$1"); shift ;;
   esac
@@ -110,6 +111,31 @@ command -v psql >/dev/null 2>&1 || { echo "::error::psql is not on PATH. Nothing
 [ -d "$DIR" ] || { echo "::error::$DIR is not here: run this from the repository root. Nothing was read or applied."; exit 1; }
 
 md5_of() { md5sum "$1" | cut -d' ' -f1; }
+
+# ---- --require-empty: the guard in front of ci-project-setup.yml's rebuild-push
+# The CLI's `db push` writes history rows this runner cannot compare, so it
+# may build only a rebuilt, EMPTY project (runbook section 8). One read-only
+# transaction: 0 when the history table is absent (query_to_xml defers the
+# table's name to run time, so an absent table is not a parse error) or
+# empty, else its row count. Anything else fails closed.
+if [ "$mode" = "require-empty" ]; then
+  [ "${#args[@]}" -eq 0 ] || usage
+  if ! rows="$(pq "$DB_CONN" "$DB_PASS" -X -q -tA -v ON_ERROR_STOP=1 \
+    -c "begin transaction read only; set local lock_timeout = '5s'; select case when to_regclass('supabase_migrations.schema_migrations') is null then 0 else (xpath('/row/c/text()', query_to_xml('select count(*) as c from supabase_migrations.schema_migrations', false, true, '')))[1]::text::bigint end; commit;")"; then
+    echo "::error::Could not read $target's migration history; psql's own message is above. Nothing was pushed."
+    exit 1
+  fi
+  rows="$(printf '%s' "$rows" | tr -d '[:space:]')"
+  if [ "$rows" = "0" ]; then
+    echo "Migration runner: $target's migration history is empty or absent: a rebuild may push."
+    exit 0
+  elif [[ "$rows" =~ ^[0-9]+$ ]]; then
+    echo "::error::$target's migration history holds $rows row(s): rebuild-push is for a rebuilt, EMPTY project only (runbook section 8). A new migration goes through this runner: ci.yml's migrations-bis-ci for a ready PR, or ci-project-setup.yml's apply-dry-run then apply. Nothing was pushed."
+  else
+    echo "::error::$target's migration history answered something that is not a row count. Nothing was pushed."
+  fi
+  exit 1
+fi
 
 # ---- the files it was given -------------------------------------------------
 

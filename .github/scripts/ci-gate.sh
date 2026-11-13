@@ -6,7 +6,7 @@
 # `verify` and `e2e` on a PR's head commit, and it is not ours to change. To
 # cut a push's time to green from ~22 minutes to ~11, each was split into
 # parts that run in parallel on their own runners (verify-db and verify-app;
-# e2e-migrations and the e2e-shard matrix). `verify` and `e2e` are now small
+# the e2e-shard matrix, migrations-plan and migrations-bis-ci). `verify` and `e2e` are now small
 # jobs in ci.yml that `need` those parts, run `if: always()` so they are never
 # skipped, and run THIS. GitHub reports a SKIPPED required check as passing,
 # and a job that `needs` a failed part is skipped unless it says always(), so
