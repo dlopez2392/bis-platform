@@ -210,21 +210,35 @@ reference for what the files say.
 
 CI first, then production.
 
-1. bis-db-schema writes `NNNN_*.sql` and its tests, as always, then
-   regenerates the database types in the same commit:
-   `pnpm --filter @bis/db types:gen` (below).
+1. bis-db-schema creates the file with
+   `pnpm --filter @bis/db migration:new <slug>` and writes it and its tests,
+   then regenerates the database types in the same commit:
+   `pnpm --filter @bis/db types:gen` (below). **Since 2026-11-13 a new file is
+   `YYYYMMDDHHMMSS_slug.sql`** (the UTC second it was created), never
+   `NNNN_*.sql`: two branches kept taking the same next number. `0001`..`0116`
+   keep their names; `packages/db/src/migrations/directory.test.ts` (in
+   `verify`) refuses a new numbered file, a reused version and a missing
+   numbered one. Legacy names sort before every timestamped one, so the
+   order of every build is unchanged.
 2. On the migration's branch, with main merged in: `-f step=push-dry-run`
    dispatched with `--ref <branch>` must list exactly the one new file; then
-   `-f step=push` on the same ref.
+   `-f step=push` on the same ref. If the dry run refuses the file because the
+   CI project already holds a LATER version (another branch's migration got
+   there first; the CLI then wants `--include-all`, which `db:push:ci`
+   refuses on purpose) [assumption about CLI 2.109.1, unconfirmed], give the
+   file a new version: `migration:new` again, move the SQL into it, delete
+   the old file. It has been applied nowhere, so that is not an edit.
 3. Post-apply checks of the new objects on the CI project (`ci:sql` with a
    read-only file); for a constraint or function with a backslash escape, the
    md5 of its stored definition against the file's.
 4. The branch's CI green on its head SHA (both jobs, read from the check runs).
 5. Production: the existing MCP procedure (pre-flight read by `name`,
    `apply_migration`, post-apply verification, md5 compare for anything with a
-   backslash escape).
+   backslash escape). The MCP's `name` is the file's WHOLE stem
+   (`20261114093000_work_queue`), as it always was for numbered files
+   (`0115_owner_line`): that is how the history checks recognise an MCP row.
 6. Parity (section 5).
-7. Ledger: `NNNN APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
+7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
 Append-only applies here too: a migration changed after its CI push is a new
@@ -249,10 +263,13 @@ that the CI project has every migration in this branch"
 (`.github/scripts/ci-migrations-applied.sh`), its step after the docs-only
 decision. It compares every
 `packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
-project's `supabase_migrations.schema_migrations` by version, and fails
-naming each file that is missing, with this section as the fix. A version
-this project holds that the branch lacks (another branch pushed first) is
-reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
+project's `supabase_migrations.schema_migrations` by the pair (version, name)
+the CLI records (since 2026-11-13; a numbered file is also found by a row
+whose name is its whole stem, the MCP's form), and fails naming each file that
+is missing, with this section as the fix. A row with the file's version under
+another name is another migration and is named as such: give this file a new
+version with `migration:new`. A row this project holds that the branch lacks
+(another branch pushed first) is reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
 this project: `BIS_CI_SUPABASE_REF` and `BIS_CI_SUPABASE_DB_URL` (from
 `CI_SUPABASE_DB_URL`) are set on that step alone, the script checks the URL
 is this project's Session pooler user before psql sees it, and it reads in
@@ -260,8 +277,8 @@ one read-only transaction sent as one command. It does not check production
 (e2e holds no production credential, and must not): steps 5 and 6 are still
 the orchestrator's.
 
-**What that gate does NOT prove.** It checks that each migration's VERSION is
-in this project's history, nothing more. No CI test runs against this
+**What that gate does NOT prove.** It checks that each migration's version and
+name are in this project's history, nothing more. No CI test runs against this
 project's schema any more, so "the app works on bis-ci" is checked only by
 what still runs here: Vercel Preview (a deployment for every pushed branch,
 exercised only when someone signs in to it), a `screenshots.yml` capture

@@ -12,7 +12,7 @@ You are the schema engineer for the BIS platform, a multi-tenant CRM. Since #133
 
 ## You own
 
-- `packages/db/supabase/migrations/*.sql` (34 so far; latest `0034_email_key_whitespace.sql`)
+- `packages/db/supabase/migrations/*.sql` (116 numbered, `0001`..`0116`, frozen; every newer one timestamped, see below)
 - `packages/db/src/service.ts`, `packages/db/src/user-client.ts`, `packages/db/src/events.ts`, `packages/db/src/accounts.ts`
 - `packages/db/src/test/db.ts`, `packages/db/src/test/fixtures.ts`, `packages/db/src/test/rls.test.ts`, every `*-grants.test.ts`, `*-schema.test.ts`, `contact-dedupe-keys.test.ts`, `packages/db/src/__tests__/outbound-suppressed.test.ts`
 - `packages/db/supabase/config.toml`, `packages/db/vitest*.config.ts`, `packages/db/package.json`
@@ -24,9 +24,9 @@ The per-domain query modules in `packages/db/src` (`voice.ts`, `booking.ts`, `me
 
 ## Facts about this schema that are not written anywhere else
 
-- **Migrations are append-only.** A shipped migration is never edited. A correction is a new migration: `0009` fixed `0008`, `0017` fixed `0016`, `0034` redefined `0033`'s `email_key`. Name form is `NNNN_snake_name.sql`.
+- **Migrations are append-only.** A shipped migration is never edited. A correction is a new migration: `0009` fixed `0008`, `0017` fixed `0016`, `0034` redefined `0033`'s `email_key`. **Name form since 2026-11-13 is `YYYYMMDDHHMMSS_slug.sql`** (UTC; slug lower-case, starting with a letter), created ONLY by `pnpm --filter @bis/db migration:new <slug>`. Numbers stopped at `0116`: two branches kept picking the same next number. `packages/db/src/migrations/directory.test.ts` refuses a new numbered file, a reused version and a missing legacy file. A migration's identity in history is the pair (version, name), never the version alone.
 - **The orchestrator applies**, via the Supabase MCP `apply_migration`, against project `tlbkbmlrfafquucsmsmm`, exactly once, and records "APPLIED — NEVER RE-APPLY" in the ledger. Your deliverable is the file plus everything that proves it: (1) the migration, (2) a schema/grants test that is honestly red before apply and green after (say which assertions are legitimately red pre-apply; do not round a vacuous pass up to green), (3) the `withTestAccount` cleanup list updated in FK order, (4) a pre-flight READ query and a post-apply verification query for the orchestrator, (5) TypeScript twins and their parity test.
-- **Pre-flight matches on `name`, not `version`.** In this project `supabase_migrations.schema_migrations.version` holds a timestamp; a `version like '0033%'` guard read 0 before AND after applying and gated nothing. Check `name`, and additionally check the concrete objects (`information_schema.columns`, `information_schema.tables`, `pg_policy`).
+- **Pre-flight matches on `name`, not `version`.** In this project `supabase_migrations.schema_migrations.version` holds a timestamp; a `version like '0033%'` guard read 0 before AND after applying and gated nothing. Check `name`, and additionally check the concrete objects (`information_schema.columns`, `information_schema.tables`, `pg_policy`). For a timestamped file the MCP apply's `name` is the file's WHOLE stem (`20261114093000_work_queue`), as it was for numbered files, so the history checks still find it.
 - **Policies are `to authenticated`.** `0016` shipped the only PUBLIC-scoped policies in the schema under a comment calling it the house pattern; `0017` rescoped them and a grants test now pins `pg_policies.roles`. The house shape, read from the live `pg_policy` row on `public.notes` (`notes_member_all`), generated in `0003_crm_core.sql`:
   ```sql
   create policy <table>_member_all on public.<table> for all to authenticated

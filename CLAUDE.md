@@ -56,14 +56,17 @@
   whose env still points at production is REFUSED, not run. A local e2e run
   shares bis-ci's seeded account with Vercel Preview and the screenshot
   capture (no longer with CI), so check for an in-progress `screenshots.yml`
-  run first. Every new migration goes to the CI project FIRST (the
+  run first. New migration files are `YYYYMMDDHHMMSS_slug.sql` (UTC),
+  created by `pnpm --filter @bis/db migration:new <slug>` (since
+  2026-11-13); `0001`..`0116` keep their numbers and verify refuses a new
+  numbered file. Every new migration goes to the CI project FIRST (the
   `ci-project-setup.yml` workflow), then production, then a parity check
   (`docs/runbooks/ci-supabase-project.md`). The `e2e` check enforces the
   first part: its e2e-migrations part fails, naming each file, when a
   migration in the branch is
   not in the CI project's history (`.github/scripts/ci-migrations-applied.sh`).
   Production and parity are still checked by hand. That check proves only
-  that each migration's VERSION is in bis-ci's history, not that bis-ci's
+  that each migration's (version, name) is in bis-ci's history, not that bis-ci's
   schema works with the app: no CI test runs on bis-ci any more, so Vercel
   Preview (plus local runs and a dispatched capture) is the only thing that
   exercises it. And CI's stacks are the Supabase CLI's Docker images, not

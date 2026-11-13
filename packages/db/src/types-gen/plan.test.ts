@@ -186,4 +186,18 @@ describe("schemaFiles: the throwaway database is built in the CI stack's order",
       "supabase/migrations/0010_c.sql",
     ]);
   });
+
+  // Since 2026-11-13 new migrations are timestamped (../migrations/names.ts)
+  // and the numbered ones stay: the legacy files first, then the new ones by
+  // time, the order `supabase db push` applies them in on the CI stacks.
+  it("puts every legacy file before every timestamped one, and the timestamped ones in time order", () => {
+    const files = schemaFiles(["20261114000000_b.sql", "0116_z.sql", "20261113235959_a.sql", "0001_a.sql"]);
+    expect(files).toEqual([
+      "supabase/bootstrap/ci-project.sql",
+      "supabase/migrations/0001_a.sql",
+      "supabase/migrations/0116_z.sql",
+      "supabase/migrations/20261113235959_a.sql",
+      "supabase/migrations/20261114000000_b.sql",
+    ]);
+  });
 });
