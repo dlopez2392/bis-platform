@@ -28,10 +28,16 @@
 #     fails if anything would.
 #  6. Applies each pending FILE in name order, each in ONE transaction: lock the
 #     history table (two runners cannot interleave), lock_timeout 5s (it fails
-#     rather than queue behind live traffic), statement_timeout 10min, the file,
-#     then its history row: version, name, statements = [the file's exact text,
-#     the marker below]. Errors are terse, with no context, so a failing
-#     constraint cannot print a customer's row into a public log.
+#     rather than queue behind live traffic), statement_timeout 10min; then,
+#     holding the lock, the checks of step 4 that another run could have
+#     overtaken are made again (still unrecorded; on bis-ci, nothing newer);
+#     the file; then its history row: version, name, statements = [the file's
+#     exact text, the marker below]. Nothing of the data reaches the log: an
+#     error prints its SQLSTATE only (a failing cast would quote the value,
+#     `raise exception '%', r` the row), NOTICE and WARNING are not sent, and
+#     the migration's own query output is discarded. The runner names the file
+#     and the SQLSTATE. The password goes to psql in PGPASSWORD, never on its
+#     command line.
 #  7. Reads the history again: every file it applied must now be recorded, with
 #     its content.
 #
@@ -63,9 +69,11 @@ mode="apply"
 args=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --target) [ "$#" -ge 2 ] || usage; target="$2"; shift 2 ;;
-    --dry-run) mode="dry-run"; shift ;;
-    --check) mode="check"; shift ;;
+    # Each flag once, and one mode: a repeated --target or a --check beside
+    # --dry-run is a mistake in the caller, not something to guess at.
+    --target) [ "$#" -ge 2 ] && [ -z "$target" ] || usage; target="$2"; shift 2 ;;
+    --dry-run) [ "$mode" = "apply" ] || usage; mode="dry-run"; shift ;;
+    --check) [ "$mode" = "apply" ] || usage; mode="check"; shift ;;
     -*) usage ;;
     *) args+=("$1"); shift ;;
   esac
@@ -78,11 +86,20 @@ db_target "$target"
 case "$?" in 0) ;; 2) usage ;; *) exit 1 ;; esac
 
 # The URL is the whole connection: no PG* variable from the caller's
-# environment (a host, options, an sslmode) reaches psql.
+# environment (a host, options, an sslmode) reaches psql. TLS is required for
+# the hosted targets. The password travels in PGPASSWORD, set for each psql
+# call alone, so psql's command line (what `ps` shows) never carries it.
 for v in $(compgen -v); do
   case "$v" in PG*) unset "$v" ;; esac
 done
 export PGCLIENTENCODING=UTF8
+if [ -n "$DB_TLS" ]; then export PGSSLMODE="$DB_TLS"; fi
+
+# psql against a connection string ($1) with its password ($2).
+pq() {
+  local conn="$1" pass="$2"; shift 2
+  if [ -n "$pass" ]; then PGPASSWORD="$pass" psql "$conn" "$@"; else psql "$conn" "$@"; fi
+}
 
 problems=0
 refuse() { echo "::error::$1"; problems=$((problems + 1)); }
@@ -105,6 +122,8 @@ for f in "${args[@]}"; do
     refuse "$f is not a timestamped migration (YYYYMMDDHHMMSS_slug.sql): the runner applies only those."
   elif [ ! -f "$f" ]; then
     refuse "$f does not exist in this checkout."
+  elif [ "$(head -c 3 "$f" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+    refuse "$f starts with a UTF-8 byte-order mark (an editor added it); psql would read it as part of the first statement. Save the file without one."
   else
     given["$name"]=1
   fi
@@ -119,10 +138,10 @@ done
 # "*" when two or more rows share it), <prefix>_VER (version -> its names) and
 # <prefix>_MAX14 (the highest 14-digit version).
 load_history() {
-  local url="$1" p="$2" out line ver name dig
-  if ! out="$(psql "$url" -X -q -tA -F "$SEP" -v ON_ERROR_STOP=1 \
+  local conn="$1" pass="$2" p="$3" label="$4" out line ver name dig
+  if ! out="$(pq "$conn" "$pass" -X -q -tA -F "$SEP" -v ON_ERROR_STOP=1 \
     -c "begin transaction read only; set local lock_timeout = '5s'; select version, coalesce(name, ''), case when array_length(statements, 1) = 2 and statements[2] = '$MARKER' then md5(statements[1]) else '' end from supabase_migrations.schema_migrations order by version; commit;")"; then
-    echo "::error::Could not read the $3 history (supabase_migrations.schema_migrations); psql's own message is above. A runner that cannot read is red, not skipped. Nothing was applied."
+    echo "::error::Could not read the $label history (supabase_migrations.schema_migrations); psql's own message is above. A runner that cannot read is red, not skipped. Nothing was applied."
     exit 1
   fi
   declare -gA "${p}_PAIR=()" "${p}_STEM=()" "${p}_SLUG=()" "${p}_VER=()"
@@ -160,7 +179,7 @@ cover() {
 # record it (nothing to compare).
 recorded_digest() { local -n pair="${1}_PAIR"; RECORDED="${pair[$2]:--}"; }
 
-load_history "$DB_URL" T "$target"
+load_history "$DB_CONN" "$DB_PASS" T "$target"
 
 # ---- 2. main's files ----------------------------------------------------------
 
@@ -202,7 +221,7 @@ for name in "${sorted[@]}"; do
 done
 
 if [ "$DB_RULES" = "production" ] && [ "${#pending[@]}" -gt 0 ]; then
-  load_history "$BISCI_URL" B "bis-ci"
+  load_history "$BISCI_CONN" "$BISCI_PASS" B "bis-ci"
 fi
 for name in "${pending[@]}"; do
   f="$DIR/$name"
@@ -255,10 +274,22 @@ for name in "${pending[@]}"; do
   tag="bis_mig_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   if grep -qF "\$$tag\$" "$f"; then echo "::error::$f contains the runner's quoting tag; run it again. Nothing more was applied."; exit 1; fi
   wrapper="$work/$s.sql"
+  # The checks above ran before this run held the lock: two runs at once could
+  # both pass them. So, holding the lock, they are made again: the version must
+  # still be unrecorded (BMA01), and on bis-ci rules nothing newer may have
+  # arrived meanwhile (BMA02), or bis-ci's order would stop being file order.
+  newer=""
+  if [ "$DB_RULES" = "bis-ci" ]; then
+    newer="if exists (select 1 from supabase_migrations.schema_migrations where version ~ '^[0-9]{14}\$' and version > '$ver') then raise exception using errcode = 'BMA02'; end if;"
+  fi
   {
-    printf '\\set VERBOSITY terse\n\\set SHOW_CONTEXT never\n'
-    printf "begin;\nset local lock_timeout = '5s';\nset local statement_timeout = '10min';\n"
+    # Errors print their SQLSTATE only, never their text (a failing cast quotes
+    # the value, `raise exception '%', r` the row); NOTICE and WARNING are not
+    # sent at all; the migration's own query output is discarded (psql -o).
+    printf '\\set VERBOSITY sqlstate\n\\set SHOW_CONTEXT never\n'
+    printf "begin;\nset local lock_timeout = '5s';\nset local statement_timeout = '10min';\nset local client_min_messages = error;\n"
     printf 'lock table supabase_migrations.schema_migrations in share row exclusive mode;\n'
+    printf "do \$bis_mig_check\$ begin if exists (select 1 from supabase_migrations.schema_migrations where version = '%s') then raise exception using errcode = 'BMA01'; end if; %s end \$bis_mig_check\$;\n" "$ver" "$newer"
     cat "$f"
     printf '\n;\n'
     printf "insert into supabase_migrations.schema_migrations (version, name, statements) values ('%s', '%s', array[\$%s\$" "$ver" "$slug" "$tag"
@@ -266,8 +297,20 @@ for name in "${pending[@]}"; do
     printf "\$%s\$, '%s']);\ncommit;\n" "$tag" "$MARKER"
   } > "$wrapper"
   echo "applying: $f"
-  if ! psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 -f "$wrapper"; then
-    echo "::error::$f failed and was rolled back: neither its changes nor its history row were kept (psql's terse message is above). ${#applied[@]} file(s) before it in this run stay applied and recorded. Nothing is retried: it was never recorded, so fix it and run again."
+  if ! pq "$DB_CONN" "$DB_PASS" -X -q -v ON_ERROR_STOP=1 -o "$work/discarded-output" -f "$wrapper" 2> "$work/stderr"; then
+    cat "$work/stderr" >&2
+    code="$(grep -oE 'ERROR: +[0-9A-Z]{5}' "$work/stderr" | tail -n 1 | grep -oE '[0-9A-Z]{5}$')"
+    case "$code" in
+      BMA01) echo "::error::$f: another run applied it to $target first; this run wrote nothing. It is applied: there is nothing to fix." ;;
+      BMA02) echo "::error::$f: another run applied a newer migration to $target first, so this file is now older than a version there; this run wrote nothing. It has been applied nowhere: give it a new version (pnpm --filter @bis/db migration:new <slug>), move the SQL in, delete this file." ;;
+      *)
+        case "$code" in
+          55P03) hint=": lock timeout, another session holds a lock it needs; run again when traffic is quiet" ;;
+          57014) hint=": statement timeout (10 min) or cancelled" ;;
+          *) hint="" ;;
+        esac
+        echo "::error::$f failed (SQLSTATE ${code:-unknown}$hint) and was rolled back: neither its changes nor its history row were kept. ${#applied[@]} file(s) before it in this run stay applied and recorded. Nothing is retried: it was never recorded, so it may be fixed and run again." ;;
+    esac
     exit 1
   fi
   applied+=("$name")
@@ -275,7 +318,7 @@ done
 
 # ---- 7. verify -------------------------------------------------------------------
 
-load_history "$DB_URL" T "$target"
+load_history "$DB_CONN" "$DB_PASS" T "$target"
 for name in "${applied[@]}"; do
   s="${name%.sql}"
   recorded_digest T "${s%%_*}|${s#*_}"

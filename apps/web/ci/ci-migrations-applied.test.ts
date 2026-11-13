@@ -208,6 +208,16 @@ describe("ci-migrations-applied.sh reads bis-ci only, read-only, and only from i
     expect(r.log).toEqual([]);
   });
 
+  // psql echoes a password it cannot percent-decode ("invalid percent-encoded
+  // token: ..."), so such a URL is refused before psql sees it (review of #367).
+  it.each(["Hunter%zz2SecretTail", "Hunter%002SecretTail"])("refuses a password that is not valid percent-encoding (%s), without printing it (mutation: back to the loose password class → FAILS)", (pw) => {
+    const r = run(PAIRS, { BIS_CI_SUPABASE_DB_URL: DB_URL.replace(DB_PASSWORD, pw) });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*BIS_CI_SUPABASE_DB_URL.*Session pooler/);
+    expect(r.output).not.toContain("Hunter");
+    expect(r.log).toEqual([]);
+  });
+
   it("refuses production by name, wherever its ref appears, before psql sees it", () => {
     const r = run(PAIRS, { BIS_CI_SUPABASE_REF: PROD_REF, BIS_CI_SUPABASE_DB_URL: poolerUrl(PROD_REF) });
     expect(r.status).toBe(1);

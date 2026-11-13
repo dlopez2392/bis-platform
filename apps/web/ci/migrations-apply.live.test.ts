@@ -146,8 +146,9 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh applies each file in one transac
     const dir = tree({ [A]: "create table half (id int);\ninsert into half values (1);\nselect 1 / 0;\n" });
     const r = apply(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/::error::.*20261114093000_widgets\.sql failed and was rolled back/);
-    expect(r.output.match(/division by zero/g)).toHaveLength(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_widgets\.sql failed \(SQLSTATE 22012\) and was rolled back/);
+    // psql's own line, once: the file was tried once.
+    expect(r.output.match(/ERROR: +22012/g)).toHaveLength(1);
     expect(sql(db, "select to_regclass('public.half') is null")).toBe("t");
     expect(history(db)).toBe("");
   });
@@ -157,7 +158,7 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh applies each file in one transac
     const dir = tree({ [A]: A_SQL, [B]: "create table gadgets (id int);\nselect 1 / 0;\n" });
     const r = apply(dir, "local-as-bis-ci", [A, B], { BIS_MIGRATIONS_DB_URL: db });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/gadgets\.sql failed and was rolled back.*1 file\(s\) before it/);
+    expect(r.output).toMatch(/gadgets\.sql failed \(SQLSTATE 22012\) and was rolled back.*1 file\(s\) before it/);
     expect(history(db)).toBe(`20261114093000|widgets|${md5(A_SQL)}|${MARKER}`);
     expect(sql(db, "select to_regclass('public.gadgets') is null")).toBe("t");
   });
@@ -174,34 +175,129 @@ describe.skipIf(!LOOPBACK)("migrations-apply.sh applies each file in one transac
   });
 });
 
-describe.skipIf(!LOOPBACK)("migrations-apply.sh keeps production safe", () => {
-  it("prints psql's error tersely: a failing constraint never prints the customer's row (mutation: drop VERBOSITY terse → FAILS)", () => {
+/** The runner, started without waiting for it: two of these race for the history lock. */
+function applyAsync(cwd: string, target: string, files: string[], env: Record<string, string>): Promise<Run> {
+  const e: NodeJS.ProcessEnv = { ...process.env, ...env };
+  delete e.GITHUB_ACTIONS;
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const child = spawn(bash, [SCRIPT, "--target", target, ...files.map((f) => `${DIR}/${f}`)], { cwd, env: e });
+    let output = "";
+    child.stdout.on("data", (d) => { output += d; });
+    child.stderr.on("data", (d) => { output += d; });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, output, ms: Date.now() - started }));
+  });
+}
+
+/** History-lock rows on schema_migrations: those held, or those waited for. */
+const lockCount = (db: string, granted: boolean) =>
+  Number(sql(db, `select count(*) from pg_locks l join pg_class c on c.oid = l.relation where c.relname = 'schema_migrations' and l.mode = 'ShareRowExclusiveLock' and ${granted ? "" : "not "}l.granted`));
+
+async function until(what: string, ok: () => boolean) {
+  const deadline = Date.now() + 15_000;
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Another session holding the history lock until it is terminated (or 60 s pass). */
+async function holdHistoryLock(db: string): Promise<() => void> {
+  const holder = spawn("psql", [db, "-X", "-q", "-c", "begin; lock table supabase_migrations.schema_migrations in share row exclusive mode; select pg_sleep(60); commit;"], { stdio: "ignore" });
+  holders.push(holder);
+  await until("the lock holder", () => lockCount(db, true) === 1);
+  const pid = sql(db, "select l.pid from pg_locks l join pg_class c on c.oid = l.relation where c.relname = 'schema_migrations' and l.mode = 'ShareRowExclusiveLock' and l.granted");
+  return () => { sql(db, `select pg_terminate_backend(${pid})`); };
+}
+
+// Seeded customer values that must never reach a public log (review of #367, item 1).
+const CUSTOMER = "Jane Customer";
+const PHONE = "555-0199 ext 4";
+
+describe.skipIf(!LOOPBACK)("migrations-apply.sh keeps customer data out of the log", () => {
+  it.each([
+    ["a failing cast, which quotes the value", "select phone::bigint from customers;\n", "22P02"],
+    ["a failing constraint, whose detail is the row", `insert into customers values ('${CUSTOMER}', '${PHONE}');\n`, "23505"],
+    ["raise exception with the row", "do $$ declare r record; begin select * into r from customers limit 1; raise exception '%', r; end $$;\n", "P0001"],
+    // On failure the runner shows psql's stderr, so a NOTICE raised before the
+    // error would be shown with it (mutation: drop client_min_messages → FAILS).
+    ["a notice with the row, then a failure", "do $$ declare r record; begin select * into r from customers limit 1; raise notice '%', r; end $$;\nselect 1 / 0;\n", "22012"],
+  ])("prints only the SQLSTATE for %s (mutation: back to VERBOSITY terse → FAILS)", (_l, migration, code) => {
     const db = scratchDatabase();
-    sql(db, "create table customers (email text unique); insert into customers values ('jane.customer@example.com');");
-    const dir = tree({ [A]: "insert into customers values ('jane.customer@example.com');\n" });
-    const r = apply(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
+    sql(db, `create table customers (name text unique, phone text); insert into customers values ('${CUSTOMER}', '${PHONE}');`);
+    const r = apply(tree({ [A]: migration }), "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/duplicate key value violates unique constraint/);
+    expect(r.output).toMatch(new RegExp(`failed \\(SQLSTATE ${code}\\)`));
+    expect(r.output).not.toContain("Jane");
+    expect(r.output).not.toContain("555-0199");
     expect(r.output).not.toContain("DETAIL");
-    expect(r.output).not.toContain("jane.customer");
+    expect(r.output).not.toMatch(/NOTICE|WARNING/);
   });
 
+  it.each([
+    ["raise notice and raise warning with the row", "client_min_messages", "do $$ declare r record; begin select * into r from customers limit 1; raise notice '%', r; raise warning '%', r; end $$;\n"],
+    ["a SELECT of the table", "the discarded query output", "select * from customers;\n"],
+  ])("applies, printing nothing of %s (mutation: drop %s → FAILS)", (_l, _mutation, migration) => {
+    const db = scratchDatabase();
+    sql(db, `create table customers (name text unique, phone text); insert into customers values ('${CUSTOMER}', '${PHONE}');`);
+    const r = apply(tree({ [A]: `${migration}create table ok_after (id int);\n` }), "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).not.toContain("Jane");
+    expect(r.output).not.toContain("555-0199");
+    // Not even the bare level and code: NOTICE and WARNING are never sent.
+    expect(r.output).not.toMatch(/NOTICE|WARNING/);
+  });
+});
+
+describe.skipIf(!LOOPBACK)("migrations-apply.sh keeps production safe", () => {
   it("gives up after lock_timeout when another session holds the history lock, rather than waiting (mutation: drop lock_timeout → FAILS)", async () => {
     const db = scratchDatabase();
     const dir = tree({ [A]: A_SQL });
-    const holder = spawn("psql", [db, "-X", "-q", "-c", "begin; lock table supabase_migrations.schema_migrations in share row exclusive mode; select pg_sleep(40); commit;"], { stdio: "ignore" });
-    holders.push(holder);
-    const deadline = Date.now() + 15_000;
-    while (sql(db, "select count(*) from pg_locks l join pg_class c on c.oid = l.relation where c.relname = 'schema_migrations' and l.mode = 'ShareRowExclusiveLock' and l.granted") !== "1") {
-      if (Date.now() > deadline) throw new Error("the lock holder never took its lock");
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
+    const release = await holdHistoryLock(db);
     const r = apply(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
-    holder.kill();
+    release();
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/lock timeout/);
+    expect(r.output).toMatch(/failed \(SQLSTATE 55P03: lock timeout/);
     expect(r.ms).toBeLessThan(30_000);
     expect(sql(db, "select to_regclass('public.widgets') is null")).toBe("t");
+  });
+
+  // Two runs at once (review of #367, item 3): both pass their checks before
+  // either holds the lock, so the checks are made again INSIDE the lock.
+  it("two runs of the same file at once: one applies it, the other writes nothing and says why (mutation: drop the history lock, or the in-lock re-check → FAILS)", async () => {
+    const db = scratchDatabase();
+    const dir = tree({ [A]: A_SQL });
+    const release = await holdHistoryLock(db);
+    const first = applyAsync(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
+    const second = applyAsync(dir, "local-as-bis-ci", [A], { BIS_MIGRATIONS_DB_URL: db });
+    await until("both runs to wait for the lock", () => lockCount(db, false) === 2);
+    release();
+    const runs = await Promise.all([first, second]);
+    const ok = runs.filter((r) => r.status === 0);
+    const refused = runs.filter((r) => r.status === 1);
+    expect(ok, runs.map((r) => r.output).join("\n----\n")).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.output).toMatch(/::error::.*widgets\.sql: another run applied it to local-as-bis-ci first; this run wrote nothing/);
+    expect(history(db)).toBe(`20261114093000|widgets|${md5(A_SQL)}|${MARKER}`);
+  });
+
+  it("bis-ci: a newer file and an older one at once, newer first: the older writes nothing, so bis-ci's order stays file order", async () => {
+    const db = scratchDatabase();
+    const newer = "20261114093005_newer.sql";
+    const older = "20261114093001_older.sql";
+    const release = await holdHistoryLock(db);
+    const n = applyAsync(tree({ [newer]: "create table newer (id int);\n" }), "local-as-bis-ci", [newer], { BIS_MIGRATIONS_DB_URL: db });
+    await until("the newer run to wait for the lock", () => lockCount(db, false) === 1);
+    const o = applyAsync(tree({ [older]: "create table older (id int);\n" }), "local-as-bis-ci", [older], { BIS_MIGRATIONS_DB_URL: db });
+    await until("the older run to wait too", () => lockCount(db, false) === 2);
+    release();
+    const [rn, ro] = await Promise.all([n, o]);
+    expect(rn.status, rn.output).toBe(0);
+    expect(ro.status, ro.output).toBe(1);
+    expect(ro.output).toMatch(/::error::.*older\.sql: another run applied a newer migration to local-as-bis-ci first.*wrote nothing.*migration:new/);
+    expect(sql(db, "select to_regclass('public.older') is null")).toBe("t");
+    expect(history(db).split("\n")).toHaveLength(1);
   });
 
   it("bis-ci first, then production: production applies only what bis-ci holds, with the same content", () => {

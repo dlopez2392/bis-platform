@@ -30,13 +30,16 @@ const pooler = (ref: string, port = 5432) => `postgresql://postgres.${ref}:${PAS
 const LOCAL = `postgresql://postgres:${PASSWORD}@127.0.0.1:5001/postgres`;
 const LOCAL_BISCI = `postgresql://postgres:${PASSWORD}@127.0.0.1:5002/postgres`;
 
-// One log line per call: every argument kept whole inside [[...]], then the
-// PG* variables it was handed. It answers with the target's rows, or bis-ci's
-// when the URL names port 5002 or the CI project's ref.
+// One log line per call: every argument kept whole inside [[...]] (what `ps`
+// shows), then the PG* variables it was handed (PGPASSWORD only as set or
+// not). An apply (-f) prints nothing and exits FAKE_APPLY_EXIT; a read answers
+// with the target's rows, or bis-ci's when the URL names port 5002 or the CI
+// project's user.
 const FAKE_PSQL = `#!/usr/bin/env bash
-{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGHOST=%s PGOPTIONS=%s\\n' "\${PGHOST:-}" "\${PGOPTIONS:-}"; } >> "$FAKE_DIR/log"
+{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf ' PGHOST=%s PGOPTIONS=%s PGSSLMODE=%s PGPASSWORD=%s\\n' "\${PGHOST:-}" "\${PGOPTIONS:-}" "\${PGSSLMODE:-}" "\${PGPASSWORD:+set}"; } >> "$FAKE_DIR/log"
+case " $* " in *" -f "*) exit "\${FAKE_APPLY_EXIT:-0}" ;; esac
 case "$*" in
-  *:5002/*|*postgres.${CI_REF}:*) printf '%s' "$FAKE_BISCI_ROWS" ;;
+  *:5002/*|*postgres.${CI_REF}@*|*postgres.${CI_REF}:*) printf '%s' "$FAKE_BISCI_ROWS" ;;
   *) printf '%s' "$FAKE_TARGET_ROWS" ;;
 esac
 exit "\${FAKE_PSQL_EXIT:-0}"
@@ -119,6 +122,7 @@ describe("migrations-apply.sh accepts only its own targets, and never prints a U
     ["the transaction pooler (6543)", { BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: pooler(CI_REF, 6543) }, /BIS_MIGRATIONS_DB_URL.*Session pooler/],
     ["no CI project ref", { BIS_MIGRATIONS_DB_URL: pooler(CI_REF) }, /BIS_CI_SUPABASE_REF/],
     ["the CI project ref set to production's", { BIS_CI_SUPABASE_REF: PROD_REF, BIS_MIGRATIONS_DB_URL: pooler(PROD_REF) }, /production/],
+    ["the direct host, not the pooler", { BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: `postgresql://postgres.${CI_REF}:${PASSWORD}@db.${CI_REF}.supabase.co:5432/postgres` }, /BIS_MIGRATIONS_DB_URL.*Session pooler/],
   ])("bis-ci: refuses %s before psql runs (mutation: drop the production-ref refusal → FAILS)", (_l, env, why) => {
     const r = run(["--target", "bis-ci", file], env);
     expect(r.status).toBe(1);
@@ -131,6 +135,9 @@ describe("migrations-apply.sh accepts only its own targets, and never prints a U
     ["a URL that is not production's pooler user", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: pooler(CI_REF), BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF) }, /BIS_MIGRATIONS_DB_URL/],
     ["no bis-ci URL to compare with", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: pooler(PROD_REF), BIS_CI_SUPABASE_REF: CI_REF }, /BIS_MIGRATIONS_BISCI_DB_URL/],
     ["a bis-ci URL that names production", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: pooler(PROD_REF), BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(PROD_REF) }, /BIS_MIGRATIONS_BISCI_DB_URL/],
+    ["the transaction pooler (6543)", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: pooler(PROD_REF, 6543), BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF) }, /BIS_MIGRATIONS_DB_URL.*production's Session pooler/],
+    ["the direct host db.<ref>.supabase.co:5432", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: `postgresql://postgres.${PROD_REF}:${PASSWORD}@db.${PROD_REF}.supabase.co:5432/postgres`, BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF) }, /BIS_MIGRATIONS_DB_URL.*production's Session pooler/],
+    ["BIS_CI_SUPABASE_REF set to production's, so bis-ci's URL could be production's", { GITHUB_ACTIONS: "true", BIS_MIGRATIONS_DB_URL: pooler(PROD_REF), BIS_CI_SUPABASE_REF: PROD_REF, BIS_MIGRATIONS_BISCI_DB_URL: pooler(PROD_REF) }, /BIS_CI_SUPABASE_REF/],
   ])("production: refuses %s before psql runs", (_l, env, why) => {
     const r = run(["--target", "production", file], env);
     expect(r.status).toBe(1);
@@ -152,15 +159,52 @@ describe("migrations-apply.sh accepts only its own targets, and never prints a U
     }
   });
 
-  it("refuses an unknown target and a missing one", () => {
+  // A password psql cannot decode is echoed back whole by psql's own error
+  // ("invalid percent-encoded token: ..."), so it is refused before psql runs
+  // (review of #367, item 2).
+  const BAD = ["Hunter%zz2SecretTail", "Hunter%002SecretTail"];
+  it.each(BAD)("refuses a password that is not valid percent-encoding (%s) for every target, without printing it", (pw) => {
+    const cases: [string, Record<string, string>][] = [
+      ["bis-ci", { BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: pooler(CI_REF).replace(PASSWORD, pw) }],
+      ["production", { GITHUB_ACTIONS: "true", BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: pooler(PROD_REF).replace(PASSWORD, pw), BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF) }],
+      ["production", { GITHUB_ACTIONS: "true", BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: pooler(PROD_REF), BIS_MIGRATIONS_BISCI_DB_URL: pooler(CI_REF).replace(PASSWORD, pw) }],
+      ["local-as-bis-ci", { BIS_MIGRATIONS_DB_URL: LOCAL.replace(PASSWORD, pw) }],
+    ];
+    for (const [target, env] of cases) {
+      const r = run(["--target", target, file], env);
+      expect(r.status, target).toBe(1);
+      expect(r.output).toMatch(/::error::/);
+      expect(r.output).not.toContain("Hunter");
+      expect(r.log).toEqual([]);
+    }
+  });
+
+  it("refuses an unknown target, a missing one, and a repeated or contradictory flag", () => {
     expect(run(["--target", "prod", file], { BIS_MIGRATIONS_DB_URL: LOCAL }).status).toBe(2);
     expect(run([file], { BIS_MIGRATIONS_DB_URL: LOCAL }).status).toBe(2);
+    expect(run(["--target", "local-as-bis-ci", "--target", "bis-ci", file], { BIS_MIGRATIONS_DB_URL: LOCAL }).status).toBe(2);
+    expect(run(["--target", "local-as-bis-ci", "--check", "--dry-run", file], { BIS_MIGRATIONS_DB_URL: LOCAL }).status).toBe(2);
+    expect(run(["--target", "local-as-bis-ci", "--dry-run", "--dry-run", file], { BIS_MIGRATIONS_DB_URL: LOCAL }).status).toBe(2);
   });
 
   it("hands psql no PG* variable from its environment: the URL is the whole connection", () => {
     const r = run(["--target", "local-as-bis-ci", "--dry-run", file], { ...asLocalBisCi(""), PGHOST: "db.example.com", PGOPTIONS: "-c default_transaction_read_only=off" });
     expect(r.status, r.output).toBe(0);
     expect(r.log[0]).toContain("PGHOST= PGOPTIONS=");
+  });
+
+  it("keeps the password off psql's command line (what `ps` shows), handing it over in PGPASSWORD", () => {
+    const r = run(["--target", "local-as-bis-ci", "--dry-run", file], asLocalBisCi(""));
+    expect(r.status, r.output).toBe(0);
+    expect(r.log.join("\n")).not.toContain(PASSWORD);
+    expect(r.log[0]).toContain("PGPASSWORD=set");
+  });
+
+  it("requires TLS (PGSSLMODE=require) for the hosted targets", () => {
+    const r = run(["--target", "bis-ci", "--dry-run", file], { BIS_CI_SUPABASE_REF: CI_REF, BIS_MIGRATIONS_DB_URL: pooler(CI_REF) });
+    expect(r.status, r.output).toBe(0);
+    expect(r.log[0]).toContain("PGSSLMODE=require");
+    expect(r.log.join("\n")).not.toContain(PASSWORD);
   });
 
   it("reads history in ONE read-only transaction sent as one command, giving up on a held lock after 5s rather than waiting", () => {
@@ -188,6 +232,13 @@ describe("migrations-apply.sh takes only timestamped migration files from the re
     const r = run(["--target", "local-as-bis-ci", "--dry-run", `${DIR}/${name}`], asLocalBisCi(rows(["0117", "x"])));
     expect(r.status).toBe(1);
     expect(r.output).toMatch(new RegExp(`::error::.*${why.source}`));
+  });
+
+  it("refuses a file that starts with a UTF-8 byte-order mark, saying so", () => {
+    files({ [NEW]: "﻿create table t (id int);\n" });
+    const r = run(["--target", "local-as-bis-ci", "--dry-run", `${DIR}/${NEW}`], asLocalBisCi(""));
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql starts with a UTF-8 byte-order mark/);
   });
 
   it("refuses to run anywhere but the repository root", () => {
@@ -263,6 +314,24 @@ describe("migrations-apply.sh decides which files are applied by D1's rules", ()
       asLocalBisCi(rows([NEW.slice(0, 14), "work_queue", "0".repeat(32)])));
     expect(r.status).toBe(1);
     expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql.*different content.*NEW migration/);
+  });
+
+  it("refuses a file on main, recorded by this runner, whose content has changed since (mutation: skip main's files' digest compare → FAILS)", () => {
+    files({ "20261114080000_other.sql": "select 1;\n", [NEW]: "select 2;\n" });
+    const r = run(["--target", "local-as-bis-ci", "--dry-run", `${DIR}/${NEW}`],
+      asLocalBisCi(rows(["20261114080000", "other", "0".repeat(32)])));
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114080000_other\.sql has different content from what local-as-bis-ci recorded/);
+  });
+
+  it("fails when the file ran but the history does not record it afterwards (mutation: drop the post-apply re-read → FAILS)", () => {
+    files({ [NEW]: "select 4;\n" });
+    // psql "applies" (exit 0) but the history read after it still shows nothing.
+    const r = run(["--target", "local-as-bis-ci", `${DIR}/${NEW}`], asLocalBisCi(""));
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql was run, but local-as-bis-ci does not record it/);
+    expect(r.log.some((l) => l.includes("[[-f]]"))).toBe(true);
+    expect(r.log.join("\n")).not.toContain(PASSWORD);
   });
 
   it("refuses a pending file whose version the target records under another name", () => {

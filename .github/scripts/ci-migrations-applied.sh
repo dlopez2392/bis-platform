@@ -38,7 +38,8 @@
 # more (the e2e guard now refuses every cloud value), so it is checked HERE,
 # before psql sees it: production's ref nowhere, and exactly the form
 #   postgres[ql]://postgres.<ref>:<password>@<host>.pooler.supabase.com:<5432|6543>/postgres[?sslmode=require]
-# (the form packages/db/src/ci/target.ts accepts for the same secret). The
+# (the form packages/db/src/ci/target.ts accepts for the same secret; the
+# password valid percent-encoding, checked by ci-db-target.sh's parser). The
 # read runs in ONE READ-ONLY TRANSACTION sent as one command (see the psql
 # call for why one, not a session setting): this is a check, and bis-ci is
 # shared with Vercel Preview and the screenshot capture. Never prints the URL.
@@ -72,8 +73,13 @@ if ! [[ "$ref" =~ ^[a-z0-9]{20}$ ]]; then
   echo "::error::BIS_CI_SUPABASE_REF is not shaped like a Supabase project ref (20 lowercase letters and digits). Nothing was checked."
   exit 1
 fi
-if ! [[ "$db_url" =~ ^postgres(ql)?://postgres\.${ref}:[A-Za-z0-9._~%-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.pooler\.supabase\.com:(5432|6543)/postgres(\?sslmode=require)?$ ]]; then
-  echo "::error::BIS_CI_SUPABASE_DB_URL is not the CI project's Session pooler URI (user postgres.$ref on a *.pooler.supabase.com host, database postgres, no query but sslmode=require). Fix: Supabase dashboard > project $ref > Connect > Session pooler, into the repository secret CI_SUPABASE_DB_URL. Nothing was checked."
+# The URL rule is the migration runner's (.github/scripts/ci-db-target.sh): one
+# parser for both, including a password that must be valid percent-encoding,
+# never %00, since psql echoes back one it cannot decode.
+# shellcheck source=ci-db-target.sh
+. "$(dirname "${BASH_SOURCE[0]}")/ci-db-target.sh"
+if ! _db_is_pooler "$db_url" "$ref" "5432|6543"; then
+  echo "::error::BIS_CI_SUPABASE_DB_URL is not the CI project's Session pooler URI (user postgres.$ref on a *.pooler.supabase.com host, database postgres, a percent-encoded password, no query but sslmode=require). Fix: Supabase dashboard > project $ref > Connect > Session pooler, into the repository secret CI_SUPABASE_DB_URL. Nothing was checked."
   exit 1
 fi
 if ! command -v psql >/dev/null 2>&1; then

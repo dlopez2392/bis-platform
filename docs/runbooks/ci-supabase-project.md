@@ -275,11 +275,23 @@ against this project, and PR 5 against production behind the owner's approval.
   - on bis-ci, a pending file is older than a version already there;
   - on production, a pending file is not on bis-ci with the same content.
 - **How it applies.** Each pending file runs in ONE transaction: the history
-  table locked, `lock_timeout` 5 s, `statement_timeout` 10 min, terse errors.
-  The row it records is (version, slug, [the file's exact text, a runner
-  marker]).
+  table locked, `lock_timeout` 5 s, `statement_timeout` 10 min. Holding the
+  lock, it checks again that the version is still unrecorded and, on bis-ci,
+  that nothing newer arrived meanwhile: two runs at once serialise, and the
+  later one writes nothing ("another run applied … first"). The row it records
+  is (version, slug, [the file's exact text, a runner marker]).
+- **Nothing of the data reaches the log.** An error prints only its SQLSTATE
+  (`ERROR:  22P02`; the runner names the file and the code), NOTICE and
+  WARNING are not sent, and the migration's own query output is discarded.
+  To see the message, re-run the failing statement by hand where its data is
+  not public.
+- **Connection.** The password travels in `PGPASSWORD`, never on psql's
+  command line. It must be valid percent-encoding, and `%00` is refused,
+  because psql echoes back a password it cannot decode. TLS is required for
+  the hosted targets.
 - **When a file fails.** It leaves neither its changes nor its row; files
-  before it stay applied. Nothing is retried.
+  before it stay applied. Nothing is retried. A file starting with a UTF-8
+  byte-order mark is refused before anything runs.
 - **Which rows count** (the production rows are the three forms in step 5
   above):
   - on production, a numbered file is found by its pair, its whole stem, or
