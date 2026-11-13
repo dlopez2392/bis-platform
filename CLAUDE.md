@@ -56,7 +56,22 @@
   bis-ci`, then `--check`s that bis-ci holds every file of the branch, in ONE
   step that alone holds bis-ci's DB URL, in a repo-wide queue
   (`bis-ci-migrations`, never cancelled). A push that adds no migration skips
-  it and never reaches bis-ci; on main it only checks. Since
+  it and never reaches bis-ci; on main it only checks. **CI WRITES to
+  production in ONE place too (migration pipeline PR 5):**
+  `migrations-production`, after `migrations-bis-ci` SUCCEEDED in the same
+  run, for a branch (never main) that adds a migration, applies those files
+  to production only after danlo approves the `production-migrations`
+  environment, the only place the production database credential
+  (`PROD_MIGRATIONS_DB_URL`, production's Session pooler URL) exists. The
+  same one step then checks parity against bis-ci (minus
+  `packages/db/supabase/parity/allowed-differences.txt`; a difference fails
+  it, owner answer Q3) and production's full history. No other job,
+  workflow or test holds a production database credential; `seed-demo.yml`
+  and `ops-health.yml` keep their `production` environment secrets (main
+  only). The required `e2e` check is red until production holds every
+  migration of the branch, so the app never deploys ahead of its schema. A
+  missing environment or secret fails that job closed, naming it. Never
+  approve that environment through the API (a hook blocks it). Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the six live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
@@ -69,15 +84,15 @@
   run first. New migration files are `YYYYMMDDHHMMSS_slug.sql` (UTC),
   created by `pnpm --filter @bis/db migration:new <slug>` (since
   2026-11-13); `0001`..`0116` keep their numbers and verify refuses a new
-  numbered file. A production apply through the Supabase MCP passes `name` =
-  the file's WHOLE stem (`20261114093000_work_queue`), never the slug alone
-  (0060..0115 were applied slug-only; do not copy that). Every new migration
-  goes to the CI project FIRST (CI's `migrations-bis-ci`, above; by hand
-  only through `ci-project-setup.yml`'s `apply`, never `migration repair`),
-  then production, then a parity check
-  (`docs/runbooks/ci-supabase-project.md`). The `e2e` check enforces the
-  first part through `migrations-bis-ci`. Production and parity are still
-  done by hand (the MCP procedure) until the pipeline's PR 5. That check proves only
+  numbered file. Every new migration goes to the CI project FIRST (CI's
+  `migrations-bis-ci`, above; by hand only through `ci-project-setup.yml`'s
+  `apply`, never `migration repair`), then production
+  (`migrations-production`, above), then parity (the same step)
+  (`docs/runbooks/ci-supabase-project.md` sections 5-6). The `e2e` check
+  enforces all three. The Supabase MCP apply is the documented FALLBACK
+  only (CI cannot run): it passes `name` = the file's WHOLE stem
+  (`20261114093000_work_queue`), never the slug alone (0060..0115 were
+  applied slug-only; do not copy that). The bis-ci check proves only
   that each migration's (version, name) is in bis-ci's history, not that bis-ci's
   schema works with the app: no CI test runs on bis-ci any more, so Vercel
   Preview (plus local runs and a dispatched capture) is the only thing that

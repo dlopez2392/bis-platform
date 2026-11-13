@@ -60,7 +60,7 @@ SEP=$'\x1f'
 MARKER="-- applied by .github/scripts/migrations-apply.sh"
 
 usage() {
-  echo "usage: migrations-apply.sh --target <bis-ci|production|local-as-bis-ci|local-as-production> [--dry-run|--check|--require-empty] [FILE...]"
+  echo "usage: migrations-apply.sh --target <bis-ci|production|local-as-bis-ci|local-as-production> [--dry-run|--check|--require-empty|--parity] [FILE...]"
   exit 2
 }
 
@@ -75,6 +75,7 @@ while [ "$#" -gt 0 ]; do
     --dry-run) [ "$mode" = "apply" ] || usage; mode="dry-run"; shift ;;
     --check) [ "$mode" = "apply" ] || usage; mode="check"; shift ;;
     --require-empty) [ "$mode" = "apply" ] || usage; mode="require-empty"; shift ;;
+    --parity) [ "$mode" = "apply" ] || usage; mode="parity"; shift ;;
     -*) usage ;;
     *) args+=("$1"); shift ;;
   esac
@@ -85,6 +86,8 @@ done
 . "$(dirname "${BASH_SOURCE[0]}")/ci-db-target.sh"
 db_target "$target"
 case "$?" in 0) ;; 2) usage ;; *) exit 1 ;; esac
+# --parity compares production with bis-ci: production's rules only.
+if [ "$mode" = "parity" ] && [ "$DB_RULES" != "production" ]; then usage; fi
 # Read once: no child (psql included) inherits the URLs, password and all.
 unset BIS_MIGRATIONS_DB_URL BIS_MIGRATIONS_BISCI_DB_URL
 
@@ -198,7 +201,7 @@ cover() {
   local ver="${s%%_*}" name="${s#*_}"
   COVER=""
   if [ -n "${pair[$ver|$name]:-}" ]; then COVER="$ver|$name"; return; fi
-  [ "$DB_RULES" = "production" ] || return 0
+  [ "${3:-$DB_RULES}" = "production" ] || return 0
   if [ -n "${stem[$s]:-}" ]; then COVER="${stem[$s]}"; return; fi
   if [ "${#ver}" -eq 4 ] && [ -n "${slug[$name]:-}" ]; then COVER="${slug[$name]}"; fi
 }
@@ -277,13 +280,127 @@ if [ "$problems" -gt 0 ]; then
 fi
 
 for name in "${pending[@]}"; do
-  if [ "$mode" = "check" ]; then
+  if [ "$mode" = "check" ] || [ "$mode" = "parity" ]; then
     refuse "$DIR/$name is not applied to $target."
   else
     echo "pending: $DIR/$name"
   fi
 done
+# --parity (D4; migration pipeline PR 5): after production's apply, compare
+# production with bis-ci. Production only (usage otherwise). Read-only on both.
+#  1. Each newly applied file must be recorded with the file's exact content on
+#     BOTH sides, always.
+#  2. The histories are compared NORMALISED: each row becomes the file stem it
+#     covers by D1's rule (production's slug-only and stem rows equal bis-ci's
+#     pairs); a row covering no file in the tree keeps its stem-form name, or
+#     version_name; a `history` line in the allowed list drops a row. If they
+#     differ (another PR is between bis-ci and production), the schema is NOT
+#     judged: a notice names each migration, and the next apply whose
+#     histories match judges it.
+#  3. If equal: fingerprint-detail.sql on both sides, each in ONE read-only
+#     transaction sent as one command, its final select rewritten to hash each
+#     definition (md5), so no definition is ever printed. Items are compared by
+#     (kind, key); the allowed list (`kind | key | reason`, key `*` = the whole
+#     kind) is subtracted; any other difference FAILS, printing kinds and keys
+#     only. Owner answer Q3: a parity failure blocks the merge.
+PARITY_DIR="packages/db/supabase/parity"
+_trim() { local x="$1"; x="${x#"${x%%[![:space:]]*}"}"; printf '%s' "${x%"${x##*[![:space:]]}"}"; }
+normalised_history() {
+  local p="$1" rules="$2" f nm k
+  local -n rows_="${p}_PAIR"
+  local -A used=()
+  for f in "$DIR"/*.sql; do
+    [ -e "$f" ] || continue
+    nm="${f##*/}"
+    cover "$p" "$nm" "$rules"
+    if [ -n "$COVER" ] && [ "$COVER" != "*" ]; then printf '%s\n' "${nm%.sql}"; used["$COVER"]=1; fi
+  done
+  for k in "${!rows_[@]}"; do
+    [ -n "${used[$k]:-}" ] && continue
+    nm="${k#*|}"
+    [ -n "${ALLOW_HIST[$nm]:-}" ] && continue
+    if [[ "$nm" =~ ^[0-9]+_ ]]; then printf '%s\n' "$nm"; else printf '%s\n' "${k%%|*}_$nm"; fi
+  done
+}
+read_fingerprint() {
+  local conn="$1" pass="$2" label="$3" out="$4"
+  if ! pq "$conn" "$pass" -X -q -tA -F "$SEP" -v ON_ERROR_STOP=1 -c "$FP_QUERY" > "$out.raw"; then
+    echo "::error::Could not read the $label fingerprint; psql's own message is above. Parity that cannot read is red, not skipped."
+    return 1
+  fi
+  tr -d '\r' < "$out.raw" | grep -v '^$' | LC_ALL=C sort > "$out"
+  [ -s "$out" ] || { echo "::error::The $label fingerprint came back empty: an empty read is not a match."; return 1; }
+}
+run_parity() {
+  local allowed="$PARITY_DIR/allowed-differences.txt" detail="$PARITY_DIR/fingerprint-detail.sql"
+  local final='select kind, key, def from items order by kind collate "C", key collate "C", def collate "C";'
+  local n=0 line kind key why name s k d body
+  declare -gA ALLOW_HIST=() ALLOW_KIND=() ALLOW_KEY=()
+  [ -f "$allowed" ] || { echo "::error::$allowed is missing: parity subtracts only the differences listed there, each with its reason. Nothing was compared."; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1)); line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    if ! [[ "$line" =~ ^([^|]+)\|([^|]+)\|(.*)$ ]]; then refuse "$allowed line $n is not 'kind | key | reason'."; continue; fi
+    kind="$(_trim "${BASH_REMATCH[1]}")"; key="$(_trim "${BASH_REMATCH[2]}")"; why="$(_trim "${BASH_REMATCH[3]}")"
+    if [ -z "$why" ]; then refuse "$allowed line $n has no reason: every allowed difference says why it is allowed."; continue; fi
+    if [ "$kind" = "history" ]; then ALLOW_HIST["$key"]=1
+    elif [ "$key" = "*" ]; then ALLOW_KIND["$kind"]=1
+    else ALLOW_KEY["$kind$SEP$key"]=1; fi
+  done < "$allowed"
+  body="$(cat "$detail" 2>/dev/null)"
+  body="${body%"${body##*[![:space:]]}"}"
+  if [ -z "$body" ] || [[ "$body" != *"$final" ]]; then
+    refuse "$detail no longer ends in the select parity hashes ($final); change the runner's --parity with it."
+  fi
+  [ "$problems" -eq 0 ] || return 1
+  FP_QUERY="begin transaction read only; set local lock_timeout = '5s'; set local statement_timeout = '5min'; ${body%"$final"}select kind, key, coalesce(md5(def), '-') from items; commit;"
+
+  load_history "$BISCI_CONN" "$BISCI_PASS" B "bis-ci"
+  for name in "${sorted[@]}"; do
+    [ -n "$name" ] || continue
+    s="${name%.sql}"; k="${s%%_*}|${s#*_}"; d="$(md5_of "$DIR/$name")"
+    [ "${T_PAIR[$k]:-}" = "$d" ] || refuse "$DIR/$name is not recorded with the file's content on production."
+    [ "${B_PAIR[$k]:-}" = "$d" ] || refuse "$DIR/$name is not recorded with the file's content on bis-ci."
+  done
+  [ "$problems" -eq 0 ] || return 1
+
+  local work_p; work_p="$(mktemp -d)" || { echo "::error::Could not make a temporary directory."; return 1; }
+  normalised_history T production | LC_ALL=C sort -u > "$work_p/t.hist"
+  normalised_history B bis-ci | LC_ALL=C sort -u > "$work_p/b.hist"
+  if ! cmp -s "$work_p/t.hist" "$work_p/b.hist"; then
+    echo "::notice::Parity not judged: the histories differ, so another migration is between bis-ci and production. The next apply whose histories match judges the schema. The newly applied files are recorded with the same content on both."
+    LC_ALL=C comm -23 "$work_p/t.hist" "$work_p/b.hist" | sed 's/$/ (production only)/; s/^/  - /'
+    LC_ALL=C comm -13 "$work_p/t.hist" "$work_p/b.hist" | sed 's/$/ (bis-ci only)/; s/^/  - /'
+    rm -rf "$work_p"; return 0
+  fi
+
+  read_fingerprint "$DB_CONN" "$DB_PASS" production "$work_p/t.fp" || { rm -rf "$work_p"; return 1; }
+  read_fingerprint "$BISCI_CONN" "$BISCI_PASS" bis-ci "$work_p/b.fp" || { rm -rf "$work_p"; return 1; }
+  local -A TF=() BF=() ALL=()
+  while IFS="$SEP" read -r kind key d; do TF["$kind$SEP$key"]+="$d,"; ALL["$kind$SEP$key"]=1; done < "$work_p/t.fp"
+  while IFS="$SEP" read -r kind key d; do BF["$kind$SEP$key"]+="$d,"; ALL["$kind$SEP$key"]=1; done < "$work_p/b.fp"
+  rm -rf "$work_p"
+  local differ=0 allowedn=0 where
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    [ "${TF[$k]:-}" = "${BF[$k]:-}" ] && continue
+    kind="${k%%"$SEP"*}"; key="${k#*"$SEP"}"
+    if [ -z "${BF[$k]:-}" ]; then where="production only"; elif [ -z "${TF[$k]:-}" ]; then where="bis-ci only"; else where="differs"; fi
+    if [ -n "${ALLOW_KIND[$kind]:-}" ] || [ -n "${ALLOW_KEY[$k]:-}" ]; then
+      echo "  allowed: $kind $key ($where)"; allowedn=$((allowedn + 1))
+    else
+      echo "  - $kind $key ($where)"; differ=$((differ + 1))
+    fi
+  done < <(printf '%s\n' "${!ALL[@]}" | LC_ALL=C sort)
+  if [ "$differ" -gt 0 ]; then
+    echo "::error::Parity: production and bis-ci differ in $differ item(s), listed above by kind and key (never a definition). The schema is applied and recorded; the merge is blocked. Fix forward with a new migration, or allow the item in $allowed with its reason in a reviewed PR (runbook section 5)."
+    return 1
+  fi
+  echo "Parity: production matches bis-ci (${#ALL[@]} item(s) compared; $allowedn allowed difference(s), each listed above)."
+}
+
 case "$mode" in
+  parity) [ "$problems" -eq 0 ] || exit 1; run_parity; exit $? ;;
   check) [ "$problems" -eq 0 ] || exit 1; echo "Migration runner: every file is applied to $target."; exit 0 ;;
   dry-run) echo "Migration runner (dry run): ${#pending[@]} file(s) would be applied to $target. Nothing was applied."; exit 0 ;;
 esac

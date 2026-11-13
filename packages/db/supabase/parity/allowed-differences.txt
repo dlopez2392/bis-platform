@@ -1,0 +1,17 @@
+# Differences between production and bis-ci that parity allows
+# (.github/scripts/migrations-apply.sh --parity; plan D4; runbook section 5).
+#
+# One per line: kind | key | why. A key of * allows the whole kind. The kind
+# `history` drops a migration-history row by its name before the histories
+# are compared. Every line needs its reason; a line without one is refused.
+# Anything not listed here fails parity and blocks the merge (owner answer
+# Q3). Add a line only in a reviewed PR that says why.
+#
+# The first parity run (2026-09-24) found these, each an artefact of how the
+# Supabase MCP applied a file to production, not a difference in what the
+# database does. They stay until production is re-aligned from the files.
+extension_version(info) | * | the platform upgrades extension versions per project, on its own schedule; extension presence is still compared
+column | public.contacts.email_key | production's generation expression stores a raw U+00A0 where the file spells the regex escape (MCP apply)
+function | app.current_account_id() | production's body is re-indented (MCP apply)
+function | public.concierge_enable(p_account_id uuid, p_form_id uuid, p_new_public_id text) | production lacks 0045's three-line comment (MCP apply)
+history | 0048_accounts_mailing_address_check_escapes | production's extra row from the 0048 escape repair, applied by hand through the MCP; bis-ci has no such row

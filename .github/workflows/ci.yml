@@ -34,9 +34,11 @@ name: CI
 # project's secret key. Vercel Preview and screenshots.yml still run on it.
 #
 # Of the workflows on main, only seed-demo.yml and ops-health.yml reach
-# production, through the secrets held by the `production` environment (main
-# only); neither job here declares that environment, so neither can read
-# them. (LOCAL test runs refuse production too, since #135: they throw before
+# production's API, through the secrets held by the `production` environment
+# (main only); no job here declares that environment, so none can read them.
+# Production's DATABASE is reached by ONE step here (2026-11-13, PR 5):
+# migrations-production's, behind the production-migrations environment's
+# required approval (danlo), the only place PROD_MIGRATIONS_DB_URL exists. (LOCAL test runs refuse production too, since #135: they throw before
 # connecting when their env files name production's ref.) Rebuilding,
 # restoring or re-seeding the CI project: docs/runbooks/ci-supabase-project.md.
 #
@@ -77,7 +79,7 @@ name: CI
 #           The guard runs and the stack are preflights, not gates; the stack
 #           diagnostics (2026-10-13) are read-only and exit 0.
 #
-#   e2e     = e2e-shard + migrations-plan + migrations-bis-ci.
+#   e2e     = e2e-shard + migrations-plan + migrations-bis-ci + migrations-production.
 #     migrations-bis-ci (2026-11-13) a branch that ADDS a migration, once
 #           verify and every shard passed and its PR is ready: applies it to
 #           bis-ci, then checks bis-ci holds every migration of the branch
@@ -379,7 +381,7 @@ jobs:
           VERIFY_APP: ${{ needs.verify-app.result }}
         run: bash .github/scripts/ci-gate.sh VERIFY_DB VERIFY_APP
 
-  # ---- e2e = e2e-shard + migrations-plan + migrations-bis-ci (2026-11-13) -----
+  # ---- e2e = e2e-shard + migrations-plan + migrations-bis-ci + migrations-production (2026-11-13) -----
 
   # The migration plan check (2026-11-13; docs/superpowers/plans/
   # 2026-11-13-migration-pipeline.md, D2 and PR 2). Everything that would make
@@ -487,6 +489,58 @@ jobs:
           BIS_MIGRATIONS_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
           MIGRATIONS_ADDED: ${{ needs.migrations-plan.outputs.added }}
         run: read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target bis-ci "${files[@]}" && bash .github/scripts/migrations-apply.sh --target bis-ci --check "${files[@]}"
+
+  # Production receives a branch's migrations from CI (2026-11-13; docs/
+  # superpowers/plans/2026-11-13-migration-pipeline.md, D3, D4 and PR 5),
+  # behind ONE click: the job declares the production-migrations environment,
+  # whose only required reviewer is danlo (owner answer Q5) and which alone
+  # holds production's database URL, PROD_MIGRATIONS_DB_URL (Q2). GitHub
+  # releases that secret only after the approval. DUE only on a branch (never
+  # main) that ADDS a migration, and only after migrations-bis-ci SUCCEEDED in
+  # this run, so production never receives what bis-ci has not; every other
+  # push skips it without a runner, never asks for the click and never reaches
+  # the environment or its secret.
+  #
+  # It installs nothing: a SHA-pinned checkout, then bash and the runner's
+  # psql. ONE step holds the secret, and runs, each only if the one before
+  # passed: the apply (migrations-apply.sh --target production: only the
+  # files the branch adds, each already on bis-ci byte for byte, one
+  # transaction per file, never retried, errors as SQLSTATE only); parity
+  # (--parity: production against bis-ci, minus packages/db/supabase/parity/
+  # allowed-differences.txt; a difference FAILS, owner answer Q3); and the
+  # full-tree history check (--check). A missing secret (environment or
+  # secret not created) reads as empty and the runner refuses, naming it.
+  #
+  # The e2e gate reads it as due (PRODUCTION_DUE), so a migration PR cannot
+  # merge, and so cannot deploy, until production holds its migrations.
+  migrations-production:
+    needs: [migrations-plan, migrations-bis-ci]
+    if: ${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '' && needs.migrations-plan.result == 'success' && needs.migrations-bis-ci.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-migrations
+    permissions:
+      contents: read
+    concurrency:
+      group: production-migrations
+      queue: max
+      cancel-in-progress: false
+    steps:
+      # actions/checkout v5.0.0, pinned to its commit: this job holds production's credential.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+
+      - name: Check that migrations-production holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
+
+      - name: Apply this branch's migrations to production, then check parity and its history
+        env:
+          BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+          BIS_MIGRATIONS_DB_URL: ${{ secrets.PROD_MIGRATIONS_DB_URL }}
+          BIS_MIGRATIONS_BISCI_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+          MIGRATIONS_ADDED: ${{ needs.migrations-plan.outputs.added }}
+        run: read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target production "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --parity "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --check "${files[@]}"
 
   e2e-shard:
     runs-on: ubuntu-latest
@@ -730,9 +784,11 @@ jobs:
   # migrations-bis-ci is read as NAME@DUE: BIS_CI_DUE is its job-level `if`'s
   # due condition, so it must SUCCEED on main and on a branch that adds a
   # migration (a skip there means verify or a shard failed), and must be
-  # SKIPPED otherwise (ci-gate.sh).
+  # SKIPPED otherwise (ci-gate.sh). migrations-production the same way, by
+  # PRODUCTION_DUE (2026-11-13, PR 5): a branch that adds a migration is green
+  # only once production holds it, and production is never due on main.
   e2e:
-    needs: [e2e-shard, migrations-plan, migrations-bis-ci]
+    needs: [e2e-shard, migrations-plan, migrations-bis-ci, migrations-production]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -743,8 +799,10 @@ jobs:
           E2E_SHARD: ${{ needs.e2e-shard.result }}
           MIGRATIONS_PLAN: ${{ needs.migrations-plan.result }}
           MIGRATIONS_BIS_CI: ${{ needs.migrations-bis-ci.result }}
+          MIGRATIONS_PRODUCTION: ${{ needs.migrations-production.result }}
           BIS_CI_DUE: ${{ (github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != '') && 'due' || '' }}
-        run: bash .github/scripts/ci-gate.sh E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE
+          PRODUCTION_DUE: ${{ (github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '') && 'due' || '' }}
+        run: bash .github/scripts/ci-gate.sh E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE MIGRATIONS_PRODUCTION@PRODUCTION_DUE
 
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
   # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers

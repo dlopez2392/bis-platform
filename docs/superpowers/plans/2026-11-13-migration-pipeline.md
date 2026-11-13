@@ -274,6 +274,13 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
 - Probes: make parity ignore `function` kind → the extra-function case fails; let the gate accept a skipped
   production job → its case fails; move the secret to job env → its pin fails.
 - First live use: the next real migration; the orchestrator watches and reads production's history after.
+- Built (amended by PR 5): parity is the runner's own `--parity` mode, not a separate `migrations-parity.sh`, so it
+  reuses the runner's history reader and D1's cover rule. `allowed-differences.txt` gained a `history` kind: production's
+  extra `0048_accounts_mailing_address_check_escapes` row covers no file, so without it every history comparison would
+  "differ" and parity would never judge. Its cases run on fixtures through a fake psql; a live two-database case is a
+  follow-up. The production step is ONE step (apply, then `--parity`, then `--check`), so the secret is on one line.
+  A job that names an environment GitHub does not have CREATES it with no protection rules: until section 3 is done,
+  such a run starts with no click and no secret, and the runner refuses ("PROD_MIGRATIONS_DB_URL is not set").
 
 **PR 6 — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
 `production-migrations` deployments of this branch (A6) and passes `prod_evidence` when one was on a commit
