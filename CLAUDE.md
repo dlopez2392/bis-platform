@@ -48,7 +48,7 @@
   ONE read of bis-ci in CI is e2e-migrations' check: read-only, its DB URL
   scoped to that step. Since
   #135, LOCAL runs refuse production too: the db suite, the integration
-  suite, Playwright and the two live web tests all throw before connecting
+  suite, Playwright and the six live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
   variable, never its value. danlo's machine has run on the CI project
   since 2026-10-04 (runbook section 9, plan step D7, done): both
