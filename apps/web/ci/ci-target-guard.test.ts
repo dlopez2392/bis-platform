@@ -562,7 +562,7 @@ describe("ci-target-guard.sh --before-local-stack: verify's and e2e's preflight,
   // BIS_MIGRATIONS_BISCI_DB_URL). migrations-bis-ci maps CI_SUPABASE_DB_URL onto
   // its ONE apply step under that name; in a job's or the workflow's env it
   // would reach every step, so each guard run refuses it.
-  it.each(["BIS_MIGRATIONS_DB_URL", "BIS_MIGRATIONS_BISCI_DB_URL"])("refuses the runner's %s in the job's scope: it belongs to the apply step alone (mutation: leave it off this mode's list → FAILS)", (name) => {
+  it.each(["BIS_MIGRATIONS_DB_URL", "BIS_MIGRATIONS_BISCI_DB_URL", "PROD_MIGRATIONS_DB_URL"])("refuses the runner's %s in the job's scope: it belongs to the apply step alone (mutation: leave it off this mode's list → FAILS)", (name) => {
     const r = runGuard({}, {}, { [name]: CI_HISTORY_DB_URL }, { args: ["--before-local-stack"], base: CLERK_ONLY });
     expect(r.status).toBe(1);
     expect(r.output).toMatch(new RegExp(`::error::${name} is set before this job's local Supabase stack exists`));

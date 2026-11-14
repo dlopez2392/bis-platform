@@ -80,6 +80,12 @@ _db_refuse() { echo "::error::$1 Nothing was read or applied."; return 1; }
 db_target() {
   local url="${BIS_MIGRATIONS_DB_URL:-}" bisci="${BIS_MIGRATIONS_BISCI_DB_URL:-}" ref="${BIS_CI_SUPABASE_REF:-}"
   DB_CONN="" DB_PASS="" DB_TLS="" BISCI_CONN="" BISCI_PASS=""
+  if [ -z "$url" ] && [ "$1" = "production" ]; then
+    # ci.yml maps secrets.PROD_MIGRATIONS_DB_URL here. An absent secret reads
+    # as empty, so this is what a missing environment or secret looks like.
+    _db_refuse "PROD_MIGRATIONS_DB_URL is not set: it is a secret of the production-migrations environment only, which the owner creates by hand (plan section 3; runbook section 6). Never a repository secret."
+    return 1
+  fi
   [ -n "$url" ] || { _db_refuse "BIS_MIGRATIONS_DB_URL is empty or missing: it names the database to apply to."; return 1; }
   case "$1" in
     bis-ci)

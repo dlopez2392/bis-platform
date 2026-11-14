@@ -132,3 +132,46 @@ describe("ci-gate.sh NAME@DUE: a part that must succeed when due and be skipped 
     expect(r.output).toMatch(/::error::.*not a variable name/);
   });
 });
+
+// PR 5 (2026-11-13): the e2e gate as ci.yml actually invokes it. The argument
+// list is READ from ci.yml's e2e job, so these cases hold the workflow and the
+// script together: a branch that adds migrations is green only when
+// migrations-production succeeded; a branch with none needs it skipped.
+describe("the e2e gate, with ci.yml's own arguments, holds a migration PR until production has its files", () => {
+  const ci = fs.readFileSync(fileURLToPath(new URL("../../../.github/workflows/ci.yml", import.meta.url)), "utf8");
+  const at = ci.indexOf("\n  e2e:\n");
+  const runLine = ci.slice(at).split("\n").find((l) => l.trim().startsWith("run: bash .github/scripts/ci-gate.sh"))!;
+  const args = runLine.trim().replace("run: bash .github/scripts/ci-gate.sh ", "").split(" ");
+  const ok = { E2E_SHARD: "success", MIGRATIONS_PLAN: "success" };
+
+  it("names migrations-production as a due part (mutation: drop it from the gate's arguments → FAILS)", () => {
+    expect(args).toContain("MIGRATIONS_PRODUCTION@PRODUCTION_DUE");
+  });
+
+  it("new migration files + production SKIPPED (the click never came, or bis-ci failed) → red (mutation: let the gate accept a skipped production job → FAILS)", () => {
+    const r = gate(args, { ...ok, MIGRATIONS_BIS_CI: "success", BIS_CI_DUE: "due", MIGRATIONS_PRODUCTION: "skipped", PRODUCTION_DUE: "due" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::MIGRATIONS_PRODUCTION is skipped/);
+  });
+
+  it.each(["failure", "cancelled"])("new migration files + production %s (an apply or parity failure) → red", (result) => {
+    const r = gate(args, { ...ok, MIGRATIONS_BIS_CI: "success", BIS_CI_DUE: "due", MIGRATIONS_PRODUCTION: result, PRODUCTION_DUE: "due" });
+    expect(r.status, r.output).toBe(1);
+  });
+
+  it("new migration files + production SUCCESS → green", () => {
+    const r = gate(args, { ...ok, MIGRATIONS_BIS_CI: "success", BIS_CI_DUE: "due", MIGRATIONS_PRODUCTION: "success", PRODUCTION_DUE: "due" });
+    expect(r.status, r.output).toBe(0);
+  });
+
+  it("no migration files: bis-ci and production both skipped → green, and production touched → red", () => {
+    const base = { ...ok, MIGRATIONS_BIS_CI: "skipped", BIS_CI_DUE: "", PRODUCTION_DUE: "" };
+    expect(gate(args, { ...base, MIGRATIONS_PRODUCTION: "skipped" }).status).toBe(0);
+    expect(gate(args, { ...base, MIGRATIONS_PRODUCTION: "success" }).status).toBe(1);
+  });
+
+  it("main: bis-ci checks, production is never due and must be skipped → green", () => {
+    const r = gate(args, { ...ok, MIGRATIONS_BIS_CI: "success", BIS_CI_DUE: "due", MIGRATIONS_PRODUCTION: "skipped", PRODUCTION_DUE: "" });
+    expect(r.status, r.output).toBe(0);
+  });
+});
