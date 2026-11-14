@@ -690,6 +690,17 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
     expect(r.output).toContain(`${DIR}/${NEW} is not recorded with the file's content on production`);
   });
 
+  // Re-review of #370 (probe D): a `history` line matches the exact stem
+  // parity prints (version_slug), never the slug alone, or a line written for
+  // one orphan would hide a production drift row with that slug at ANY version.
+  it("a slug-only `history` line hides nothing: production gaining (20261120000000, other_branch) FAILS as drift (mutation: re-add the name match → FAILS)", () => {
+    setup(`${ALLOWED}history | other_branch | orphan\n`);
+    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
+    const r = parity(prod(["20261120000000", "other_branch"]), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::Parity: production holds 20261120000000_other_branch that bis-ci does not: drift/);
+  });
+
   it("parses the repository's own allowed-differences.txt: every line has a kind, a key and a reason", () => {
     setup(fs.readFileSync(path.join(REPO, PARITY_DIR, "allowed-differences.txt"), "utf8"));
     const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE));

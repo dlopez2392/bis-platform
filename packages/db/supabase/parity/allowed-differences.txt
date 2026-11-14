@@ -2,8 +2,9 @@
 # (.github/scripts/migrations-apply.sh --parity; plan D4; runbook section 5).
 #
 # One per line: kind | key | why. A key of * allows the whole kind. The kind
-# `history` drops a migration-history row by its name before the histories
-# are compared. Every line needs its reason; a line without one is refused.
+# `history` drops ONE migration-history row before the histories are
+# compared, named by its stem (version_slug, as parity prints it), never by
+# slug or prefix. Every line needs its reason; a line without one is refused.
 # Anything not listed here fails parity and blocks the merge (owner answer
 # Q3). Add a line only in a reviewed PR that says why.
 #

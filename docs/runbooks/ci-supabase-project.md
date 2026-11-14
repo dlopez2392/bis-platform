@@ -214,7 +214,10 @@ bis-ci's pairs). Then:
   apply until the row is resolved**, so a PR closed unmerged after its
   bis-ci apply silently stops parity for good: list its stem in
   `allowed-differences.txt` (`history | <stem> | reason`, ideally beside the
-  reverting migration) or let the migration reach production.
+  reverting migration) or let the migration reach production. A `history`
+  line names ONE row by the EXACT stem parity prints (version_slug, e.g.
+  `20261115000000_other_branch`), never by slug or prefix: a slug-only line
+  would hide a production drift row with that slug at any version.
 - **A file applied to production by hand** (the MCP fallback, section 6: a
   whole-stem row with no runner digest) is accepted only when bis-ci's
   recorded copy equals the file AND parity is judged and passes; a notice

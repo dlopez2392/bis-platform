@@ -319,7 +319,9 @@ normalised_history() {
     [ -n "${used[$k]:-}" ] && continue
     nm="${k#*|}"
     if [[ "$nm" =~ ^[0-9]+_ ]]; then out="$nm"; else out="${k%%|*}_$nm"; fi
-    [ -n "${ALLOW_HIST[$nm]:-}" ] || [ -n "${ALLOW_HIST[$out]:-}" ] && continue
+    # The exact stem parity prints, never the bare name: a slug-only line
+    # would hide a drift row with that slug at ANY version.
+    [ -n "${ALLOW_HIST[$out]:-}" ] && continue
     printf '%s\n' "$out"
   done
 }

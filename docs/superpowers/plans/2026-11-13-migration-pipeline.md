@@ -128,7 +128,9 @@ differing KEYS, never definitions.
 - If PRODUCTION holds a row bis-ci lacks (not an allowed `history` line): FAIL, "production holds <stem> that
   bis-ci does not: drift" (corrected by #370's review: bis-ci always comes first, so that is drift, never in-flight).
 - If only BIS-CI holds rows (another PR is between bis-ci and production): report them and do NOT judge the schema.
-  This repeats on every apply until each row is listed as `history | <stem> | reason` or reaches production, so an
+  This repeats on every apply until each row is listed as `history | <stem> | reason` (the EXACT stem parity prints,
+  version_slug, never the slug or a prefix: a slug-only line would hide a production drift row with that slug at any
+  version; #370's re-review) or reaches production, so an
   abandoned PR's orphan disables parity until it is listed; the notice says so. PR 6: fail when the orphan is older
   than every open migration PR's.
 - A production row that is the file's whole stem with no runner digest (the MCP fallback) is accepted only when
