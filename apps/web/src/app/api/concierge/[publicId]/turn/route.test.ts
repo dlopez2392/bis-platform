@@ -809,19 +809,21 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
 
 describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_chat task)", () => {
   // The AI settings copy promises operators that the account's switch, the global one and the budget leave the
-  // website chat running. Until the web_chat task has a ledger feature (and the copy is rewritten, the owner's
-  // call), the gateway applies none of them to it (lib/ai/tasks.ts).
+  // website chat running. The web_chat row is `gated: false` (lib/ai/tasks.ts): the gateway applies none of them
+  // to it, and still puts each completion's cost on the ledger under web_chat.
+  const rowsOf = (calls: { fn: string; args: Record<string, unknown> }[]) =>
+    calls.map((c) => [c.fn, c.args.p_feature, c.args.p_outcome]);
   const closed: [string, GateOver][] = [
     ["the account's AI switched off", { gate: { account_enabled: false } }],
     ["the account over its AI budget", { gate: { month_spend_microusd: 10_000_000 } }],
     ["the agency-wide switch off", { gate: { global_enabled: false } }],
   ];
-  it.each(closed)("%s: the chat still answers, as the settings copy promises (mutation: apply the account gate to the web chat -> FAILS)", async (_name, over) => {
+  it.each(closed)("%s: the chat still answers, as the settings copy promises, and its cost is on the ledger (mutation: apply the account gate to the web chat -> FAILS)", async (_name, over) => {
     const calls = aiGateWith(over);
     const res = await laterTurn();
     expect(await res.json()).toEqual({ conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([]);
+    expect(rowsOf(calls)).toEqual([["ai_ledger_record", "web_chat", "ok"]]);
   });
 
   it("a FIRST turn with the account's AI switched off still answers", async () => {
@@ -842,12 +844,12 @@ describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_cha
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("across both completions, no gate read and no ledger row: 0086's feature check has no web_chat yet", async () => {
+  it("across both completions, no gate read and one web_chat ledger row each (mutations: read the gate; drop the row -> FAILS)", async () => {
     const calls = aiGateWith();
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     await laterTurn();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(calls).toEqual([]);
+    expect(rowsOf(calls)).toEqual([["ai_ledger_record", "web_chat", "ok"], ["ai_ledger_record", "web_chat", "ok"]]);
   });
 
   // The follow-up's own gate read must fit in the turn's budget with the follow-up itself. A clock that the gate
@@ -868,15 +870,15 @@ describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_cha
     }
   }
 
-  it("today (no gate read): 4 s left still runs the follow-up", async () => {
+  it("ungated (no gate read): 4 s left still runs the follow-up", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     await captureTurnWithSlowGate();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("once the chat's gates apply, a slow gate leaves no room: the follow-up is skipped, not started past the budget (mutation: drop aiGateMs from timeLeft -> FAILS)", async () => {
+  it("were the chat gated, a slow gate would leave no room: the follow-up is skipped, not started past the budget (mutation: drop aiGateMs from timeLeft -> FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    swapped.routes.web_chat = { feature: "call_card", primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 500 } } } };
+    swapped.routes.web_chat = { feature: "web_chat", gated: true, primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 500 } } } };
     const body = await captureTurnWithSlowGate();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(body.reply).toBe(conciergeStrings("en").captured);
@@ -884,7 +886,8 @@ describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_cha
 
   it("BOTH requests send whatever the web_chat row says: a model swap is a table edit (PR #350's shape; mutation: a literal model or max_tokens in the route -> FAILS)", async () => {
     swapped.routes.web_chat = {
-      feature: null,
+      feature: "web_chat",
+      gated: false,
       primary: { model: "route-probe-model", params: { maxOutput: { field: "max_completion_tokens", tokens: 500 }, reasoningEffort: "none" } },
     };
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));

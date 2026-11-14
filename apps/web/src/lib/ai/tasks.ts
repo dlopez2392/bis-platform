@@ -18,11 +18,11 @@ import type { PricedModel } from "./prices";
  * says the request was wrong; within what is left of the caller's time limit; its cost goes on the ledger under
  * its own model. No task has one today: this table changes routing, not behaviour.
  *
- * `feature` is the ledger's name for the task (ai_ledger.feature). The web chat has none YET: 0086's check
- * constraint admits only the four below, so its row could not be written. Until a migration adds 'web_chat', the
- * web chat honours only the kill switch (AI_GATEWAY_OFF): the gateway skips the account's switch, the global switch
- * and the budget for a task with no feature, as the AI settings copy promises operators, and its cost is not on the
- * ledger. Those gates join it with that migration and a copy rewrite (the owner's call).
+ * `feature` is the ledger's name for the task (ai_ledger.feature): every task's completions and refusals are on the
+ * ledger, with their cost, and that cost counts toward the account's month (migration web_chat_ledger admitted
+ * 'web_chat'). `gated` says whether the gateway applies the global switch, the account's switch and the budget.
+ * The web chat is NOT gated: it honours only the kill switch (AI_GATEWAY_OFF), as the AI settings copy promises
+ * operators. Gating it is a copy rewrite and the owner's call, never a side effect of recording its cost.
  *
  * Not here: the realtime voice model and its transcription (voice/session-config.ts), a separate lane, and the
  * corpus script's phone fallback (voice/modules/corpus-lib.ts), which plays the phone, not a text task.
@@ -38,7 +38,7 @@ export type ModelParams = {
   responseFormat?: { type: "json_object" };
 };
 export type ModelRoute = { model: PricedModel; params: ModelParams };
-export type TaskRoute = { feature: AiFeature | null; primary: ModelRoute; fallback?: ModelRoute };
+export type TaskRoute = { feature: AiFeature; gated: boolean; primary: ModelRoute; fallback?: ModelRoute };
 
 export const AI_TASK_NAMES = ["web_chat", "call_summary", "call_card", "call_proposals", "record_summary"] as const;
 export type AiTask = (typeof AI_TASK_NAMES)[number];
@@ -47,24 +47,28 @@ export const AI_TASKS: Readonly<Record<AiTask, TaskRoute>> = {
   /** The website chat's reply and its capture follow-up (api/concierge/[publicId]/turn). The cap is I2's:
    *  every reply is replayed into every later turn (concierge/guards.ts). */
   web_chat: {
-    feature: null,
+    feature: "web_chat",
+    gated: false,
     primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: CONCIERGE_MAX_REPLY_TOKENS } } },
   },
   /** The staff-facing summary of a call (voice/summary-service.ts). No cap: it has a fact-line fallback. */
-  call_summary: { feature: "call_summary", primary: { model: "gpt-4o-mini", params: {} } },
+  call_summary: { feature: "call_summary", gated: true, primary: { model: "gpt-4o-mini", params: {} } },
   /** The call card's reason and quote (voice/call-card.ts). */
   call_card: {
     feature: "call_card",
+    gated: true,
     primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 300 }, responseFormat: { type: "json_object" } } },
   },
   /** Suggestions from a call (proposals/generate.ts). The cap bounds a runaway proposals array (its fix-wave Minor 6). */
   call_proposals: {
     feature: "call_proposals",
+    gated: true,
     primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 2000 }, responseFormat: { type: "json_object" } } },
   },
   /** The record page's paragraph (contacts/[contactId]/ai-summary). */
   record_summary: {
     feature: "record_summary",
+    gated: true,
     primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 400 } } },
   },
 };

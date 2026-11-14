@@ -44,7 +44,7 @@ function scripted(...steps: Step[]) {
 }
 const ledgerOf = (calls: { fn: string; args: Record<string, unknown> }[]) => calls.filter((c) => c.fn === "ai_ledger_record").map((c) => c.args);
 const withFallback = (task: AiTask = "call_summary", primary: TaskRoute["primary"] = { model: "gpt-4o-mini", params: {} }): void => {
-  swapped.routes[task] = { feature: task === "web_chat" ? null : task, primary, fallback: { model: "test-fallback", params: { maxOutput: { field: "max_completion_tokens", tokens: 77 } } } };
+  swapped.routes[task] = { feature: task, gated: task !== "web_chat", primary, fallback: { model: "test-fallback", params: { maxOutput: { field: "max_completion_tokens", tokens: 77 } } } };
 };
 
 beforeEach(() => {
@@ -77,7 +77,7 @@ describe("the task table is today's requests, byte for byte (this PR changes rou
 
 describe("a task's row decides the request (one-row model swaps)", () => {
   it("a reasoning model's row sends max_completion_tokens and reasoning_effort, never max_tokens (PR #350's shape)", async () => {
-    swapped.routes.call_summary = { feature: "call_summary", primary: { model: "test-fallback", params: { maxOutput: { field: "max_completion_tokens", tokens: 300 }, reasoningEffort: "none" } } };
+    swapped.routes.call_summary = { feature: "call_summary", gated: true, primary: { model: "test-fallback", params: { maxOutput: { field: "max_completion_tokens", tokens: 300 }, reasoningEffort: "none" } } };
     const { db, calls } = openGateDb();
     const { fetchImpl, bodies } = scripted(ok());
     const r = await aiComplete(db, base({ fetchImpl }));
@@ -87,7 +87,7 @@ describe("a task's row decides the request (one-row model swaps)", () => {
   });
 
   it("an unpriced model is refused before the gate, so it cannot spend unmetered (mutation: skip the price check -> FAILS)", async () => {
-    swapped.routes.call_summary = { feature: "call_summary", primary: { model: "gpt-9", params: {} } };
+    swapped.routes.call_summary = { feature: "call_summary", gated: true, primary: { model: "gpt-9", params: {} } };
     const { db, calls } = openGateDb();
     const { fetchImpl } = scripted(ok());
     expect(await aiComplete(db, base({ fetchImpl }))).toEqual({ ok: false, reason: "unknown_model" });
@@ -192,38 +192,57 @@ describe("the fallback (gateway.ts step 7)", () => {
   });
 });
 
-describe("the web chat task: tools, and no ledger feature yet", () => {
+describe("the web chat task: tools, its ledger row, and no gate", () => {
   const TOOL = { type: "function" as const, function: { name: "capture_lead", description: "d", parameters: { type: "object" } } };
 
-  it("makes no RPC at all: no gate read, and no ledger row, since 0086 admits no web_chat feature (mutations: write the row anyway; read the gate anyway -> FAILS)", async () => {
+  it("an answered turn writes ONE ledger row under web_chat, with its cost against the model that answered, and reads no gate (mutations: drop the feature; skip the row; read the gate -> FAILS)", async () => {
     const { db, calls } = openGateDb();
-    const { fetchImpl } = scripted(ok());
-    expect((await aiComplete(db, base({ task: "web_chat", fetchImpl }))).ok).toBe(true);
-    expect(calls).toEqual([]);
+    const { fetchImpl } = scripted(ok("hi there", { prompt_tokens: 1000, completion_tokens: 100 }));
+    const r = await aiComplete(db, base({ task: "web_chat", fetchImpl }));
+    expect(r).toMatchObject({ ok: true, model: "gpt-4o-mini" });
+    const cost = (r as { usage: { costMicroUsd: number } }).usage.costMicroUsd;
+    expect(cost).toBeGreaterThan(0);
+    expect(calls.map((c) => c.fn)).toEqual(["ai_ledger_record"]);
+    expect(ledgerOf(calls)).toEqual([expect.objectContaining({
+      p_account: "acct1", p_feature: "web_chat", p_model: "gpt-4o-mini", p_in: 1000, p_out: 100, p_cost: cost, p_outcome: "ok",
+    })]);
   });
 
-  // The AI settings copy promises operators the website chat keeps running whatever these say (review of #362):
-  // they join the chat only with its ledger migration and a copy rewrite.
+  it("a failed ledger write keeps the answer (the turn is already paid for)", async () => {
+    const { fetchImpl } = scripted(ok("kept"));
+    expect(await aiComplete(openGateDb({ ledger: "error" }).db, base({ task: "web_chat", fetchImpl }))).toMatchObject({ ok: true, text: "kept" });
+  });
+
+  // The AI settings copy promises operators the website chat keeps running whatever these say (review of #362).
+  // Recording its cost must not turn them on: the exemption is the row's `gated: false`, not a missing feature.
   const closedGates: [string, GateOver][] = [
     ["the account's AI switched off", { gate: { account_enabled: false } }],
     ["the global switch off", { gate: { global_enabled: false } }],
     ["over budget", { gate: { month_spend_microusd: 10_000_000 } }],
     ["an unreadable gate", { gate: "error" }],
   ];
-  it.each(closedGates)("%s: the web chat still answers (mutation: apply the gate to a task with no feature -> FAILS)", async (_name, over) => {
+  it.each(closedGates)("%s: the web chat still answers, and its row is an ok one (mutation: key the gate on a feature again, or set web_chat gated -> FAILS)", async (_name, over) => {
+    const { db, calls } = openGateDb(over);
     const { fetchImpl } = scripted(ok("still here"));
-    expect(await aiComplete(openGateDb(over).db, base({ task: "web_chat", fetchImpl }))).toMatchObject({ ok: true, text: "still here" });
+    expect(await aiComplete(db, base({ task: "web_chat", fetchImpl }))).toMatchObject({ ok: true, text: "still here" });
+    expect(ledgerOf(calls).map((a) => [a.p_feature, a.p_outcome])).toEqual([["web_chat", "ok"]]);
   });
 
-  it("the kill switch (AI_GATEWAY_OFF=1) still refuses it", async () => {
+  it("the table: every task names its ledger feature, and only the web chat is ungated (mutation: gated: false on any other row -> FAILS)", () => {
+    expect(AI_TASK_NAMES.map((t) => [t, AI_TASKS[t].feature, AI_TASKS[t].gated])).toEqual(AI_TASK_NAMES.map((t) => [t, t, t !== "web_chat"]));
+  });
+
+  it("the kill switch (AI_GATEWAY_OFF=1) still refuses it, with no row", async () => {
     vi.stubEnv("AI_GATEWAY_OFF", "1");
+    const { db, calls } = openGateDb();
     const { fetchImpl } = scripted(ok());
-    expect(await aiComplete(openGateDb().db, base({ task: "web_chat", fetchImpl }))).toEqual({ ok: false, reason: "global_off" });
+    expect(await aiComplete(db, base({ task: "web_chat", fetchImpl }))).toEqual({ ok: false, reason: "global_off" });
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   const gated = AI_TASK_NAMES.filter((t) => t !== "web_chat").flatMap((t) => closedGates.map(([name, over]) => [t, name, over] as const));
-  it.each(gated)("%s, %s: every task WITH a feature still gets every gate (mutation: skip the gate for every task -> FAILS)", async (task, _name, over) => {
+  it.each(gated)("%s, %s: every gated task still gets every gate (mutation: skip the gate for every task -> FAILS)", async (task, _name, over) => {
     const { fetchImpl } = scripted(ok());
     expect((await aiComplete(openGateDb(over).db, base({ task, fetchImpl }))).ok).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();

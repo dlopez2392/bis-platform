@@ -23,10 +23,10 @@ import { AI_TASKS, type AiTask, type ModelRoute } from "./tasks";
  * with at least FALLBACK_MIN_MS left of the caller's time limit, which the two attempts share. Each attempt writes
  * its own ledger row under its own model, so the cost is recorded against the model actually used.
  *
- * A task whose `feature` is null (the web chat, until a migration admits it to ai_ledger) skips steps 3-4 and
- * writes no ledger row: it honours the kill switch (step 1) and nothing else here. The AI settings copy promises
- * operators that the account switch, the global switch and the budget leave the website chat running; those
- * gates join the chat with the ledger migration and a copy rewrite, the owner's call (review of #362).
+ * A task whose row says `gated: false` (the web chat) skips steps 3-4: it honours the kill switch (step 1) and
+ * nothing else here. The AI settings copy promises operators that the account switch, the global switch and the
+ * budget leave the website chat running (review of #362). It still writes its ledger row (step 6), so its cost is
+ * recorded and counts toward the account's month: recording the cost never turns the gates on.
  *
  * The month and day keys are the account-zone date of `input.now ?? new Date()`, the real clock: 0086 accepts
  * any well-formed key and relies on the app never sending a far-future one.
@@ -83,11 +83,11 @@ const QUIET: ReadonlySet<AiOutcome> = new Set<AiOutcome>(["global_off", "account
 
 /**
  * How long the gateway may spend on the gate read (steps 3-4) before a task's completion: GATE_TIMEOUT_MS, or 0
- * for a task with no ledger feature, which skips the gate (see aiComplete). A caller that budgets its own time
+ * for an ungated task (`gated: false`), which skips the gate (see aiComplete). A caller that budgets its own time
  * around a completion (the web chat's follow-up) subtracts this.
  */
 export function aiGateMs(task: AiTask): number {
-  return AI_TASKS[task].feature === null ? 0 : GATE_TIMEOUT_MS;
+  return AI_TASKS[task].gated ? GATE_TIMEOUT_MS : 0;
 }
 
 /**
@@ -116,7 +116,6 @@ export async function aiComplete(db: SupabaseClient, input: AiInput): Promise<Ai
     const keys = periodKeys(input.now ?? new Date(), safeZone(input.timezone));
     const finish = async (outcome: AiOutcome, usage: AiUsage, model: string, detail = ""): Promise<void> => {
       if (outcome !== "ok") say(outcome, detail);
-      if (route.feature === null) return;
       try {
         await recordAiLedger(db, {
           accountId: input.accountId, feature: route.feature, model: model.slice(0, 64),
