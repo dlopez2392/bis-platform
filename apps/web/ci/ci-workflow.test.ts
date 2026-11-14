@@ -37,6 +37,16 @@ const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
 const APPLY_BIS_CI = 'read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target bis-ci "${files[@]}" && bash .github/scripts/migrations-apply.sh --target bis-ci --check "${files[@]}"';
 /** Owner answer Q1: only a ready PR's head reaches bis-ci (migrations-ready-pr.test.ts). */
 const READY_PR = "node .github/scripts/migrations-ready-pr.mjs";
+/**
+ * migrations-production (2026-11-13, migration pipeline PR 5): the ONE step
+ * that holds production's database credential. It applies the branch's added
+ * files (the runner refuses any not on bis-ci byte for byte), then parity
+ * (D4), then the full-tree history check, in that order, each only if the one
+ * before passed.
+ */
+const APPLY_PRODUCTION = 'read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target production "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --parity "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --check "${files[@]}"';
+/** When migrations-production is due: a branch (never main) that adds a migration. */
+const PRODUCTION_DUE = "github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != ''";
 /** When migrations-bis-ci is due: on main (the check alone), or a branch that adds a migration. */
 const BIS_CI_DUE = "github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != ''";
 /** The credential-free migration plan check (migrations-plan part, 2026-11-13). */
@@ -74,7 +84,7 @@ const isDiagnostic = (s: { run?: string }) => s.run === DIAGNOSE_BASELINE || s.r
  */
 const GATES: Record<"verify" | "e2e", string[]> = {
   verify: ["verify-db", "verify-app"],
-  e2e: ["e2e-shard", "migrations-plan", "migrations-bis-ci"],
+  e2e: ["e2e-shard", "migrations-plan", "migrations-bis-ci", "migrations-production"],
 };
 const PARTS = [...GATES.verify, ...GATES.e2e];
 /**
@@ -82,7 +92,7 @@ const PARTS = [...GATES.verify, ...GATES.e2e];
  * job-level `if`, and is pinned on its own below. Every other part needs
  * nothing and has no `if`, so it starts the moment a runner is free.
  */
-const DUE_PARTS = ["migrations-bis-ci"];
+const DUE_PARTS = ["migrations-bis-ci", "migrations-production"];
 const FREE_PARTS = PARTS.filter((p) => !DUE_PARTS.includes(p));
 /** The parts that start a Supabase stack in their own runner. */
 const STACK_PARTS = ["verify-db", "e2e-shard"];
@@ -281,7 +291,7 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     const allowed = new Set([
       "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY",
       "CI_SUPABASE_DB_URL", "OPENAI_API_KEY",
-      "CI_STRIPE_SECRET_KEY",
+      "CI_STRIPE_SECRET_KEY", "PROD_MIGRATIONS_DB_URL",
     ]);
     const offending = ciLines.flatMap((line) =>
       [...line.matchAll(/\bsecrets\b(\.[A-Za-z0-9_]+)?/gi)]
@@ -319,11 +329,15 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
   // migrations-bis-ci since 2026-11-13 (PR 4): ONE step both applies and
   // checks, so the URL that can WRITE bis-ci reaches one step of one job, and
   // a push with no migration never reaches it at all (the job is skipped).
-  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside migrations-bis-ci's apply step's own env, as BIS_MIGRATIONS_DB_URL (mutation: map it in a job env, on a second step, or as SUPABASE_DB_URL → FAILS)", () => {
+  it("reads secrets.CI_SUPABASE_DB_URL on exactly two lines: migrations-bis-ci's apply step (as BIS_MIGRATIONS_DB_URL) and migrations-production's (as BIS_MIGRATIONS_BISCI_DB_URL, read only) (mutation: map it in a job env, on a third step, or as SUPABASE_DB_URL → FAILS)", () => {
     const matches = ciLines.filter((l) => l.includes("secrets.CI_SUPABASE_DB_URL"));
-    expect(matches.map((l) => l.trim())).toEqual(["BIS_MIGRATIONS_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}"]);
+    expect(matches.map((l) => l.trim())).toEqual([
+      "BIS_MIGRATIONS_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}",
+      "BIS_MIGRATIONS_BISCI_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}",
+    ]);
     expect(stepEnv(job("migrations-bis-ci"), APPLY_BIS_CI).BIS_MIGRATIONS_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
-    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci")) {
+    expect(stepEnv(job("migrations-production"), APPLY_PRODUCTION).BIS_MIGRATIONS_BISCI_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci" && j !== "migrations-production")) {
       expect(job(id).filter((l) => /secrets\.CI_SUPABASE_/.test(l)), id).toEqual([]);
     }
   });
@@ -498,14 +512,18 @@ describe("ci.yml's jobs", () => {
     // A due part is handed as NAME@DUE, DUE holding the same condition as the
     // part's own job-level `if` (ci-gate.sh: success when due, skipped when not).
     const parts = GATES[gate as keyof typeof GATES];
-    const names = Object.keys(env).filter((k) => k !== "BIS_CI_DUE");
+    const dueVar: Record<string, string> = { "migrations-bis-ci": "BIS_CI_DUE", "migrations-production": "PRODUCTION_DUE" };
+    expect(Object.keys(dueVar).sort()).toEqual([...DUE_PARTS].sort());
+    const names = Object.keys(env).filter((k) => !Object.values(dueVar).includes(k));
     expect(names.map((k) => env[k])).toEqual(parts.map((p) => `\${{ needs.${p}.result }}`));
-    const args = names.map((k, i) => (DUE_PARTS.includes(parts[i]!) ? `${k}@BIS_CI_DUE` : k));
+    const args = names.map((k, i) => (dueVar[parts[i]!] ? `${k}@${dueVar[parts[i]!]}` : k));
     expect(check.run).toBe(`${GATE_SCRIPT} ${args.join(" ")}`);
     if (parts.some((p) => DUE_PARTS.includes(p))) {
       expect(env.BIS_CI_DUE).toBe(`\${{ (${BIS_CI_DUE}) && 'due' || '' }}`);
+      expect(env.PRODUCTION_DUE).toBe(`\${{ (${PRODUCTION_DUE}) && 'due' || '' }}`);
     } else {
       expect(env).not.toHaveProperty("BIS_CI_DUE");
+      expect(env).not.toHaveProperty("PRODUCTION_DUE");
     }
   });
 
@@ -657,6 +675,79 @@ describe("ci.yml's jobs", () => {
     expect(block.map((l) => l.trim())).toEqual(["contents: read", "pull-requests: read"]);
   });
 
+  // PR 5 (D3, D6): production behind the owner's click. The ONE production
+  // database credential, PROD_MIGRATIONS_DB_URL, lives only in the
+  // production-migrations environment (danlo the only required reviewer,
+  // created by hand), so only a job that declares that environment can read
+  // it, and only after the click. These pins hold where it may appear.
+  const workflowDir = fileURLToPath(new URL("../../../.github/workflows/", import.meta.url));
+  const workflowFiles = fs.readdirSync(workflowDir).filter((f) => /\.ya?ml$/.test(f));
+  const workflowLines = (f: string) => codeLines(fs.readFileSync(`${workflowDir}${f}`, "utf8"));
+
+  it("reads secrets.PROD_MIGRATIONS_DB_URL on exactly one line of one workflow: migrations-production's apply step, as the runner's BIS_MIGRATIONS_DB_URL (mutation: move it to the job's env, or add a second step that reads it → FAILS)", () => {
+    const hits = workflowFiles.flatMap((f) => workflowLines(f).filter((l) => l.includes("PROD_MIGRATIONS_DB_URL")).map((l) => `${f}: ${l.trim()}`));
+    expect(hits).toEqual(["ci.yml: BIS_MIGRATIONS_DB_URL: ${{ secrets.PROD_MIGRATIONS_DB_URL }}"]);
+    const lines = job("migrations-production");
+    expect(stepEnv(lines, APPLY_PRODUCTION).BIS_MIGRATIONS_DB_URL).toBe("${{ secrets.PROD_MIGRATIONS_DB_URL }}");
+    expect(jobKeys(lines)).not.toContain("env");
+    expect(Object.keys(ciEnv)).not.toContain("BIS_MIGRATIONS_DB_URL");
+  });
+
+  it("migrations-production declares the production-migrations environment, and nothing else in any workflow does (mutation: drop `environment:` from the job → FAILS)", () => {
+    expect(jobValue(job("migrations-production"), "environment")).toBe("production-migrations");
+    const hits = workflowFiles.flatMap((f) => workflowLines(f).filter((l) => l.includes("production-migrations")).map((l) => `${f}: ${l.trim()}`));
+    expect(hits).toEqual(["ci.yml: environment: production-migrations", "ci.yml: group: production-migrations"]);
+  });
+
+  it("migrations-production runs only after migrations-bis-ci SUCCEEDED, for a branch (never main) that adds migrations (mutation: drop migrations-bis-ci's success from the if, or run it for every branch → FAILS)", () => {
+    const lines = job("migrations-production");
+    expect(jobNeeds(lines)).toEqual(["migrations-plan", "migrations-bis-ci"]);
+    expect(jobValue(lines, "if")).toBe(
+      `\${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && ${PRODUCTION_DUE}`
+      + " && needs.migrations-plan.result == 'success' && needs.migrations-bis-ci.result == 'success' }}",
+    );
+  });
+
+  it("migrations-production installs and runs nothing but a SHA-pinned checkout, the guard and the one apply-parity-check step, which nothing can skip or soften (mutation: add setup-node or `pnpm install`, or `continue-on-error` → FAILS)", () => {
+    const lines = job("migrations-production");
+    const all = steps(lines);
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, APPLY_PRODUCTION]);
+    expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/)]);
+    expect(lines.map((l) => l.trim())).toContain("persist-credentials: false");
+    const apply = all.find((s) => s.run === APPLY_PRODUCTION)!;
+    expect([...apply.keys].sort()).toEqual(["env", "name", "run"]);
+    expect(stepEnv(lines, APPLY_PRODUCTION)).toEqual({
+      BIS_CI_SUPABASE_REF: setupEnv.BIS_CI_SUPABASE_REF,
+      BIS_MIGRATIONS_DB_URL: "${{ secrets.PROD_MIGRATIONS_DB_URL }}",
+      BIS_MIGRATIONS_BISCI_DB_URL: "${{ secrets.CI_SUPABASE_DB_URL }}",
+      MIGRATIONS_ADDED: "${{ needs.migrations-plan.outputs.added }}",
+    });
+    expect(lines.filter((l) => /continue-on-error|pnpm|npm |setup-node|upload-artifact/.test(l))).toEqual([]);
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-production")) {
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(APPLY_PRODUCTION);
+      expect(jobKeys(job(id)), id).not.toContain("environment");
+    }
+  });
+
+  it("migrations-production queues in its own repo-wide group, never cancelling, and its token reads contents only (mutation: cancel-in-progress: true → FAILS)", () => {
+    const lines = job("migrations-production");
+    const block = (key: string) => {
+      const at = lines.findIndex((l) => new RegExp(`^ {4}${key}:\\s*$`).test(l));
+      expect(at, key).toBeGreaterThanOrEqual(0);
+      return lines.slice(at + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => /^ {6}/.test(x))).map((l) => l.trim());
+    };
+    expect(block("concurrency")).toEqual(["group: production-migrations", "queue: max", "cancel-in-progress: false"]);
+    expect(block("permissions")).toEqual(["contents: read"]);
+  });
+
+  it("the e2e gate reads migrations-production as due exactly when it is due, so a migration PR cannot merge before production holds its files (mutation: map PRODUCTION_DUE to '' → FAILS)", () => {
+    const gate = steps(job("e2e")).find((s) => s.run?.startsWith(GATE_SCRIPT))!;
+    expect(gate.run).toBe(`${GATE_SCRIPT} E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE MIGRATIONS_PRODUCTION@PRODUCTION_DUE`);
+    const env = stepEnv(job("e2e"), gate.run!);
+    expect(env.MIGRATIONS_PRODUCTION).toBe("${{ needs.migrations-production.result }}");
+    expect(env.PRODUCTION_DUE).toBe(`\${{ (${PRODUCTION_DUE}) && 'due' || '' }}`);
+  });
+
   // D2's fork guard: ci.yml never runs for a pull request, so no fork's code
   // ever runs with this repository's secrets (it is public).
   it("ci.yml runs on push and workflow_dispatch only, never pull_request or pull_request_target (mutation: add `pull_request:` → FAILS)", () => {
@@ -781,7 +872,7 @@ describe("ci.yml's jobs", () => {
   // shards (2026-11-12) are four more runs side by side: each mints its own
   // Clerk users with Date.now() stamps, and the sweep deletes only what is 30
   // minutes old (e2e/fixtures/stale.ts), so a shard never touches another's.
-  it.each(Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci"))("%s joins no job-level concurrency group (mutation: re-add `group: e2e-ci-supabase` → FAILS)", (id) => {
+  it.each(Object.keys(ciJobs).filter((j) => j !== "migrations-bis-ci" && j !== "migrations-production"))("%s joins no job-level concurrency group (mutation: re-add `group: e2e-ci-supabase` → FAILS)", (id) => {
     expect(jobKeys(job(id))).not.toContain("concurrency");
     expect(job(id).filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
@@ -1122,6 +1213,13 @@ describe("production secrets are reachable only from jobs that declare the produ
     "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY", "OPENAI_API_KEY",
   ]);
   const DECLARES_PRODUCTION = /^ {4}environment: production\s*$/;
+  /**
+   * PR 5 (2026-11-13): production's DATABASE credential, a third class. It is
+   * held by its own environment, production-migrations (danlo the only
+   * required reviewer), never by `production`, and is pinned to one step of
+   * ci.yml's migrations-production above.
+   */
+  const PRODUCTION_MIGRATIONS_SECRETS = new Set(["PROD_MIGRATIONS_DB_URL"]);
 
   const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
   const workflows = fs.readdirSync(fileURLToPath(workflowDir))
@@ -1180,7 +1278,7 @@ describe("production secrets are reachable only from jobs that declare the produ
     const unclassified = workflows.flatMap(({ file, lines }) => {
       const { names, malformed } = secretMentions(lines);
       return [
-        ...names.filter((n) => !PRODUCTION_SECRETS.has(n) && !NON_PRODUCTION_SECRETS.has(n)).map((n) => `${file}: ${n}`),
+        ...names.filter((n) => !PRODUCTION_SECRETS.has(n) && !NON_PRODUCTION_SECRETS.has(n) && !PRODUCTION_MIGRATIONS_SECRETS.has(n)).map((n) => `${file}: ${n}`),
         ...malformed.map((l) => `${file}: ${l}`),
       ];
     });
@@ -1211,7 +1309,9 @@ describe("production secrets are reachable only from jobs that declare the produ
     const gates = allJobs.filter((j) => j.where.startsWith("ci.yml:"));
     expect(gates.map((j) => j.where)).toEqual(expect.arrayContaining(
       ["verify", "e2e", ...PARTS].map((id) => `ci.yml:${id}`)));
-    expect(gates.filter((j) => j.anyEnvironment || j.production.length > 0).map((j) => j.where)).toEqual([]);
+    // The one exception since PR 5: migrations-production declares its OWN
+    // environment, production-migrations (pinned above), never `production`.
+    expect(gates.filter((j) => (j.anyEnvironment && j.where !== "ci.yml:migrations-production") || j.production.length > 0 || j.declares).map((j) => j.where)).toEqual([]);
     expect(secretMentions(ciLines).names.filter((n) => PRODUCTION_SECRETS.has(n))).toEqual([]);
   });
 });
