@@ -16,7 +16,7 @@ vi.mock("./prices", async (importOriginal) => {
   };
 });
 
-import { aiComplete, aiGateMs, aiReadiness, GATE_TIMEOUT_MS, type AiInput } from "./gateway";
+import { aiComplete, aiOverheadMs, aiReadiness, GATE_TIMEOUT_MS, LEDGER_TIMEOUT_MS, type AiInput } from "./gateway";
 import { AI_TASK_NAMES, AI_TASKS, type AiTask, type TaskRoute } from "./tasks";
 import { openGateDb, type GateOver } from "./testing/open-gate";
 
@@ -248,8 +248,9 @@ describe("the web chat task: tools, its ledger row, and no gate", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("aiGateMs: no gate time for the web chat today, the gate's bound for every other task", () => {
-    expect(AI_TASK_NAMES.map((t) => [t, aiGateMs(t)])).toEqual(AI_TASK_NAMES.map((t) => [t, t === "web_chat" ? 0 : GATE_TIMEOUT_MS]));
+  it("aiOverheadMs: the ledger write's bound for every task, plus the gate's for every gated one (the web chat is ungated; mutations: drop either part -> FAILS)", () => {
+    expect(AI_TASK_NAMES.map((t) => [t, aiOverheadMs(t)]))
+      .toEqual(AI_TASK_NAMES.map((t) => [t, (t === "web_chat" ? 0 : GATE_TIMEOUT_MS) + LEDGER_TIMEOUT_MS]));
   });
 
   it("sends tools, a tool exchange in the wire shape and tool_choice; a tool call with null content is an answer of \"\"", async () => {

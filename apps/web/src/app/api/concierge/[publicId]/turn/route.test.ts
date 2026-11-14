@@ -852,31 +852,51 @@ describe("POST /api/concierge/[publicId]/turn — on the AI gateway (the web_cha
     expect(rowsOf(calls)).toEqual([["ai_ledger_record", "web_chat", "ok"], ["ai_ledger_record", "web_chat", "ok"]]);
   });
 
-  // The follow-up's own gate read must fit in the turn's budget with the follow-up itself. A clock that the gate
-  // read advances 3 s (its whole bound) and the first completion 20 s leaves 4 s of TURN_BUDGET_MS (27 s).
-  async function captureTurnWithSlowGate(): Promise<{ reply: string }> {
-    let clock = Date.now();
+  // The follow-up's gateway overhead (its gate read, were the chat gated, and its ledger write) must fit in the
+  // turn's budget with the follow-up itself. A slow database: each gate read and each ledger write advances the
+  // clock 3 s (its whole bound); the first completion takes `firstMs`. `worstEndMs` is when the turn would end
+  // were the follow-up to use its whole time limit and its ledger write its whole bound: never past
+  // TURN_BUDGET_MS (27 s), so the turn fits in Vercel's 30 s.
+  async function captureTurnWithSlowGate(firstMs = 20_000): Promise<{ reply: string; worstEndMs: number }> {
+    const start = Date.now();
+    let clock = start;
+    let worstEndMs = 0;
     const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const limits: number[] = [];
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => { limits.push(ms); return timeout(ms); });
     try {
       const g = gateRpc();
-      aiGate.rpc = (fn, args) => { if (fn === "ai_gate_check") clock += 3_000; return g.rpc(fn, args); };
+      aiGate.rpc = (fn, args) => { if (fn === "ai_gate_check" || fn === "ai_ledger_record") clock += 3_000; return g.rpc(fn, args); };
       fetchMock.mockImplementation(async () => {
-        if (fetchMock.mock.calls.length === 1) clock += 20_000;
+        if (fetchMock.mock.calls.length === 1) clock += firstMs;
+        else worstEndMs = clock - start + limits[limits.length - 1]! + 3_000;
         return modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" });
       });
-      return await (await laterTurn()).json() as { reply: string };
+      const body = await (await laterTurn()).json() as { reply: string };
+      return { ...body, worstEndMs: Math.max(worstEndMs, clock - start) };
     } finally {
       now.mockRestore();
+      spy.mockRestore();
     }
   }
 
-  it("ungated (no gate read): 4 s left still runs the follow-up", async () => {
+  it("a slow ledger write and a 17 s first answer: the follow-up runs, and even at its whole limit the turn ends within 27 s", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    await captureTurnWithSlowGate();
+    const { worstEndMs } = await captureTurnWithSlowGate(17_000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(worstEndMs).toBeLessThanOrEqual(27_000);
   });
 
-  it("were the chat gated, a slow gate would leave no room: the follow-up is skipped, not started past the budget (mutation: drop aiGateMs from timeLeft -> FAILS)", async () => {
+  it("a slow ledger write and a 20 s first answer leave no room: the follow-up is skipped, never started past the budget (mutation: drop the ledger write from aiOverheadMs -> FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { reply, worstEndMs } = await captureTurnWithSlowGate(20_000);
+    expect(worstEndMs).toBeLessThanOrEqual(27_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reply).toBe(conciergeStrings("en").captured);
+  });
+
+  it("were the chat gated, a slow gate would leave no room: the follow-up is skipped, not started past the budget (mutation: drop aiOverheadMs from timeLeft -> FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     swapped.routes.web_chat = { feature: "web_chat", gated: true, primary: { model: "gpt-4o-mini", params: { maxOutput: { field: "max_tokens", tokens: 500 } } } };
     const body = await captureTurnWithSlowGate();

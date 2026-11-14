@@ -82,12 +82,14 @@ const NO_USAGE: AiUsage = { inputTokens: null, outputTokens: null, costMicroUsd:
 const QUIET: ReadonlySet<AiOutcome> = new Set<AiOutcome>(["global_off", "account_off", "over_budget"]);
 
 /**
- * How long the gateway may spend on the gate read (steps 3-4) before a task's completion: GATE_TIMEOUT_MS, or 0
- * for an ungated task (`gated: false`), which skips the gate (see aiComplete). A caller that budgets its own time
- * around a completion (the web chat's follow-up) subtracts this.
+ * The most time aiComplete may spend on one completion OUTSIDE the caller's time limit: the gate read before it
+ * (steps 3-4, GATE_TIMEOUT_MS, none for an ungated task) and the ledger write after it (step 6, LEDGER_TIMEOUT_MS,
+ * every task). A caller that budgets its own time around a completion (the web chat's follow-up) subtracts this
+ * before it sets the completion's time limit, so the gate, the call and its row fit together. With a fallback the
+ * second attempt adds one more ledger write; no task has a fallback today.
  */
-export function aiGateMs(task: AiTask): number {
-  return AI_TASKS[task].gated ? GATE_TIMEOUT_MS : 0;
+export function aiOverheadMs(task: AiTask): number {
+  return (AI_TASKS[task].gated ? GATE_TIMEOUT_MS : 0) + LEDGER_TIMEOUT_MS;
 }
 
 /**
@@ -133,7 +135,7 @@ export async function aiComplete(db: SupabaseClient, input: AiInput): Promise<Ai
       await finish("unknown_model", NO_USAGE, primary.model);
       return { ok: false, reason: "unknown_model" };
     }
-    if (aiGateMs(input.task) > 0) {
+    if (route.gated) {
       let gate: AiGate;
       try {
         gate = await aiGateCheck(db, { accountId: input.accountId, ...keys, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });

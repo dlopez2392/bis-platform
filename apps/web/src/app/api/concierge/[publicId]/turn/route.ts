@@ -85,8 +85,8 @@ const FOLLOWUP_TIMEOUT_MS = 8_000;
 const FOLLOWUP_MIN_MS = 2_000;
 /** Everything this handler does must finish inside `maxDuration` (30s);
  *  three seconds are left for the reads and writes after the model. The
- *  follow-up's own gate read, when the web_chat task has one (aiGateMs: none
- *  while its row is `gated: false`, 3 s if it were gated), comes out of this budget BEFORE the
+ *  follow-up's gateway overhead (aiOverheadMs: its ledger write, 3 s at most,
+ *  plus a 3 s gate read were the web_chat row gated) comes out of this budget BEFORE the
  *  follow-up's time limit is set, so the gate and the call fit together. */
 const TURN_BUDGET_MS = 27_000;
 // minors-1b item 6: the phone route's own shape (api/voice/incoming/route.ts) for telling "the read
@@ -198,7 +198,7 @@ export async function POST(
     getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount, readBillingStanding,
   } = await import("@bis/db");
   // Lazy for the same reason: the gateway imports `@bis/db` at its module scope.
-  const { aiComplete, aiGateMs, aiReadiness } = await import("@/lib/ai/gateway");
+  const { aiComplete, aiOverheadMs, aiReadiness } = await import("@/lib/ai/gateway");
 
   const ipHash = hashIp(clientIp(req.headers));
   const origin = req.headers.get("origin");
@@ -762,7 +762,7 @@ export async function POST(
     // happened, never to the pre-result words.
     if (toolArgs) {
       reply = "";
-      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt) - aiGateMs("web_chat");
+      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt) - aiOverheadMs("web_chat");
       const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
       if (followupTimeout >= FOLLOWUP_MIN_MS) {
         const result = withDroppedNote(captureResult(outcome), dropped, "web");
