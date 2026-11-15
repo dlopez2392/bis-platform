@@ -177,6 +177,9 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
   // must be shut out while paused); its ON calls the guard with no option and stays refused.
   "app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts#setOwnerLineSwitchAction":
     "turning the owner line OFF: protective, it shuts phone access to the business's data; ON stays refused while paused",
+  // S-22 slice 1 PR 2 (plan D4): disconnecting Google Calendar revokes BIS's read of the owner's calendar.
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/google-actions.ts#disconnectGoogleCalendarAction":
+    "disconnecting Google Calendar: protective, it revokes BIS's access to the owner's calendar and deletes the token",
 };
 
 /** The non-GET handlers under app/api/accounts, each with how a paused account is answered. */
