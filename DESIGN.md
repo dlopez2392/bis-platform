@@ -128,6 +128,12 @@ they re-resolve against the accent each element inherits.
    changes nothing. "Stop calling in from this cell" on Mis preferencias is
    the first such action. An action whose Undo would need the OLD secret kept
    ("Change PIN") carries no Undo and runs immediately.
+   **Amended 2026-11-15 (S-22 slice 1, owner approved):** disconnecting an
+   outside account whose access BIS revokes at the provider (Google Calendar
+   is the first) runs at once and carries no Undo, for the reason "Change
+   PIN" does: an Undo would need the revoked credential back. It is not a
+   typed-name confirmation either, because nothing of the customer's is lost
+   and reconnecting restores it. Its toast says what happens next in words.
 7. Loading = skeletons shaped like the content. No spinners.
 8. One primary button per view; everything else is ghost. (amended 2026-09-23)
    A view here is one decision. A settings page made of independent cards —
