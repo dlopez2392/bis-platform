@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { serviceDb, readPersonId, upsertGoogleConnection, emit, emitAgencyEvent, completeTask } from "@bis/db";
+import { serviceDb, readPersonId, upsertGoogleConnection, emit, emitAgencyEvent, completeGoogleReconnectTask } from "@bis/db";
 import { requireAccountAccess, accountHome } from "@/lib/auth";
 import { isUuid } from "@/lib/assign/action-guards";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
@@ -147,12 +147,12 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
     const old = openGoogleToken(r.sealed, r.keyVersion, { accountId, id: written.id, version: r.version }, [cfg.keys.current, cfg.keys.previous]);
     if (old) await revokeQuietly(old, deps, accountId, "revoking the replaced Google account's grant");
   }
-  // PR 4 (D12): the "Reconnect your Google Calendar" To-do this write cleared off the row is done now. Scoped by
-  // THIS account (completeTask's own filter), by the system: which BIS person reconnected is not the client's
-  // to read on a To-do. A failure is logged; the connect stands.
+  // PR 4 (D12): the "Reconnect your Google Calendar" To-do this write cleared off the row is done now: only while
+  // it is still open (an owner who ticked it keeps their tick), only in THIS account, by the system (which BIS
+  // person reconnected is not the client's to read on a To-do). A failure is logged; the connect stands.
   if (written.previousReconnectTaskId) {
     try {
-      await completeTask(db, accountId, written.previousReconnectTaskId, "google-calendar", "system");
+      await completeGoogleReconnectTask(db, accountId, written.previousReconnectTaskId);
     } catch (e) {
       console.error(`google calendar callback: account ${accountId}: completing the reconnect To-do failed: ${scrub(e, [g.refreshToken, g.accessToken])}`);
     }

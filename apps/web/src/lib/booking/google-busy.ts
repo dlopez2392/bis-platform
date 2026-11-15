@@ -1,6 +1,6 @@
 import {
-  markGoogleNeedsReconnect, setGoogleReconnectTask, stampGoogleChecked, addTask, completeTask, getAccountLanguage,
-  type serviceDb,
+  markGoogleNeedsReconnect, setGoogleReconnectTask, stampGoogleChecked, addTask, completeGoogleReconnectTask,
+  getAccountLanguage, type serviceDb,
 } from "@bis/db";
 import {
   googleCalendarConfig, readAccountConnection, refreshGoogleAccessToken, queryGoogleFreeBusy, type AccountConnection,
@@ -18,16 +18,21 @@ import type { Range } from "./slots";
  * It never throws and never takes longer than GOOGLE_BUSY_BUDGET_MS: when Google cannot answer, the outcome is
  * `unchecked` and the caller offers what BIS alone would (owner answer Q1). `disconnected` (invalid_grant, or a 401
  * on a token just refreshed) offers the same and, AFTER the answer (`defer`), marks the row needs_reconnect on the
- * version it read and opens one To-do. Every read that reached for Google logs ONE line, `google_busy_ms` included
- * (A5); a token, a busy time or Google's error text never appears in it.
+ * version it read and opens one To-do. A failed read carries `lastChecked`, this instance's last answer for the
+ * same connection, version and day, so a submit can still honour the grid the picker showed (D11). Every read that
+ * reached for Google logs ONE line, `google_busy_ms` included (A5); a token, a busy time or Google's error text
+ * never appears in it.
  *
- * The access token lives in this module's memory only (D5), until 5 minutes before its `expires_in`. The picker
- * reads through a 60-second memo (D9); a submit check passes `fresh` and always asks Google.
+ * The access token lives in this module's memory only (D5), keyed by connection and version, until 5 minutes before
+ * its `expires_in`. The picker reads through a 60-second memo keyed by connection, version and day (D9); a submit
+ * check passes `fresh` and always asks Google.
  */
 export const GOOGLE_BUSY_BUDGET_MS = 1_500;
 export const GOOGLE_BUSY_MEMO_MS = 60_000;
 const ACCESS_SLACK_MS = 5 * 60_000;
 const MEMO_MAX = 500;
+/** How often one instance re-tries opening the To-do of a marked row that has none (a To-do write that failed). */
+const TODO_RETRY_MS = 10 * 60_000;
 const TODO_ACTOR = "google-calendar";
 const DAY_MS = 24 * 3600_000;
 
@@ -47,16 +52,19 @@ export type GoogleBusyDeps = {
 export type GoogleBusyRead =
   | { outcome: "off" }
   | { outcome: "checked"; busy: Range[] }
-  | { outcome: "unchecked"; reason: string }
-  | { outcome: "disconnected"; reason: string };
+  | { outcome: "unchecked" | "disconnected"; reason: string; lastChecked: Range[] | null };
 
 const accessTokens = new Map<string, { token: string; expiresAtMs: number }>();
 const memo = new Map<string, { busy: Range[]; atMs: number }>();
+const todoTries = new Map<string, number>();
+const connKey = (c: AccountConnection) => `${c.id}:${c.version}`;
+const memoKey = (c: AccountConnection, day: string) => `${c.id}:${c.version}:${day}`;
 
-/** Tests only: forget every memoised answer and access token. */
+/** Tests only: forget every memoised answer, access token and To-do retry. */
 export function forgetGoogleBusyMemory(): void {
   accessTokens.clear();
   memo.clear();
+  todoTries.clear();
 }
 
 /**
@@ -76,6 +84,12 @@ export function googleBusyWindow(day: string): { timeMin: Date; timeMax: Date } 
 }
 
 const defaultDefer = (job: () => Promise<void>) => { void job(); };
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** What a leg learned: the outcome, the connection row once read (even if the budget then ran out), and whether
+ *  it reached for Google at all (a memo hit, no connection or a needs-reconnect row did not). */
+type Leg = { read: GoogleBusyRead; called: boolean };
+type Seen = { conn?: AccountConnection };
 
 /** The account's busy ranges for `day`, or why there are none. Never rejects. */
 export async function readGoogleBusy(
@@ -87,98 +101,127 @@ export async function readGoogleBusy(
   const clock = deps.clock ?? Date.now;
   const startedMs = clock();
   const ctl = new AbortController();
+  const seen: Seen = {};
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<Leg>((resolve) => {
-    timer = setTimeout(() => { ctl.abort(); resolve({ read: { outcome: "unchecked", reason: "timeout" }, called: true }); }, GOOGLE_BUSY_BUDGET_MS);
+    timer = setTimeout(() => {
+      ctl.abort();
+      resolve({ read: { outcome: "unchecked", reason: "timeout", lastChecked: null }, called: true });
+    }, GOOGLE_BUSY_BUDGET_MS);
   });
   let leg: Leg;
   try {
     leg = await Promise.race([
-      askGoogle(db, accountId, day, window, opts.fresh, { cfg, fetch: deps.fetch ?? globalThis.fetch, clock, signal: ctl.signal }),
+      askGoogle(db, accountId, day, window, opts.fresh, seen, { cfg, fetch: deps.fetch ?? globalThis.fetch, clock, signal: ctl.signal }),
       budget,
     ]);
   } catch (e) {
-    leg = { read: { outcome: "unchecked", reason: `bug_${e instanceof Error ? e.name : "unknown"}` }, called: true };
+    leg = { read: { outcome: "unchecked", reason: `bug_${e instanceof Error ? e.name : "unknown"}`, lastChecked: null }, called: true };
   } finally {
     clearTimeout(timer);
   }
-  const { read, conn, called } = leg;
+  const { called } = leg;
+  let read = leg.read;
+  const conn = seen.conn;
+  if (conn && (read.outcome === "unchecked" || read.outcome === "disconnected")) {
+    read = { ...read, lastChecked: memo.get(memoKey(conn, day))?.busy ?? null };
+  }
   if (called) {
     const reason = read.outcome === "unchecked" || read.outcome === "disconnected" ? ` reason=${read.reason}` : "";
     console.log(`google_busy account=${accountId} outcome=${read.outcome}${reason} google_busy_ms=${clock() - startedMs}`);
   }
-  if (conn && (read.outcome === "checked" || read.outcome === "disconnected")) {
-    const defer = deps.defer ?? defaultDefer;
-    const job = read.outcome === "checked"
-      ? () => stampGoogleChecked(db, conn.id, conn.version).then(() => undefined)
-      : () => openReconnectTodo(db, accountId, conn, clock());
-    defer(() => job().catch((e: unknown) => {
-      console.error(`google calendar: account ${accountId}: after a busy read: ${e instanceof Error ? e.message : String(e)}`);
-    }));
+  const job = conn ? afterwards(db, accountId, conn, read, called, clock()) : null;
+  if (job) {
+    try {
+      (deps.defer ?? defaultDefer)(() => job().catch((e: unknown) => {
+        console.error(`google calendar: account ${accountId}: after a busy read: ${message(e)}`);
+      }));
+    } catch (e) {
+      console.error(`google calendar: account ${accountId}: could not schedule the work after a busy read: ${message(e)}`);
+    }
   }
   return read;
 }
 
-/** `called`: whether this read reached for Google at all (a memo hit, no connection or a needs-reconnect row did not). */
-type Leg = { read: GoogleBusyRead; conn?: AccountConnection; called: boolean };
+/** The work a read leaves for after the answer: stamp a checked read; mark and open the To-do on a disconnect; open
+ *  a marked row's missing To-do (at most every TODO_RETRY_MS per instance). Null when there is none. */
+function afterwards(
+  db: Db, accountId: string, conn: AccountConnection, read: GoogleBusyRead, called: boolean, nowMs: number,
+): (() => Promise<void>) | null {
+  if (read.outcome === "checked" && called) return () => stampGoogleChecked(db, conn.id, conn.version).then(() => undefined);
+  if (read.outcome === "disconnected") return () => openReconnectTodo(db, accountId, conn, nowMs, { mark: true });
+  if (conn.status === "needs_reconnect" && conn.reconnectTaskId === null) {
+    const tried = todoTries.get(connKey(conn));
+    if (tried !== undefined && nowMs - tried < TODO_RETRY_MS) return null;
+    todoTries.set(connKey(conn), nowMs);
+    return () => openReconnectTodo(db, accountId, conn, nowMs, { mark: false });
+  }
+  return null;
+}
 
 async function askGoogle(
-  db: Db, accountId: string, day: string, window: { timeMin: Date; timeMax: Date }, fresh: boolean,
+  db: Db, accountId: string, day: string, window: { timeMin: Date; timeMax: Date }, fresh: boolean, seen: Seen,
   x: { cfg: NonNullable<ReturnType<typeof googleCalendarConfig>>; fetch: typeof fetch; clock: () => number; signal: AbortSignal },
 ): Promise<Leg> {
+  const failed = (outcome: "unchecked" | "disconnected", reason: string): Leg =>
+    ({ read: { outcome, reason, lastChecked: null }, called: true });
   let conn: AccountConnection | null;
   try {
     conn = await readAccountConnection(db, accountId, [x.cfg.keys.current, x.cfg.keys.previous]);
   } catch {
-    return { read: { outcome: "unchecked", reason: "connection_read" }, called: true };
+    return failed("unchecked", "connection_read");
   }
-  if (!conn || conn.status !== "connected") return { read: { outcome: "off" }, called: false };
-  if (!conn.token) return { read: { outcome: "unchecked", reason: "token_unopened" }, conn, called: true };
+  if (!conn) return { read: { outcome: "off" }, called: false };
+  seen.conn = conn;
+  if (conn.status !== "connected") return { read: { outcome: "off" }, called: false };
+  if (!conn.token) return failed("unchecked", "token_unopened");
 
-  const memoKey = `${conn.id}:${conn.version}:${day}`;
-  const hit = memo.get(memoKey);
+  const hit = memo.get(memoKey(conn, day));
   if (!fresh && hit && x.clock() - hit.atMs < GOOGLE_BUSY_MEMO_MS) return { read: { outcome: "checked", busy: hit.busy }, called: false };
 
-  const tokenKey = `${conn.id}:${conn.version}`;
   const deps = { fetch: x.fetch, signal: x.signal, now: x.clock() };
-  let access = accessTokens.get(tokenKey);
+  let access = accessTokens.get(connKey(conn));
   const cached = access !== undefined && access.expiresAtMs - ACCESS_SLACK_MS > x.clock();
   if (!cached) {
     const r = await refreshGoogleAccessToken(x.cfg, conn.token, deps);
     if (!r.ok) {
-      accessTokens.delete(tokenKey);
-      return { read: r.error === "invalid_grant" ? { outcome: "disconnected", reason: r.error } : { outcome: "unchecked", reason: r.error }, conn, called: true };
+      accessTokens.delete(connKey(conn));
+      return failed(r.error === "invalid_grant" ? "disconnected" : "unchecked", r.error);
     }
     access = { token: r.accessToken, expiresAtMs: r.accessExpiresAt.getTime() };
-    accessTokens.set(tokenKey, access);
+    accessTokens.set(connKey(conn), access);
   }
   const fb = await queryGoogleFreeBusy(access!.token, window, deps);
   if (!fb.ok) {
-    if (fb.error === "http_401") accessTokens.delete(tokenKey);
+    if (fb.error === "http_401") accessTokens.delete(connKey(conn));
     // A 401 on a token Google issued moments ago is a grant that no longer works (D11); on a cached one, the next
     // read refreshes.
-    const read: GoogleBusyRead = fb.error === "http_401" && !cached
-      ? { outcome: "disconnected", reason: fb.error } : { outcome: "unchecked", reason: fb.error };
-    return { read, conn, called: true };
+    return failed(fb.error === "http_401" && !cached ? "disconnected" : "unchecked", fb.error);
   }
   const busy = fb.busy.map((b) => ({ startsAt: b.start, endsAt: b.end }));
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value!);
-  memo.set(memoKey, { busy, atMs: x.clock() });
-  return { read: { outcome: "checked", busy }, conn, called: true };
+  memo.set(memoKey(conn, day), { busy, atMs: x.clock() });
+  return { read: { outcome: "checked", busy }, called: true };
 }
 
 /**
- * D12, after the answer: mark the version that was read needs_reconnect, and only when THIS read marked it, open
- * the one To-do (no contact, the account's language) and keep it on the row. A row that moved on meanwhile (a
- * reconnect) keeps nothing, so the To-do just opened is completed rather than left orphaned.
+ * D12, after the answer. With `mark`: mark the version that was read needs_reconnect, and go on only when THIS read
+ * marked it. Without (a marked row whose To-do never opened): go straight on. Then open the one To-do (no contact,
+ * the account's language) and keep it on the row by compare-and-set; a To-do the row would not keep (a reconnect,
+ * or another instance's To-do, landed meanwhile) or whose set FAILED is completed at once, so none is orphaned.
  */
-async function openReconnectTodo(db: Db, accountId: string, conn: AccountConnection, nowMs: number): Promise<void> {
-  if ((await markGoogleNeedsReconnect(db, conn.id, conn.version)) !== "marked") return;
+async function openReconnectTodo(
+  db: Db, accountId: string, conn: AccountConnection, nowMs: number, opts: { mark: boolean },
+): Promise<void> {
+  if (opts.mark && (await markGoogleNeedsReconnect(db, conn.id, conn.version)) !== "marked") return;
   const locale = (await getAccountLanguage(db, accountId)) === "es" ? "es" : "en";
   const task = await addTask(db, accountId, {
     title: t(m, "calendar.googleBusy.reconnectTodo", locale), dueAt: new Date(nowMs).toISOString(),
   }, TODO_ACTOR, "system");
-  if (!(await setGoogleReconnectTask(db, conn.id, conn.version, task.id))) {
-    await completeTask(db, accountId, task.id, TODO_ACTOR, "system");
+  let kept = false;
+  try {
+    kept = await setGoogleReconnectTask(db, conn.id, conn.version, task.id);
+  } finally {
+    if (!kept) await completeGoogleReconnectTask(db, accountId, task.id);
   }
 }

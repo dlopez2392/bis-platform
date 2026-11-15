@@ -436,11 +436,22 @@ export function computeMoveSlots(config: SlotConfig, others: Range[], own: Range
   return computeSlots(config, others, now).filter((r) => !overlapsOwn(r, own));
 }
 
+/**
+ * `anyStart` (S-22 PR 4, review I1; plan D11): drop ONLY the "a start the engine offers under some state of the
+ * day" requirement. Set when the owner's Google calendar could not be read at submit and this instance holds no
+ * earlier answer for the day: the picker (perhaps on another instance) may have offered a start re-anchored after
+ * a Google event, and owner answer Q1 says a Google failure never refuses it. Every other rule (free with the
+ * buffer, fits the hours wall clock and real time, notice, horizon, closures, a whole minute) still applies.
+ */
+export type BookableOptions = { anyStart?: boolean };
+
 /** The submit-time twin of `computeMoveSlots`: `bookableRange` against the
  *  day without the booking being moved, and never a range overlapping it.
  *  Every slot `computeMoveSlots` offers passes this (move-slots.test.ts). */
-export function movableRange(config: SlotConfig, others: Range[], own: Range, now: Date, startsAt: Date): Range | null {
-  const r = bookableRange(config, others, now, startsAt);
+export function movableRange(
+  config: SlotConfig, others: Range[], own: Range, now: Date, startsAt: Date, opts: BookableOptions = {},
+): Range | null {
+  const r = bookableRange(config, others, now, startsAt, opts);
   return r && !overlapsOwn(r, own) ? r : null;
 }
 
@@ -471,7 +482,9 @@ export function movableRange(config: SlotConfig, others: Range[], own: Range, no
  * Every slot `computeSlots` offers passes this (pinned in slots.test.ts), so
  * a slot the picker showed can only be refused here if it really was taken.
  */
-export function bookableRange(config: SlotConfig, booked: Range[], now: Date, startsAt: Date): Range | null {
+export function bookableRange(
+  config: SlotConfig, booked: Range[], now: Date, startsAt: Date, opts: BookableOptions = {},
+): Range | null {
   try {
     const prep = prepare(config, now);
     if (!prep) return null;
@@ -504,7 +517,7 @@ export function bookableRange(config: SlotConfig, booked: Range[], now: Date, st
       const toMinutes = minutesOf(to);
       if (m < fromMinutes || m + slotDurationMinutes > toMinutes) continue;
       if (!endsByClose(new Date(end), cal, toMinutes, timezone)) continue;
-      if (onStep(fromMinutes) || anchors.some((a) => a >= fromMinutes && onStep(a))) {
+      if (opts.anyStart || onStep(fromMinutes) || anchors.some((a) => a >= fromMinutes && onStep(a))) {
         return { startsAt: new Date(t), endsAt: new Date(end) };
       }
     }

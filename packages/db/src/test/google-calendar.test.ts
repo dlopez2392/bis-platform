@@ -4,7 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import {
   getGoogleConnectionStatus, readGoogleConnectionSealed, upsertGoogleConnection, markGoogleNeedsReconnect,
-  stampGoogleChecked, deleteGoogleConnection, setGoogleReconnectTask, GOOGLE_CHECKED_STAMP_MINUTES,
+  stampGoogleChecked, deleteGoogleConnection, setGoogleReconnectTask, completeGoogleReconnectTask,
+  GOOGLE_CHECKED_STAMP_MINUTES,
   type GoogleConnectionRef, type GoogleConnectionWrite,
 } from "../google-calendar";
 
@@ -304,5 +305,52 @@ describe("setGoogleReconnectTask (PR 4, D12: compare-and-set, the To-do of THIS 
       const { id } = await upsertGoogleConnection(db, write(accountId));
       expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
       expect(await setGoogleReconnectTask(db, id, 1, "00000000-0000-4000-8000-000000000000")).toBe(false);
+    }));
+
+  it("the sealed read carries the To-do id, so a busy read can see a mark whose To-do never opened", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ status: "needs_reconnect", reconnect_task_id: null });
+      const task = await newTask(db, accountId);
+      expect(await setGoogleReconnectTask(db, id, 1, task)).toBe(true);
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ reconnect_task_id: task });
+    }));
+});
+
+describe("completeGoogleReconnectTask (review minor 7: never re-completes)", () => {
+  const completedAt = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("tasks").select("completed_at").eq("id", id).single();
+    if (error) throw error;
+    return (data as { completed_at: string | null }).completed_at;
+  };
+
+  it("completes an open To-do of this account, once", () =>
+    withTestAccount(async (db, accountId) => {
+      const task = await newTask(db, accountId);
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(true);
+      const at = await completedAt(db, task);
+      expect(at).not.toBeNull();
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
+      expect(await completedAt(db, task)).toBe(at);
+    }));
+
+  it("a To-do the owner already ticked keeps the owner's completion time (probe: drop the open filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const task = await newTask(db, accountId);
+      const ticked = "2026-11-10T09:00:00.000Z";
+      const { error } = await db.from("tasks").update({ completed_at: ticked }).eq("id", task);
+      if (error) throw error;
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
+      expect(Date.parse((await completedAt(db, task))!)).toBe(Date.parse(ticked));
+    }));
+
+  it("another account's To-do is never touched", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const foreign = await newTask(db, accountB);
+        expect(await completeGoogleReconnectTask(db, accountA, foreign)).toBe(false);
+        expect(await completedAt(db, foreign)).toBeNull();
+      });
     }));
 });

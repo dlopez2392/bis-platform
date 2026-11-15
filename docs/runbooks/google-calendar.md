@@ -168,11 +168,14 @@ google_busy account=<account uuid> outcome=<checked|unchecked|disconnected> [rea
   OAuth error code, `malformed` (an `errors[]` entry or an unparseable
   instant), `connection_read` (the database row could not be read) or
   `token_unopened` (no key in the environment opens the stored token; see
-  section 5).
+  section 5). At a SUBMIT, a failure never refuses a time the picker offered:
+  the instance's last answer for that day is used if it has one, otherwise the
+  start only has to pass BIS's own rules (it may sit off the usual grid).
 - `outcome=disconnected`: `invalid_grant`, or a 401 right after a fresh
   token. After the answer the row is marked `needs_reconnect` and ONE
   "Reconnect your Google Calendar" To-do opens; from then on reads skip Google
-  and log nothing until the owner reconnects.
+  and log nothing until the owner reconnects. If that To-do failed to open,
+  a later read opens it (at most every 10 minutes per instance).
 - `google_busy_ms`: the whole Google leg (row read, token refresh when the
   in-memory one has lapsed, freeBusy). It runs BESIDE the database reads, so
   a caller waits for whichever is slower, and never more than 1,500 ms for

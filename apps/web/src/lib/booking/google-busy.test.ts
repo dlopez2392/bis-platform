@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  */
 const dbm = vi.hoisted(() => ({
   booked: vi.fn(), status: vi.fn(), closed: vi.fn(), sealed: vi.fn(), mark: vi.fn(), setTask: vi.fn(),
-  stamp: vi.fn(), addTask: vi.fn(), completeTask: vi.fn(), language: vi.fn(),
+  stamp: vi.fn(), addTask: vi.fn(), completeReconnect: vi.fn(), language: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -21,7 +21,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   setGoogleReconnectTask: (...a: unknown[]) => dbm.setTask(...a),
   stampGoogleChecked: (...a: unknown[]) => dbm.stamp(...a),
   addTask: (...a: unknown[]) => dbm.addTask(...a),
-  completeTask: (...a: unknown[]) => dbm.completeTask(...a),
+  completeGoogleReconnectTask: (...a: unknown[]) => dbm.completeReconnect(...a),
   getAccountLanguage: (...a: unknown[]) => dbm.language(...a),
 }));
 
@@ -43,12 +43,17 @@ const ACCOUNT = "a1a1a1a1-0000-4000-8000-000000000001";
 const CONN = "11111111-1111-4111-8111-111111111111";
 const db = {} as unknown as ReturnType<typeof serviceDb>;
 
-function sealedRow(over: { version?: number; status?: "connected" | "needs_reconnect" } = {}) {
+function sealedRow(over: {
+  version?: number; status?: "connected" | "needs_reconnect"; accountId?: string; id?: string; refresh?: string;
+  key?: string; reconnectTaskId?: string | null;
+} = {}) {
   const version = over.version ?? 3;
-  const { sealed, keyVersion } = sealGoogleToken(REFRESH, { accountId: ACCOUNT, id: CONN, version }, googleTokenKey(KEY)!);
+  const accountId = over.accountId ?? ACCOUNT;
+  const id = over.id ?? CONN;
+  const { sealed, keyVersion } = sealGoogleToken(over.refresh ?? REFRESH, { accountId, id, version }, googleTokenKey(over.key ?? KEY)!);
   return {
-    id: CONN, account_id: ACCOUNT, version, status: over.status ?? "connected", google_email: "owner@example.com",
-    refresh_token_sealed: sealed, key_version: keyVersion,
+    id, account_id: accountId, version, status: over.status ?? "connected", google_email: "owner@example.com",
+    refresh_token_sealed: sealed, key_version: keyVersion, reconnect_task_id: over.reconnectTaskId ?? null,
   };
 }
 
@@ -120,7 +125,7 @@ beforeEach(() => {
   dbm.setTask.mockResolvedValue(true);
   dbm.stamp.mockResolvedValue(true);
   dbm.addTask.mockResolvedValue({ id: "task-1" });
-  dbm.completeTask.mockResolvedValue(undefined);
+  dbm.completeReconnect.mockResolvedValue(true);
   dbm.language.mockResolvedValue("en");
   lines = [];
   for (const k of ["log", "warn", "error", "info"] as const) {
@@ -232,7 +237,6 @@ describe("when Google cannot answer, the day is offered as BIS alone would (Q1: 
     ["a network failure", { freebusy: "network" }],
     ["an errors[] entry inside a 200", { freebusy: "errors", busy: [[`${DAY}T10:00:00Z`, `${DAY}T11:00:00Z`]] }],
     ["an unparseable instant (probe: pass Google's instants unvalidated -> FAILS)", { freebusy: "unparseable", busy: [[`${DAY}T10:00:00Z`, `${DAY}T11:00:00Z`]] }],
-    ["a 401 on a fresh token", { freebusy: 401 }],
   ];
   for (const [what, google] of cases) {
     it(`${what}: today's slots, bookable at submit too, and one line naming the account and the outcome (probe: fail closed -> FAILS)`, async () => {
@@ -302,10 +306,10 @@ describe("invalid_grant (D12): mark once, ONE To-do, and no more Google calls", 
     expect(dbm.addTask).toHaveBeenCalledTimes(1);
     expect(dbm.addTask.mock.calls[0]!.slice(1, 3)).toEqual([ACCOUNT, { title: "Reconnect your Google Calendar", dueAt: expect.any(String) }]);
     expect(dbm.setTask.mock.calls).toEqual([[db, CONN, 3, "task-1"]]);
-    expect(dbm.completeTask).not.toHaveBeenCalled();
+    expect(dbm.completeReconnect).not.toHaveBeenCalled();
 
     // The row now says so: every later read skips Google, the picker's and the submit's.
-    dbm.sealed.mockResolvedValue(sealedRow({ status: "needs_reconnect" }));
+    dbm.sealed.mockResolvedValue(sealedRow({ status: "needs_reconnect", reconnectTaskId: "task-1" }));
     g.calls.length = 0;
     forgetGoogleBusyMemory();
     expect(iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps))).toEqual(HOURS_9_TO_16);
@@ -332,7 +336,7 @@ describe("invalid_grant (D12): mark once, ONE To-do, and no more Google calls", 
     const d = deferred();
     await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: g.fetch, env: ENV, defer: d.defer });
     await d.run();
-    expect(dbm.completeTask.mock.calls.map((c) => c.slice(1, 3))).toEqual([[ACCOUNT, "task-1"]]);
+    expect(dbm.completeReconnect.mock.calls.map((c) => c.slice(1))).toEqual([[ACCOUNT, "task-1"]]);
   });
 
   it("the To-do reads the account's language", async () => {
@@ -422,5 +426,174 @@ describe("DST and other zones: a busy block blocks exactly its instants", () => 
     const g = fakeGoogle({ busy: [["2027-05-31T15:00:00Z", "2027-06-01T15:00:00Z"]] });
     expect(iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: g.fetch, env: ENV })))
       .toEqual([`${DAY}T15:00:00.000Z`, `${DAY}T16:00:00.000Z`]);
+  });
+});
+
+describe("review I1: a Google failure at submit never refuses what the picker offered (Q1)", () => {
+  // Google 10:00-10:30 with 60-minute slots: the day re-anchors at 10:30, so the picker offers 10:30, 11:30, ...
+  const busy: Busy[] = [[`${DAY}T10:00:00Z`, `${DAY}T10:30:00Z`]];
+  const at = (t: string) => new Date(`${DAY}T${t}:00Z`);
+
+  async function pickerThenGoogleFails(keepMemo: boolean) {
+    const deps = { fetch: fakeGoogle({ busy }).fetch, env: ENV };
+    const offered = iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps));
+    expect(offered).toEqual(["09:00", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"].map((t) => `${DAY}T${t}:00.000Z`));
+    if (!keepMemo) forgetGoogleBusyMemory(); // the picker was served by another instance (a call, another lambda)
+    deps.fetch = fakeGoogle({ busy, freebusy: 500 }).fetch;
+    return deps;
+  }
+
+  it("with this instance's memo: 11:30 is bookable and Google's 10:00 is still refused", async () => {
+    const deps = await pickerThenGoogleFails(true);
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("11:30"), deps)).toEqual({ startsAt: at("11:30"), endsAt: at("12:30") });
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("10:00"), deps)).toBeNull();
+  });
+
+  it("with no memo: 11:30 is bookable on BIS's own rules, off the base grid (and movable to)", async () => {
+    const deps = await pickerThenGoogleFails(false);
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("11:30"), deps)).toEqual({ startsAt: at("11:30"), endsAt: at("12:30") });
+    const moving = { id: "own", startsAt: at("15:00"), endsAt: at("16:00") };
+    expect(await movableSlot(db, cal(), "UTC", NOW, moving, at("11:30"), deps)).not.toBeNull();
+  });
+
+  it("with no memo every BIS rule still holds: a BIS booking and its buffer, the close and a non-minute start are refused", async () => {
+    const deps = await pickerThenGoogleFails(false);
+    dbm.booked.mockResolvedValue([{ starts_at: `${DAY}T12:40:00.000Z`, ends_at: `${DAY}T13:15:00.000Z` }]);
+    const c = cal({ buffer_minutes: 15 });
+    expect(await bookableSlot(db, c, "UTC", NOW, at("11:30"), deps)).toBeNull(); // ends 12:30; the buffer reaches 12:45, past the 12:40 booking
+    expect(await bookableSlot(db, c, "UTC", NOW, at("13:00"), deps)).toBeNull(); // over the booking
+    expect(await bookableSlot(db, c, "UTC", NOW, at("16:30"), deps)).toBeNull(); // past the 17:00 close
+    expect(await bookableSlot(db, c, "UTC", NOW, new Date(`${DAY}T10:30:30Z`), deps)).toBeNull();
+    expect(await bookableSlot(db, c, "UTC", NOW, at("10:15"), deps)).not.toBeNull(); // ends 11:15, buffer to 11:30, clear of 12:40
+  });
+
+  it("when Google answers, an off-grid start is still refused: the loosening is for a failure only", async () => {
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("11:30"), { fetch: fakeGoogle({ busy: [] }).fetch, env: ENV })).toBeNull();
+  });
+});
+
+describe("review I2: each account reads with its own credentials, memo and token", () => {
+  it("B's refresh and freeBusy use B's credentials and return B's busy time; B never gets A's memo or token (probes: one token key, memo key without the connection -> FAIL)", async () => {
+    const B = "b2b2b2b2-0000-4000-8000-000000000002";
+    const CONN_B = "22222222-2222-4222-8222-222222222222";
+    const REFRESH_B = "1//0gREFRESH-B-token_zyxwvutsrqpo";
+    const rows: Record<string, unknown> = {
+      [ACCOUNT]: sealedRow(), [B]: sealedRow({ accountId: B, id: CONN_B, refresh: REFRESH_B }), // both at version 3
+    };
+    dbm.sealed.mockImplementation(async (_db: unknown, accountId: string) => rows[accountId] ?? null);
+    const per: Record<string, { access: string; busy: Busy }> = {
+      [REFRESH]: { access: "ya29.AAA_account_a_token", busy: [`${DAY}T10:00:00Z`, `${DAY}T11:00:00Z`] },
+      [REFRESH_B]: { access: "ya29.BBB_account_b_token", busy: [`${DAY}T13:00:00Z`, `${DAY}T14:00:00Z`] },
+    };
+    const refreshed: string[] = [];
+    const bearers: string[] = [];
+    const fetchBoth = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/token")) {
+        const rt = new URLSearchParams(String(init?.body)).get("refresh_token")!;
+        refreshed.push(rt);
+        return Response.json({ access_token: per[rt]!.access, expires_in: 3599 });
+      }
+      const bearer = String((init?.headers as Record<string, string>).authorization).replace("Bearer ", "");
+      bearers.push(bearer);
+      const owner = Object.values(per).find((p) => p.access === bearer)!;
+      return Response.json({ calendars: { primary: { busy: [{ start: owner.busy[0], end: owner.busy[1] }] } } });
+    }) as unknown as typeof fetch;
+    const deps = { fetch: fetchBoth, env: ENV };
+
+    const a = iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps));
+    const b = iso(await computeDaySlots(db, cal({ id: "cal2", account_id: B }), "UTC", NOW, DAY, deps));
+    expect(a).toEqual(HOURS_9_TO_16.filter((s) => !s.includes("T10:")));
+    expect(b).toEqual(HOURS_9_TO_16.filter((s) => !s.includes("T13:")));
+    expect(refreshed).toEqual([REFRESH, REFRESH_B]);
+    expect(bearers).toEqual(["ya29.AAA_account_a_token", "ya29.BBB_account_b_token"]);
+    // A again, inside the minute: A's own memo, no Google call.
+    expect(iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps))).toEqual(a);
+    expect(bearers).toHaveLength(2);
+  });
+});
+
+describe("review I3: how a failure is classified", () => {
+  it("a 401 on a token refreshed for this read is outcome=disconnected, and marks after the answer", async () => {
+    const d = deferred();
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: fakeGoogle({ freebusy: 401 }).fetch, env: ENV, defer: d.defer });
+    expect(lines).toEqual([expect.stringMatching(/ outcome=disconnected reason=http_401 google_busy_ms=\d+$/)]);
+    await d.run();
+    expect(dbm.mark.mock.calls).toEqual([[db, CONN, 3]]);
+  });
+
+  it("a 401 on a cached token is unchecked, marks nothing, drops the token and refreshes on the next read", async () => {
+    const d = deferred();
+    const deps = { fetch: fakeGoogle({ busy: [] }).fetch, env: ENV, defer: d.defer };
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps); // caches the access token
+    lines.length = 0;
+    const second = fakeGoogle({ freebusy: 401 });
+    deps.fetch = second.fetch;
+    await bookableSlot(db, cal(), "UTC", NOW, new Date(`${DAY}T10:00:00Z`), deps); // fresh read, cached token
+    expect(second.urls()).toEqual(["https://www.googleapis.com/calendar/v3/freeBusy"]);
+    expect(lines).toEqual([expect.stringMatching(/ outcome=unchecked reason=http_401 google_busy_ms=\d+$/)]);
+    await d.run();
+    expect(dbm.mark).not.toHaveBeenCalled();
+    const third = fakeGoogle({ busy: [] });
+    deps.fetch = third.fetch;
+    await bookableSlot(db, cal(), "UTC", NOW, new Date(`${DAY}T10:00:00Z`), deps);
+    expect(third.urls()).toEqual(["https://oauth2.googleapis.com/token", "https://www.googleapis.com/calendar/v3/freeBusy"]);
+  });
+
+  it("a row whose token no key opens is reason=token_unopened, asks Google nothing and marks nothing", async () => {
+    dbm.sealed.mockResolvedValue(sealedRow({ key: Buffer.alloc(32, 4).toString("base64url") }));
+    const g = fakeGoogle({ busy: [] });
+    const d = deferred();
+    expect(iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: g.fetch, env: ENV, defer: d.defer }))).toEqual(HOURS_9_TO_16);
+    expect(lines).toEqual([expect.stringMatching(/ outcome=unchecked reason=token_unopened google_busy_ms=\d+$/)]);
+    expect(g.calls).toEqual([]);
+    await d.run();
+    expect(dbm.mark).not.toHaveBeenCalled();
+  });
+});
+
+describe("review minors: partial failures and the deferred work", () => {
+  it("a marked row with no To-do (its To-do never opened) gets it on a later read, once per instance, without marking again", async () => {
+    dbm.sealed.mockResolvedValue(sealedRow({ status: "needs_reconnect", reconnectTaskId: null }));
+    const g = fakeGoogle({ busy: [] });
+    const d = deferred();
+    const deps = { fetch: g.fetch, env: ENV, defer: d.defer };
+    expect(iso(await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps))).toEqual(HOURS_9_TO_16);
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps);
+    await d.run();
+    expect(g.calls).toEqual([]);
+    expect(dbm.mark).not.toHaveBeenCalled();
+    expect(dbm.addTask).toHaveBeenCalledTimes(1);
+    expect(dbm.setTask.mock.calls).toEqual([[db, CONN, 3, "task-1"]]);
+  });
+
+  it("a marked row that holds its To-do opens none", async () => {
+    dbm.sealed.mockResolvedValue(sealedRow({ status: "needs_reconnect", reconnectTaskId: "task-0" }));
+    const d = deferred();
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: fakeGoogle({}).fetch, env: ENV, defer: d.defer });
+    await d.run();
+    expect(dbm.addTask).not.toHaveBeenCalled();
+  });
+
+  it("a set that throws after the To-do opened completes that To-do in this account, and is logged", async () => {
+    dbm.setTask.mockRejectedValue(new Error("setGoogleReconnectTask failed: boom"));
+    const d = deferred();
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: fakeGoogle({ refresh: "invalid_grant" }).fetch, env: ENV, defer: d.defer });
+    await d.run();
+    expect(dbm.completeReconnect.mock.calls).toEqual([[db, ACCOUNT, "task-1"]]);
+    expect(lines.some((l) => l.includes("setGoogleReconnectTask failed: boom"))).toBe(true);
+  });
+
+  it("a defer that throws is logged; the read still answers", async () => {
+    const throwing = () => { throw new Error("after() outside a request"); };
+    const slots = await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: fakeGoogle({ busy: [] }).fetch, env: ENV, defer: throwing });
+    expect(iso(slots)).toEqual(HOURS_9_TO_16);
+    expect(lines.some((l) => l.includes("after() outside a request"))).toBe(true);
+  });
+
+  it("the voice path (no defer): a stamp that never settles does not hold the answer", async () => {
+    dbm.stamp.mockImplementation(() => new Promise(() => {}));
+    const slots = await computeDaySlots(db, cal(), "UTC", NOW, DAY, { fetch: fakeGoogle({ busy: [] }).fetch, env: ENV });
+    expect(iso(slots)).toEqual(HOURS_9_TO_16);
+    expect(dbm.stamp).toHaveBeenCalledWith(db, CONN, 3);
   });
 });

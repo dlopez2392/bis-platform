@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit } from "./events";
 
 /**
  * S-22 slice 1 (migration google_calendar_connections): an account's link to its owner's Google Calendar.
@@ -36,10 +37,11 @@ export type GoogleConnectionStatus = {
 };
 
 /** google_email too: a reconnect revokes the token it replaced only when it belonged to ANOTHER Google account. */
-const SEALED_COLS = "id, account_id, version, status, google_email, refresh_token_sealed, key_version";
+/** reconnect_task_id too (PR 4): a busy read that finds the row marked but with no To-do opens the missing one. */
+const SEALED_COLS = "id, account_id, version, status, google_email, refresh_token_sealed, key_version, reconnect_task_id";
 export type GoogleConnectionSealed = {
   id: string; account_id: string; version: number; status: GoogleConnectionState; google_email: string;
-  refresh_token_sealed: string; key_version: number;
+  refresh_token_sealed: string; key_version: number; reconnect_task_id: string | null;
 };
 
 /** The account's connection for display (no ciphertext), or null when it has none. */
@@ -145,6 +147,20 @@ export async function markGoogleNeedsReconnect(db: SupabaseClient, id: string, v
  * none. The To-do must be this connection's ACCOUNT's: the table has no composite key tying the two, so its
  * account is read first (a task never changes account) and the write is bound to it. True when written.
  */
+/**
+ * Complete a reconnect To-do (D12): on a reconnect, or one the row would not keep. Only while it is still OPEN and
+ * only in this account, so a To-do the owner already ticked keeps the owner's completion time and no second
+ * task.completed is written. True when this call completed it. Service client.
+ */
+export async function completeGoogleReconnectTask(db: SupabaseClient, accountId: string, taskId: string): Promise<boolean> {
+  const { data, error } = await db.from("tasks").update({ completed_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", taskId).is("completed_at", null).select("id");
+  if (error) throw new Error(`completeGoogleReconnectTask failed: ${error.message}`);
+  if ((data ?? []).length === 0) return false;
+  await emit(db, accountId, "task.completed", "google-calendar", { taskId }, "system");
+  return true;
+}
+
 export async function setGoogleReconnectTask(db: SupabaseClient, id: string, version: number, taskId: string): Promise<boolean> {
   const { data: task, error: readErr } = await db.from("tasks").select("account_id").eq("id", taskId).maybeSingle();
   if (readErr) throw new Error(`setGoogleReconnectTask failed reading the To-do: ${readErr.message}`);

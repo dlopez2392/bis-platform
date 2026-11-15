@@ -32,13 +32,16 @@ export type AvailabilityDeps = GoogleBusyDeps;
  * and (S-22 PR 4, D10, D13) the owner's busy time on Google for `day`. The first two reject on failure; the
  * Google leg never does and answers inside its 1,500 ms budget, so a caller waits max(database, Google).
  * A `checked` Google answer is merged into `booked`, so the engine applies the same two-sided buffer, re-anchor
- * and picker/submit invariant to it as to a booking. Any other outcome merges nothing (owner answer Q1).
+ * and picker/submit invariant to it as to a booking. On the picker any other outcome merges nothing (owner
+ * answer Q1). At SUBMIT (`fresh`) a failed Google read must never refuse a start the picker offered because
+ * Google shaped the grid (review I1, D11): this instance's last answer for the day is merged when it holds one,
+ * and otherwise `anyStart` drops only the grid requirement, every BIS rule still applying.
  * `day` null (an instant that is not one) asks Google nothing.
  */
 async function readsFor(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date,
   google: { day: string | null; fresh: boolean; deps?: AvailabilityDeps }, excludeBookingId?: string,
-): Promise<{ booked: Range[]; config: SlotConfig }> {
+): Promise<{ booked: Range[]; config: SlotConfig; anyStart: boolean }> {
   const [booked, closures, onGoogle] = await Promise.all([
     bookedInHorizon(db, calendar, now, excludeBookingId),
     readSlotClosures(db, calendar.account_id, timezone, now),
@@ -46,8 +49,15 @@ async function readsFor(
       ? null
       : readGoogleBusy(db, calendar.account_id, google.day, { fresh: google.fresh }, google.deps),
   ]);
-  const busy = onGoogle?.outcome === "checked" ? onGoogle.busy : [];
-  return { booked: busy.length ? [...booked, ...busy] : booked, config: { ...slotConfigFrom(calendar, timezone), closures } };
+  let busy: Range[] = [];
+  let anyStart = false;
+  if (onGoogle?.outcome === "checked") busy = onGoogle.busy;
+  else if (google.fresh && (onGoogle?.outcome === "unchecked" || onGoogle?.outcome === "disconnected")) {
+    if (onGoogle.lastChecked) busy = onGoogle.lastChecked;
+    else anyStart = true;
+  }
+  const config = { ...slotConfigFrom(calendar, timezone), closures };
+  return { booked: busy.length ? [...booked, ...busy] : booked, config, anyStart };
 }
 
 /** The day Google is asked about, or null when no slot can fall on it: before today or past the horizon (one
@@ -120,9 +130,9 @@ export async function bookableSlot(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, startsAt: Date,
   deps?: AvailabilityDeps,
 ): Promise<Range | null> {
-  const { booked, config } = await readsFor(db, calendar, timezone, now,
+  const { booked, config, anyStart } = await readsFor(db, calendar, timezone, now,
     { day: dayOf(startsAt, calendar, timezone, now), fresh: true, deps });
-  return bookableRange(config, booked, now, startsAt);
+  return bookableRange(config, booked, now, startsAt, { anyStart });
 }
 
 /** F-048: the booking a customer is moving — its id (left out of the busy
@@ -148,9 +158,9 @@ export async function movableSlot(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date,
   moving: MovingBooking, startsAt: Date, deps?: AvailabilityDeps,
 ): Promise<Range | null> {
-  const { booked: others, config } = await readsFor(db, calendar, timezone, now,
+  const { booked: others, config, anyStart } = await readsFor(db, calendar, timezone, now,
     { day: dayOf(startsAt, calendar, timezone, now), fresh: true, deps }, moving.id);
-  return movableRange(config, others, moving, now, startsAt);
+  return movableRange(config, others, moving, now, startsAt, { anyStart });
 }
 
 /** `YYYY-MM-DD` as seen in `timezone` — the day-picker's own key format, and
