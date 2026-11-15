@@ -465,10 +465,101 @@ describe("review I1: a Google failure at submit never refuses what the picker of
     expect(await bookableSlot(db, c, "UTC", NOW, at("16:30"), deps)).toBeNull(); // past the 17:00 close
     expect(await bookableSlot(db, c, "UTC", NOW, new Date(`${DAY}T10:30:30Z`), deps)).toBeNull();
     expect(await bookableSlot(db, c, "UTC", NOW, at("10:15"), deps)).not.toBeNull(); // ends 11:15, buffer to 11:30, clear of 12:40
+    // Re-review minors: each rule alone. Before opening; inside notice; on a closed day.
+    expect(await bookableSlot(db, c, "UTC", NOW, at("08:30"), deps)).toBeNull();
+    expect(await bookableSlot(db, cal({ buffer_minutes: 15, min_notice_hours: 11 }), "UTC", NOW, at("10:15"), deps)).toBeNull();
+    dbm.closed.mockResolvedValue([{
+      id: "cd1", account_id: ACCOUNT, starts_on: DAY, ends_on: DAY, reason: "holiday", created_by: "user_1", created_at: "2027-05-20T00:00:00Z",
+    }]);
+    expect(await bookableSlot(db, c, "UTC", NOW, at("10:15"), deps)).toBeNull();
   });
 
   it("when Google answers, an off-grid start is still refused: the loosening is for a failure only", async () => {
     expect(await bookableSlot(db, cal(), "UTC", NOW, at("11:30"), { fetch: fakeGoogle({ busy: [] }).fetch, env: ENV })).toBeNull();
+  });
+
+  it("re-review I-3: off the grid, a start must sit on the 5-minute wall clock: 09:07 refused, 09:05 kept", async () => {
+    const deps = await pickerThenGoogleFails(false);
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("09:07"), deps)).toBeNull();
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("09:05"), deps)).toEqual({ startsAt: at("09:05"), endsAt: at("10:05") });
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("11:30"), deps)).not.toBeNull();
+  });
+});
+
+describe("re-review I-1: the grid is loosened only when Google itself was asked and failed", () => {
+  const at = (t: string) => new Date(`${DAY}T${t}:00Z`);
+  const offGrid = ["09:05", "09:07"] as const;
+  const refusedBoth = async (deps: Parameters<typeof bookableSlot>[5]) => {
+    for (const t of offGrid) expect(await bookableSlot(db, cal(), "UTC", NOW, at(t), deps), t).toBeNull();
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("10:00"), deps)).not.toBeNull(); // the control: on the grid
+  };
+
+  it("the connection read throws: off-grid starts refused", async () => {
+    dbm.sealed.mockRejectedValue(new Error("readGoogleConnectionSealed failed: boom"));
+    await refusedBoth({ fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV });
+  });
+
+  it("the budget runs out while the connection is still being read (1.8 s, no row): refused", async () => {
+    vi.useFakeTimers();
+    dbm.sealed.mockImplementation(() => new Promise((r) => setTimeout(() => r(null), 1_800)));
+    const deps = { fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV };
+    for (const t of [...offGrid, "10:00"]) {
+      const pending = bookableSlot(db, cal(), "UTC", NOW, at(t), deps);
+      await vi.advanceTimersByTimeAsync(1_800);
+      const r = await pending;
+      if (t === "10:00") expect(r, t).not.toBeNull(); else expect(r, t).toBeNull();
+    }
+  });
+
+  it("a token no key opens: refused", async () => {
+    dbm.sealed.mockResolvedValue(sealedRow({ key: Buffer.alloc(32, 4).toString("base64url") }));
+    await refusedBoth({ fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV });
+  });
+
+  it("off: no connection, a row needing reconnecting, the feature dormant: refused", async () => {
+    dbm.sealed.mockResolvedValue(null);
+    await refusedBoth({ fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV });
+    dbm.sealed.mockResolvedValue(sealedRow({ status: "needs_reconnect", reconnectTaskId: "task-0" }));
+    await refusedBoth({ fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV });
+    await refusedBoth({ fetch: fakeGoogle({ freebusy: 500 }).fetch, env: {} });
+  });
+
+  it("Google asked and failing (a 500, a refresh 5xx): 09:05 kept", async () => {
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at("09:05"), { fetch: fakeGoogle({ freebusy: 500 }).fetch, env: ENV })).not.toBeNull();
+  });
+});
+
+describe("re-review I-2: picker and submit use the same past answer during an outage", () => {
+  it("Google OK (busy 10:00-10:30), then a 500 after 61 s: the picker does not offer 10:00 and the submit accepts every offered start", async () => {
+    let clock = 5_000_000;
+    const busy: Busy[] = [[`${DAY}T10:00:00Z`, `${DAY}T10:30:00Z`]];
+    const deps = { fetch: fakeGoogle({ busy }).fetch, env: ENV, clock: () => clock };
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps);
+    clock += 61_000;
+    deps.fetch = fakeGoogle({ busy, freebusy: 500 }).fetch;
+    const offered = await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps);
+    expect(iso(offered)).not.toContain(`${DAY}T10:00:00.000Z`);
+    expect(iso(offered)).toContain(`${DAY}T10:30:00.000Z`);
+    for (const s of offered) expect(await bookableSlot(db, cal(), "UTC", NOW, s.startsAt, deps), s.startsAt.toISOString()).toEqual(s);
+  });
+});
+
+describe("re-review minors: the past answer is this connection's version and this day only", () => {
+  const at = (d: string, t: string) => new Date(`${d}T${t}:00Z`);
+  it("a reconnect (a new version) does not inherit the old version's answer (mutation: key without version -> FAILS)", async () => {
+    const deps = { fetch: fakeGoogle({ busy: [[`${DAY}T10:00:00Z`, `${DAY}T10:30:00Z`]] }).fetch, env: ENV };
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps);
+    dbm.sealed.mockResolvedValue(sealedRow({ version: 4 }));
+    deps.fetch = fakeGoogle({ freebusy: 500 }).fetch;
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at(DAY, "10:00"), deps)).not.toBeNull();
+  });
+
+  it("another day's answer is not this day's, though its window reaches into it (mutation: key without day -> FAILS)", async () => {
+    const NEXT = "2027-06-02";
+    const deps = { fetch: fakeGoogle({ busy: [[`${NEXT}T10:00:00Z`, `${NEXT}T10:30:00Z`]] }).fetch, env: ENV };
+    await computeDaySlots(db, cal(), "UTC", NOW, DAY, deps); // DAY's window holds NEXT's 10:00 block
+    deps.fetch = fakeGoogle({ freebusy: 500 }).fetch;
+    expect(await bookableSlot(db, cal(), "UTC", NOW, at(NEXT, "10:00"), deps)).not.toBeNull();
   });
 });
 

@@ -325,7 +325,14 @@ describe("completeGoogleReconnectTask (review minor 7: never re-completes)", () 
     return (data as { completed_at: string | null }).completed_at;
   };
 
-  it("completes an open To-do of this account, once", () =>
+  const completions = async (db: SupabaseClient, accountId: string, taskId: string) => {
+    const { data, error } = await db.from("events").select("id").eq("account_id", accountId).eq("type", "task.completed")
+      .eq("payload->>taskId", taskId);
+    if (error) throw error;
+    return (data ?? []).length;
+  };
+
+  it("completes an open To-do of this account, once, with ONE task.completed (mutation: emit always -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const task = await newTask(db, accountId);
       expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(true);
@@ -333,9 +340,10 @@ describe("completeGoogleReconnectTask (review minor 7: never re-completes)", () 
       expect(at).not.toBeNull();
       expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
       expect(await completedAt(db, task)).toBe(at);
+      expect(await completions(db, accountId, task)).toBe(1);
     }));
 
-  it("a To-do the owner already ticked keeps the owner's completion time (probe: drop the open filter -> FAILS)", () =>
+  it("a To-do the owner already ticked keeps the owner's completion time and gets no event (probe: drop the open filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const task = await newTask(db, accountId);
       const ticked = "2026-11-10T09:00:00.000Z";
@@ -343,6 +351,7 @@ describe("completeGoogleReconnectTask (review minor 7: never re-completes)", () 
       if (error) throw error;
       expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
       expect(Date.parse((await completedAt(db, task))!)).toBe(Date.parse(ticked));
+      expect(await completions(db, accountId, task)).toBe(0);
     }));
 
   it("another account's To-do is never touched", () =>

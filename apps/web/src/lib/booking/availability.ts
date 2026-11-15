@@ -32,10 +32,11 @@ export type AvailabilityDeps = GoogleBusyDeps;
  * and (S-22 PR 4, D10, D13) the owner's busy time on Google for `day`. The first two reject on failure; the
  * Google leg never does and answers inside its 1,500 ms budget, so a caller waits max(database, Google).
  * A `checked` Google answer is merged into `booked`, so the engine applies the same two-sided buffer, re-anchor
- * and picker/submit invariant to it as to a booking. On the picker any other outcome merges nothing (owner
- * answer Q1). At SUBMIT (`fresh`) a failed Google read must never refuse a start the picker offered because
- * Google shaped the grid (review I1, D11): this instance's last answer for the day is merged when it holds one,
- * and otherwise `anyStart` drops only the grid requirement, every BIS rule still applying.
+ * and picker/submit invariant to it as to a booking. A failed Google read (owner answer Q1, D11) merges this
+ * instance's last answer for (connection, version, day) when it holds one, on the picker AND at submit, so the
+ * two agree during an outage (re-review I-2). With none, the picker offers what BIS alone would; and at SUBMIT,
+ * only when Google itself was asked and failed (re-review I-1, never a database or key problem, never an account
+ * without a live connection), `anyStart` drops the grid requirement, every BIS rule still applying (review I1).
  * `day` null (an instant that is not one) asks Google nothing.
  */
 async function readsFor(
@@ -52,9 +53,9 @@ async function readsFor(
   let busy: Range[] = [];
   let anyStart = false;
   if (onGoogle?.outcome === "checked") busy = onGoogle.busy;
-  else if (google.fresh && (onGoogle?.outcome === "unchecked" || onGoogle?.outcome === "disconnected")) {
+  else if (onGoogle?.outcome === "unchecked" || onGoogle?.outcome === "disconnected") {
     if (onGoogle.lastChecked) busy = onGoogle.lastChecked;
-    else anyStart = true;
+    else if (google.fresh && onGoogle.askedGoogle) anyStart = true;
   }
   const config = { ...slotConfigFrom(calendar, timezone), closures };
   return { booked: busy.length ? [...booked, ...busy] : booked, config, anyStart };

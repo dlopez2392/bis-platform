@@ -52,7 +52,7 @@ export type GoogleBusyDeps = {
 export type GoogleBusyRead =
   | { outcome: "off" }
   | { outcome: "checked"; busy: Range[] }
-  | { outcome: "unchecked" | "disconnected"; reason: string; lastChecked: Range[] | null };
+  | { outcome: "unchecked" | "disconnected"; reason: string; lastChecked: Range[] | null; askedGoogle: boolean };
 
 const accessTokens = new Map<string, { token: string; expiresAtMs: number }>();
 const memo = new Map<string, { busy: Range[]; atMs: number }>();
@@ -89,7 +89,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** What a leg learned: the outcome, the connection row once read (even if the budget then ran out), and whether
  *  it reached for Google at all (a memo hit, no connection or a needs-reconnect row did not). */
 type Leg = { read: GoogleBusyRead; called: boolean };
-type Seen = { conn?: AccountConnection };
+type Seen = { conn?: AccountConnection; asked?: boolean };
 
 /** The account's busy ranges for `day`, or why there are none. Never rejects. */
 export async function readGoogleBusy(
@@ -106,7 +106,7 @@ export async function readGoogleBusy(
   const budget = new Promise<Leg>((resolve) => {
     timer = setTimeout(() => {
       ctl.abort();
-      resolve({ read: { outcome: "unchecked", reason: "timeout", lastChecked: null }, called: true });
+      resolve({ read: { outcome: "unchecked", reason: "timeout", lastChecked: null, askedGoogle: seen.asked === true }, called: true });
     }, GOOGLE_BUSY_BUDGET_MS);
   });
   let leg: Leg;
@@ -116,7 +116,7 @@ export async function readGoogleBusy(
       budget,
     ]);
   } catch (e) {
-    leg = { read: { outcome: "unchecked", reason: `bug_${e instanceof Error ? e.name : "unknown"}`, lastChecked: null }, called: true };
+    leg = { read: { outcome: "unchecked", reason: `bug_${e instanceof Error ? e.name : "unknown"}`, lastChecked: null, askedGoogle: false }, called: true };
   } finally {
     clearTimeout(timer);
   }
@@ -163,8 +163,10 @@ async function askGoogle(
   db: Db, accountId: string, day: string, window: { timeMin: Date; timeMax: Date }, fresh: boolean, seen: Seen,
   x: { cfg: NonNullable<ReturnType<typeof googleCalendarConfig>>; fetch: typeof fetch; clock: () => number; signal: AbortSignal },
 ): Promise<Leg> {
+  // askedGoogle (re-review I-1): a refresh or freeBusy request was actually made for a connected row whose token
+  // opened. Only such a failure may loosen the submit grid (availability.ts); a database or key problem never does.
   const failed = (outcome: "unchecked" | "disconnected", reason: string): Leg =>
-    ({ read: { outcome, reason, lastChecked: null }, called: true });
+    ({ read: { outcome, reason, lastChecked: null, askedGoogle: seen.asked === true }, called: true });
   let conn: AccountConnection | null;
   try {
     conn = await readAccountConnection(db, accountId, [x.cfg.keys.current, x.cfg.keys.previous]);
@@ -180,6 +182,7 @@ async function askGoogle(
   if (!fresh && hit && x.clock() - hit.atMs < GOOGLE_BUSY_MEMO_MS) return { read: { outcome: "checked", busy: hit.busy }, called: false };
 
   const deps = { fetch: x.fetch, signal: x.signal, now: x.clock() };
+  seen.asked = true; // from here on, every failure is Google's (a refresh or freeBusy request is made next)
   let access = accessTokens.get(connKey(conn));
   const cached = access !== undefined && access.expiresAtMs - ACCESS_SLACK_MS > x.clock();
   if (!cached) {

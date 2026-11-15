@@ -142,12 +142,6 @@ export async function markGoogleNeedsReconnect(db: SupabaseClient, id: string, v
 }
 
 /**
- * Keep the reconnect To-do on the connection the mark was made on (D12, PR 4): a compare-and-set, written only
- * while the row is still that version, still needs reconnecting and holds no To-do yet, so a second failure keeps
- * none. The To-do must be this connection's ACCOUNT's: the table has no composite key tying the two, so its
- * account is read first (a task never changes account) and the write is bound to it. True when written.
- */
-/**
  * Complete a reconnect To-do (D12): on a reconnect, or one the row would not keep. Only while it is still OPEN and
  * only in this account, so a To-do the owner already ticked keeps the owner's completion time and no second
  * task.completed is written. True when this call completed it. Service client.
@@ -161,6 +155,12 @@ export async function completeGoogleReconnectTask(db: SupabaseClient, accountId:
   return true;
 }
 
+/**
+ * Keep the reconnect To-do on the connection the mark was made on (D12, PR 4): a compare-and-set, written only
+ * while the row is still that version, still needs reconnecting and holds no To-do yet, so a second failure keeps
+ * none. The To-do must be this connection's ACCOUNT's: the table has no composite key tying the two, so its
+ * account is read first (a task never changes account) and the write is bound to it. True when written.
+ */
 export async function setGoogleReconnectTask(db: SupabaseClient, id: string, version: number, taskId: string): Promise<boolean> {
   const { data: task, error: readErr } = await db.from("tasks").select("account_id").eq("id", taskId).maybeSingle();
   if (readErr) throw new Error(`setGoogleReconnectTask failed reading the To-do: ${readErr.message}`);

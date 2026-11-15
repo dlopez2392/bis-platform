@@ -441,7 +441,10 @@ export function computeMoveSlots(config: SlotConfig, others: Range[], own: Range
  * day" requirement. Set when the owner's Google calendar could not be read at submit and this instance holds no
  * earlier answer for the day: the picker (perhaps on another instance) may have offered a start re-anchored after
  * a Google event, and owner answer Q1 says a Google failure never refuses it. Every other rule (free with the
- * buffer, fits the hours wall clock and real time, notice, horizon, closures, a whole minute) still applies.
+ * buffer, fits the hours wall clock and real time, notice, horizon, closures) still applies, and the start must
+ * sit on the 5-minute wall clock in the account's zone, so a crafted "09:07" is still refused. The one offered
+ * start it still refuses: one re-anchored off the 5-minute clock (a Google event ending 10:07) while Google fails
+ * and this instance holds no earlier answer.
  */
 export type BookableOptions = { anyStart?: boolean };
 
@@ -517,7 +520,8 @@ export function bookableRange(
       const toMinutes = minutesOf(to);
       if (m < fromMinutes || m + slotDurationMinutes > toMinutes) continue;
       if (!endsByClose(new Date(end), cal, toMinutes, timezone)) continue;
-      if (opts.anyStart || onStep(fromMinutes) || anchors.some((a) => a >= fromMinutes && onStep(a))) {
+      // anyStart still asks for the 5-minute wall clock in the account's zone (re-review I-3).
+      if ((opts.anyStart && m % 5 === 0) || onStep(fromMinutes) || anchors.some((a) => a >= fromMinutes && onStep(a))) {
         return { startsAt: new Date(t), endsAt: new Date(end) };
       }
     }

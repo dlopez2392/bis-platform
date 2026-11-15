@@ -76,13 +76,13 @@ also bounds what a bot on the public endpoint costs in quota (A6). The SUBMIT ch
 predicate, the two-sided buffer (travel time around the owner's 9:00 too), D-028's re-anchor (Google events re-anchor
 the grid) and the picker/submit invariant hold; Google's `[start, end)` is the `[)` of `bookings_no_overlap` (V3).
 Validated BEFORE the merge: an unparseable instant or `errors[]` makes it `unchecked`, never an Invalid Date. Q4.
-**D11. Fail mode (Q1): when Google cannot answer, offer slots as today.** `checked` (merged); `unchecked` (timeout,
-network, 429, 5xx, malformed, `errors[]`, a 401 on a cached token); `disconnected` (`invalid_grant`, or 401 after a
-fresh token). Both offer what BIS alone would and log one line (never a token or a busy time). At SUBMIT a failure
-never refuses a start the picker offered because a Google event re-anchored the grid (review I1): this instance's
-last answer for (connection, version, day) is merged if it has one; otherwise `bookableRange`'s `anyStart` drops
-ONLY the on-grid rule (BIS bookings and buffer, hours, closures, notice, horizon still bind). Why: failing closed
-switches booking OFF during any Google slowness and every 7 days in Testing mode (V4). Never silent: D12.
+**D11. Fail mode (Q1): Google failing never closes booking.** `unchecked` (timeout, network, 429, 5xx, malformed,
+`errors[]`, 401 on a cached token) or `disconnected` (`invalid_grant`, 401 on a fresh token) log one line; picker AND
+submit merge this instance's last answer for (connection, version, day) if any, else BIS alone. At SUBMIT, with
+no past answer and only when Google was actually asked (a connected row, an opened token, a refresh or freeBusy
+made), `anyStart` drops the on-grid rule so a start Google re-anchored is not refused (I1); BIS rules all bind and
+the start must sit on the 5-minute wall clock. Still refused: a re-anchor off that clock (an event ending 10:07).
+Why: failing closed turns booking OFF during any Google slowness and every 7 days in Testing (V4). Never silent: D12.
 **D12. `invalid_grant`.** The read marks the row `needs_reconnect` by compare-and-set on the `version` it read
 (a reconnect that landed meanwhile survives), stops calling Google for it, and opens ONE To-do (no contact,
 the account's language), its id kept on the row so a second failure opens none; reconnecting completes it.
