@@ -43,6 +43,32 @@ describe("upsertGoogleConnection", () => {
       expect(refIn(sealed!.refresh_token_sealed)).toEqual({ accountId, id: r.id, version: 1 });
     }));
 
+  it("a first connect replaced nothing", () =>
+    withTestAccount(async (db, accountId) => {
+      expect((await upsertGoogleConnection(db, write(accountId))).replaced).toBeNull();
+    }));
+
+  it("after a retry, `replaced` is the row the write ACTUALLY overwrote, not the one first read (PR 2 re-review m1)", () =>
+    withTestAccount(async (db, accountId) => {
+      const x = await upsertGoogleConnection(db, write(accountId, { googleEmail: "x@example.com" })); // v1
+      let raced = false;
+      const a = await upsertGoogleConnection(db, write(accountId, {
+        googleEmail: "z@example.com",
+        // A has read v1 and is sealing for v2; B's reconnect lands first, so A's write misses and retries over v2.
+        seal: async (ref) => {
+          if (!raced) {
+            raced = true;
+            await upsertGoogleConnection(db, write(accountId, { googleEmail: "y@example.com" }));
+          }
+          return fakeSeal(ref);
+        },
+      }));
+      expect(a.version).toBe(3);
+      expect(a.replaced).toEqual({
+        version: 2, googleEmail: "y@example.com", sealed: fakeSeal({ accountId, id: x.id, version: 2 }).sealed, keyVersion: 7,
+      });
+    }));
+
   it("a reconnect keeps the id, bumps version, re-seals for the new version and clears the needs-reconnect state", () =>
     withTestAccount(async (db, accountId) => {
       const first = await upsertGoogleConnection(db, write(accountId));
@@ -52,7 +78,10 @@ describe("upsertGoogleConnection", () => {
       if (error) throw error;
 
       const second = await upsertGoogleConnection(db, write(accountId, { googleEmail: "other@example.com" }));
-      expect(second).toEqual({ id: first.id, version: 2, previousReconnectTaskId: task });
+      expect(second).toEqual({
+        id: first.id, version: 2, previousReconnectTaskId: task,
+        replaced: { version: 1, googleEmail: "owner@example.com", sealed: fakeSeal({ accountId, id: first.id, version: 1 }).sealed, keyVersion: 7 },
+      });
       const status = await getGoogleConnectionStatus(db, accountId);
       expect(status).toMatchObject({
         id: first.id, version: 2, google_email: "other@example.com", status: "connected",
@@ -94,7 +123,7 @@ describe("upsertGoogleConnection", () => {
         return fakeSeal(ref);
       };
       const r = await upsertGoogleConnection(db, write(accountId, { seal: racing }));
-      expect(r).toEqual({ id, version: 2, previousReconnectTaskId: task });
+      expect(r).toMatchObject({ id, version: 2, previousReconnectTaskId: task });
       expect(seen.length).toBe(2);
       expect(await getGoogleConnectionStatus(db, accountId)).toMatchObject({ status: "connected", reconnect_task_id: null });
     }));

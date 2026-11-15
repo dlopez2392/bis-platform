@@ -4,11 +4,10 @@ import { requireAccountAccess, accountHome } from "@/lib/auth";
 import { isUuid } from "@/lib/assign/action-guards";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import {
-  googleCalendarConfig, googleAuthUrl, exchangeGoogleCode, grantsFreeBusy, revokeGoogleToken, readAccountConnection,
-  type AccountConnection,
+  googleCalendarConfig, googleAuthUrl, exchangeGoogleCode, grantsFreeBusy, revokeGoogleToken,
 } from "./calendar-client";
 import { mintGoogleState, openGoogleState, sameNonce } from "./oauth-state";
-import { sealGoogleToken } from "./token-seal";
+import { openGoogleToken, sealGoogleToken } from "./token-seal";
 
 /**
  * GET /api/google-calendar/connect?account=<id> and GET /api/google-calendar/callback (S-22 slice 1, PR 2; plan D3,
@@ -127,14 +126,7 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
   }
 
   const db = serviceDb();
-  // The connection this one replaces, read before the write. A failed read only means nothing gets revoked.
-  let replaced: AccountConnection | null = null;
-  try {
-    replaced = await readAccountConnection(db, accountId, [cfg.keys.current, cfg.keys.previous]);
-  } catch (e) {
-    console.error(`google calendar callback: account ${accountId}: reading the current connection failed: ${scrub(e, [g.refreshToken])}`);
-  }
-  let written: { version: number; previousReconnectTaskId: string | null };
+  let written: Awaited<ReturnType<typeof upsertGoogleConnection>>;
   try {
     const connectedBy = await readPersonId(db, accountId, access.userId); // null for the agency (never a member)
     written = await upsertGoogleConnection(db, {
@@ -142,15 +134,18 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
       seal: (ref) => sealGoogleToken(g.refreshToken, ref, cfg.keys.current),
     });
   } catch (e) {
-    console.error(`google calendar callback: account ${accountId}: the write failed: ${scrub(e, [g.refreshToken, g.accessToken, replaced?.token ?? ""])}`);
+    console.error(`google calendar callback: account ${accountId}: the write failed: ${scrub(e, [g.refreshToken, g.accessToken])}`);
     await revokeQuietly(g.refreshToken, deps, accountId, "revoking an unkept grant");
     return go(calendarPath(accountId, "failed"), origin, { clearNonce: true });
   }
-  // Only once the new token is stored, and only a token of ANOTHER Google account (assumption A13: revoking one
-  // refresh token may end the whole grant for that Google account and this client, the new token included).
-  // A same-account token is left to Google's own expiry (V5, V6).
-  if (replaced?.token && replaced.googleEmail.trim().toLowerCase() !== g.email.trim().toLowerCase()) {
-    await revokeQuietly(replaced.token, deps, accountId, "revoking the replaced Google account's grant");
+  // The row the write ACTUALLY overwrote (the upsert's final read, after any retry), so a reconnect that raced in
+  // between is the one revoked. Only once the new token is stored, and only a token of ANOTHER Google account
+  // (assumption A13: revoking one refresh token may end the whole grant for that Google account and this client,
+  // the new token included); a same-account token is left to Google's own expiry (V5, V6).
+  const r = written.replaced;
+  if (r && r.googleEmail.trim().toLowerCase() !== g.email.trim().toLowerCase()) {
+    const old = openGoogleToken(r.sealed, r.keyVersion, { accountId, id: written.id, version: r.version }, [cfg.keys.current, cfg.keys.previous]);
+    if (old) await revokeQuietly(old, deps, accountId, "revoking the replaced Google account's grant");
   }
   // PR 4 (D12): the "Reconnect your Google Calendar" To-do this write cleared off the row is done now. Scoped by
   // THIS account (completeTask's own filter), by the system: which BIS person reconnected is not the client's

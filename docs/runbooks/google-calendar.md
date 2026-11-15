@@ -114,7 +114,9 @@ by Google's error code only) or `paused` (a client on an account paused for
 billing: connecting is switching access ON, so it is refused at connect and
 again at the callback, before any token is issued; the agency is never
 refused). A refused state (expired after 10 minutes, a different browser,
-another user) lands on `/`. Every outcome clears the nonce cookie.
+another user) lands on `/`. Every outcome of the callback clears the nonce
+cookie; requireAccountAccess's own redirects and the dormant 404 do not, and
+the 10-minute cookie, scoped to the callback path, then simply expires.
 
 A reconnect with a DIFFERENT Google account revokes the replaced account's
 refresh token once the new one is stored. A reconnect with the SAME Google
@@ -147,3 +149,50 @@ deletes only the row it read (id and version): if a reconnect landed in
 between, the new connection stays and the answer says it was reconnected
 meanwhile. It has no Undo: undoing would need the revoked token. It works
 while the account is paused for billing (it only takes access away).
+
+## 7. The busy-read log line (`google_busy`), and reading a week of it
+
+Every booking-page, move-page and Sofía slot read that reaches for Google
+logs ONE line (`apps/web/src/lib/booking/google-busy.ts`):
+
+```
+google_busy account=<account uuid> outcome=<checked|unchecked|disconnected> [reason=<code>] google_busy_ms=<n>
+```
+
+- `outcome=checked`: Google answered; its busy times were taken out of the
+  slots. No `reason`.
+- `outcome=unchecked`: Google could not answer in time or answered
+  something unusable. The slots were offered as BIS alone would (owner answer
+  Q1: fail open). `reason` is `timeout` (the 1,500 ms budget ran out),
+  `network`, `http_<status>` (429, 5xx, a 401 on a cached token), Google's
+  OAuth error code, `malformed` (an `errors[]` entry or an unparseable
+  instant), `connection_read` (the database row could not be read) or
+  `token_unopened` (no key in the environment opens the stored token; see
+  section 5).
+- `outcome=disconnected`: `invalid_grant`, or a 401 right after a fresh
+  token. After the answer the row is marked `needs_reconnect` and ONE
+  "Reconnect your Google Calendar" To-do opens; from then on reads skip Google
+  and log nothing until the owner reconnects.
+- `google_busy_ms`: the whole Google leg (row read, token refresh when the
+  in-memory one has lapsed, freeBusy). It runs BESIDE the database reads, so
+  a caller waits for whichever is slower, and never more than 1,500 ms for
+  Google.
+
+No line is logged when the feature is dormant, the account has no
+connection, the row already needs reconnecting, or the picker answered from
+its 60-second memo. The line never carries a token, a busy time or Google's
+error text.
+
+**A week of it (acceptance step 5, assumption A5).** In Vercel > the
+production project > Logs, filter on `google_busy` for the last 7 days, then:
+
+1. Count lines by `outcome`. Mostly `checked` is healthy. A run of
+   `unchecked reason=timeout` means Google is often slower than the budget;
+   any other `unchecked` reason that repeats is a defect to look at.
+2. Read `google_busy_ms` on the `checked` lines: the share above 1,000 ms,
+   and the largest values. If timeouts are more than a few percent, or many
+   `checked` reads land near 1,500, the budget (D13) is revisited; raising
+   it lengthens what a caller on the phone waits.
+3. Every `disconnected` line should match one open To-do and a "Needs
+   reconnecting" card for that account (section 4's query). In Testing mode
+   expect one per connection about every 7 days.
