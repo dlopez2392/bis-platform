@@ -53,7 +53,8 @@ function redirectAcceptable(uri: string): boolean {
   let u: URL;
   try { u = new URL(uri); } catch { return false; }
   if (u.protocol === "https:") return true;
-  return u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1");
+  // localhost only: Next reports a 127.0.0.1 request's origin as localhost, so connect's origin check never matches it.
+  return u.protocol === "http:" && u.hostname === "localhost";
 }
 
 /** Where the consent screen is (D1: openid, email, calendar.freebusy; D7: offline, consent, PKCE S256). */
@@ -181,14 +182,17 @@ export async function revokeGoogleToken(token: string, deps: GoogleDeps): Promis
 }
 
 /**
- * The account's refresh token in the clear, or null (no connection, or one no key given opens). The ONLY caller of
- * readGoogleConnectionSealed (D6). Any key in the environment will do: disconnect must work even while the rest
- * of the feature is dormant.
+ * The account's connection as a disconnect or a reconnect needs it: the row it read (id, version), the Google account,
+ * and the refresh token in the clear, or token null when no key given opens it. Null when there is no connection.
+ * The ONLY caller of readGoogleConnectionSealed (D6). Any key in the environment will do: disconnect must work even
+ * while the rest of the feature is dormant.
  */
-export async function openAccountRefreshToken(
+export type AccountConnection = { id: string; version: number; googleEmail: string; token: string | null };
+export async function readAccountConnection(
   db: SupabaseClient, accountId: string, keys: readonly (GoogleTokenKey | null)[] = Object.values(googleTokenKeys()),
-): Promise<string | null> {
+): Promise<AccountConnection | null> {
   const row = await readGoogleConnectionSealed(db, accountId);
   if (!row) return null;
-  return openGoogleToken(row.refresh_token_sealed, row.key_version, { accountId: row.account_id, id: row.id, version: row.version }, keys);
+  const token = openGoogleToken(row.refresh_token_sealed, row.key_version, { accountId: row.account_id, id: row.id, version: row.version }, keys);
+  return { id: row.id, version: row.version, googleEmail: row.google_email, token };
 }

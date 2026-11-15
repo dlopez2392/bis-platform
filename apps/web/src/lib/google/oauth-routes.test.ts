@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
 import { NextRequest } from "next/server";
 import { FREEBUSY_SCOPE } from "./calendar-client";
-import { googleTokenKey, openGoogleToken } from "./token-seal";
+import { googleTokenKey, openGoogleToken, sealGoogleToken } from "./token-seal";
 
 /**
  * S-22 slice 1, PR 2 (plan docs/superpowers/plans/2026-11-15-google-busy-blocks-slots.md, D3, D7, D8, D15): the
@@ -48,23 +48,33 @@ const db = vi.hoisted(() => ({
   upsertGoogleConnection: vi.fn(),
   emit: vi.fn(),
   emitAgencyEvent: vi.fn(),
+  readGoogleConnectionSealed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   serviceDb: () => ({ fake: "service" }),
+  readGoogleConnectionSealed: (...a: unknown[]) => db.readGoogleConnectionSealed(...a),
   readPersonId: (...a: unknown[]) => db.readPersonId(...a),
   upsertGoogleConnection: (...a: unknown[]) => db.upsertGoogleConnection(...a),
   emit: (...a: unknown[]) => db.emit(...a),
   emitAgencyEvent: (...a: unknown[]) => db.emitAgencyEvent(...a),
+}));
+/** The billing pause (M7a): a client's switch ON is refused while paused; billingVerdictFor fails open itself. */
+const billing = vi.hoisted(() => ({ paused: false, calls: [] as string[] }));
+vi.mock("@/lib/billing/standing-read", () => ({
+  billingVerdictFor: async (accountId: string) => { billing.calls.push(accountId); return { paused: billing.paused }; },
 }));
 
 const { handleGoogleConnect, handleGoogleCallback, GOOGLE_NONCE_COOKIE } = await import("./oauth-routes");
 
 type Call = { url: string; body: string };
 let google: { calls: Call[]; token: { status: number; body: unknown }; revoke: { status: number } };
+/** What happened, in order, across the database and Google: "upsert", "revoke:<token>". */
+let order: string[];
 const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
   const u = String(url);
   google.calls.push({ url: u, body: String(init?.body ?? "") });
+  if (u.endsWith("/revoke")) order.push(`revoke:${new URLSearchParams(String(init?.body)).get("token")}`);
   if (u === "https://oauth2.googleapis.com/token") return Response.json(google.token.body, { status: google.token.status });
   if (u === "https://oauth2.googleapis.com/revoke") return new Response("{}", { status: google.revoke.status });
   throw new Error(`unexpected Google URL ${u}`);
@@ -78,8 +88,13 @@ beforeEach(() => {
   access.account = A;
   access.calls = [];
   google = { calls: [], token: { status: 200, body: { access_token: ACCESS, expires_in: 3599, refresh_token: REFRESH, scope: SCOPES, token_type: "Bearer", id_token: ID_TOKEN } }, revoke: { status: 200 } };
+  billing.paused = false;
+  billing.calls = [];
+  order = [];
+  db.readGoogleConnectionSealed.mockReset().mockResolvedValue(null);
   db.readPersonId.mockReset().mockResolvedValue("person_A");
   db.upsertGoogleConnection.mockReset().mockImplementation(async (_db: unknown, w: { seal: (r: object) => unknown }) => {
+    order.push("upsert");
     const ref = { accountId: A, id: "33333333-3333-4333-8333-333333333333", version: 1 };
     db.upsertGoogleConnection.mock.lastCall!.push({ ref, sealed: await w.seal(ref) });
     return { id: ref.id, version: 1, previousReconnectTaskId: null };
@@ -207,10 +222,11 @@ describe("callback (D7)", () => {
     expect(locationOf(res)).toContain("google=connected");
   });
 
-  it.each([["a different nonce", "x".repeat(43)], ["no nonce cookie", undefined]])("%s is refused", async (_n, cookie) => {
+  it.each([["a different nonce", "x".repeat(43)], ["no nonce cookie", undefined]])("%s is refused, and the nonce cookie is cleared", async (_n, cookie) => {
     const { state } = await connect();
     const res = await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, cookie), deps());
     expect(locationOf(res)).toBe(`${ORIGIN}/`);
+    expect(res.headers.get("set-cookie")).toMatch(new RegExp(`${GOOGLE_NONCE_COOKIE}=;.*Path=/api/google-calendar/callback.*Max-Age=0`, "i"));
     refusedNothingWritten();
   });
 
@@ -259,8 +275,96 @@ describe("callback (D7)", () => {
   });
 });
 
+describe("the nonce cookie over https (D7)", () => {
+  const HTTPS = "https://app.example.test";
+  const env = { ...ENV, GOOGLE_CALENDAR_REDIRECT_URI: `${HTTPS}/api/google-calendar/callback` };
+
+  it("is Secure when the redirect URI is https, set and cleared alike", async () => {
+    const res = await handleGoogleConnect(connectReq(A, HTTPS), deps({ env }));
+    expect(locationOf(res)).toMatch(/^https:\/\/accounts\.google\.com\//);
+    expect(res.headers.get("set-cookie")).toMatch(/;\s*Secure/i);
+    const refused = await handleGoogleCallback(new NextRequest(`${HTTPS}/api/google-calendar/callback?code=x&state=s1.nope`), deps({ env }));
+    expect(refused.headers.get("set-cookie")).toMatch(/Max-Age=0/i);
+    expect(refused.headers.get("set-cookie")).toMatch(/;\s*Secure/i);
+  });
+
+  it("is not Secure on http://localhost (a browser would drop it there)", async () => {
+    expect((await connect()).res.headers.get("set-cookie")).not.toMatch(/;\s*Secure/i);
+  });
+});
+
+describe("a billing-paused account: switching Google ON is refused for a client, as every client write is (M7a)", () => {
+  it("a paused client is refused at connect: back to the calendar page with ?google=paused, no Google, no cookie", async () => {
+    billing.paused = true;
+    const res = await handleGoogleConnect(connectReq(), deps());
+    expect(locationOf(res)).toBe(`${ORIGIN}/dashboard/accounts/${A}/calendar?google=paused`);
+    expect(res.cookies.get(GOOGLE_NONCE_COOKIE)).toBeUndefined();
+    expect(billing.calls).toEqual([A]);
+  });
+
+  it("a client paused between connect and callback is refused BEFORE the exchange: no token is ever issued, nothing written, nonce cleared", async () => {
+    const { state, nonce } = await connect();
+    billing.paused = true;
+    const res = await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps());
+    expect(locationOf(res)).toBe(`${ORIGIN}/dashboard/accounts/${A}/calendar?google=paused`);
+    expect(res.headers.get("set-cookie")).toMatch(/Max-Age=0/i);
+    expect(google.calls).toEqual([]);
+    expect(db.upsertGoogleConnection).not.toHaveBeenCalled();
+  });
+
+  it("the agency is never refused by a pause, at connect or at the callback", async () => {
+    access.state = { userId: "user_agency", isAgency: true, role: null, canManage: true };
+    db.readPersonId.mockResolvedValue(null);
+    billing.paused = true;
+    const { res, state, nonce } = await connect();
+    expect(locationOf(res)).toMatch(/^https:\/\/accounts\.google\.com\//);
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+  });
+});
+
+describe("a reconnect does not leave the replaced grant behind at Google", () => {
+  const OLD = "1//0gOLD-refresh-token_zyxwvutsrq";
+  const ROW = { accountId: A, id: "33333333-3333-4333-8333-333333333333", version: 1 };
+  const oldRow = (googleEmail: string) => {
+    const s = sealGoogleToken(OLD, ROW, googleTokenKey(KEY)!);
+    return { id: ROW.id, account_id: A, version: 1, status: "connected", refresh_token_sealed: s.sealed, key_version: s.keyVersion, google_email: googleEmail };
+  };
+
+  it("another Google account was connected: its refresh token is revoked AFTER the new one is written", async () => {
+    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    expect(order).toEqual(["upsert", `revoke:${OLD}`]);
+  });
+
+  it("the SAME Google account (A13): the old token is not revoked, since revoking it could end the new grant too", async () => {
+    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("Owner@Example.com"));
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    expect(order).toEqual(["upsert"]);
+  });
+
+  it("a failed write keeps the old connection and its token: only the NEW grant is revoked", async () => {
+    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
+    db.upsertGoogleConnection.mockReset().mockRejectedValue(new Error("db down"));
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=failed");
+    expect(order).toEqual([`revoke:${REFRESH}`]);
+  });
+
+  it("a failed revoke of the old token is logged by account and error code only; the connect stands", async () => {
+    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
+    google.revoke = { status: 400 };
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    const line = logs.find((l) => l.includes("replaced"));
+    expect(line).toContain(A);
+    expect(logs.join("\n")).not.toContain(OLD);
+  });
+});
+
 describe("dormant (D15)", () => {
-  it.each(["GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CALENDAR_TOKEN_KEY", "GOOGLE_CALENDAR_REDIRECT_URI"])("%s unset: both routes are 404 and ask nobody", async (name) => {
+  it.each(["GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CALENDAR_CLIENT_SECRET", "GOOGLE_CALENDAR_TOKEN_KEY", "GOOGLE_CALENDAR_REDIRECT_URI"])("%s unset: both routes are 404 and ask nobody", async (name) => {
     const env = { ...ENV, [name]: undefined };
     expect((await handleGoogleConnect(connectReq(), deps({ env }))).status).toBe(404);
     expect((await handleGoogleCallback(callbackReq({ code: CODE, state: "s1.x" }, "n"), deps({ env }))).status).toBe(404);

@@ -59,6 +59,9 @@ describe("googleCalendarConfig: dormant unless every value is set and sound (D15
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(googleCalendarConfig({ ...ENV, GOOGLE_CALENDAR_REDIRECT_URI: "http://app.bis-rgv.com/api/google-calendar/callback" })).toBeNull();
     expect(googleCalendarConfig({ ...ENV, GOOGLE_CALENDAR_REDIRECT_URI: "not a url" })).toBeNull();
+    // 127.0.0.1 never works: Next reports a 127.0.0.1 request's origin as localhost, so connect's origin check
+    // could never match it. localhost only.
+    expect(googleCalendarConfig({ ...ENV, GOOGLE_CALENDAR_REDIRECT_URI: "http://127.0.0.1:3000/api/google-calendar/callback" })).toBeNull();
     expect(googleCalendarConfig({ ...ENV, GOOGLE_CALENDAR_REDIRECT_URI: "https://app.bis-rgv.com/api/google-calendar/callback" })).not.toBeNull();
     expect(err.mock.calls.flat().join(" ")).toContain("GOOGLE_CALENDAR_REDIRECT_URI");
   });

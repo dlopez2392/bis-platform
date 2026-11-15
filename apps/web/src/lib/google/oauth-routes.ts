@@ -2,8 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { serviceDb, readPersonId, upsertGoogleConnection, emit, emitAgencyEvent } from "@bis/db";
 import { requireAccountAccess, accountHome } from "@/lib/auth";
 import { isUuid } from "@/lib/assign/action-guards";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import {
-  googleCalendarConfig, googleAuthUrl, exchangeGoogleCode, grantsFreeBusy, revokeGoogleToken,
+  googleCalendarConfig, googleAuthUrl, exchangeGoogleCode, grantsFreeBusy, revokeGoogleToken, readAccountConnection,
+  type AccountConnection,
 } from "./calendar-client";
 import { mintGoogleState, openGoogleState, sameNonce } from "./oauth-state";
 import { sealGoogleToken } from "./token-seal";
@@ -29,7 +31,7 @@ type Env = NodeJS.ProcessEnv | Record<string, string | undefined>;
 export type GoogleRouteDeps = { fetch: typeof fetch; env?: Env; now?: number };
 
 const notFound = () => new NextResponse(null, { status: 404, headers: { "cache-control": "no-store" } });
-const calendarPath = (accountId: string, outcome: "connected" | "denied" | "failed") =>
+const calendarPath = (accountId: string, outcome: "connected" | "denied" | "failed" | "paused") =>
   `/dashboard/accounts/${accountId}/calendar?google=${outcome}`;
 
 function go(path: string, origin: string, opts: { clearNonce?: boolean } = {}): NextResponse {
@@ -39,6 +41,18 @@ function go(path: string, origin: string, opts: { clearNonce?: boolean } = {}): 
     res.cookies.set(GOOGLE_NONCE_COOKIE, "", { path: CALLBACK_PATH, maxAge: 0, httpOnly: true, sameSite: "lax", secure: origin.startsWith("https:") });
   }
   return res;
+}
+
+/**
+ * Connecting is switching access ON, so a CLIENT on an account paused for billing is refused, as every client write
+ * is (lib/billing/read-only.ts; these are GET routes, which that guard never sees). The agency never is. Fails open,
+ * as billingVerdictFor does.
+ */
+async function pausedClient(accountId: string, access: { isAgency: boolean }): Promise<boolean> {
+  if (access.isAgency) return false;
+  if (!(await billingVerdictFor(accountId)).paused) return false;
+  console.log(`google calendar: refused a connect on paused account ${accountId}`);
+  return true;
 }
 
 /** A thrown value's message with every secret of this request taken out: a database error can quote a value. */
@@ -56,6 +70,7 @@ export async function handleGoogleConnect(req: NextRequest, deps: GoogleRouteDep
   const access = await requireAccountAccess(accountId);
   const origin = req.nextUrl.origin;
   if (!access.canManage) return go(accountHome(accountId, access.role), origin);
+  if (await pausedClient(accountId, access)) return go(calendarPath(accountId, "paused"), origin);
   // D8: the nonce cookie is host-bound, so it must be set on the host Google sends the person back to.
   const callbackOrigin = new URL(cfg.redirectUri).origin;
   if (origin !== callbackOrigin) return go(calendarPath(accountId, "failed"), origin);
@@ -89,6 +104,8 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
     return go(calendarPath(accountId, "failed"), origin, { clearNonce: true });
   }
   if (!access.canManage) return go(accountHome(accountId, access.role), origin, { clearNonce: true });
+  // Before the exchange, so a paused client is never even issued a token.
+  if (await pausedClient(accountId, access)) return go(calendarPath(accountId, "paused"), origin, { clearNonce: true });
 
   // The person pressed Cancel, or Google refused before a code was issued.
   if (q.get("error") || !q.get("code")) {
@@ -105,11 +122,18 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
   const g = ex.grant;
   if (!grantsFreeBusy(g.scope)) {
     console.log(`google calendar callback: account ${accountId}: calendar.freebusy was not granted; nothing written`);
-    await revokeQuietly(g.refreshToken, deps, accountId);
+    await revokeQuietly(g.refreshToken, deps, accountId, "revoking an unkept grant");
     return go(calendarPath(accountId, "denied"), origin, { clearNonce: true });
   }
 
   const db = serviceDb();
+  // The connection this one replaces, read before the write. A failed read only means nothing gets revoked.
+  let replaced: AccountConnection | null = null;
+  try {
+    replaced = await readAccountConnection(db, accountId, [cfg.keys.current, cfg.keys.previous]);
+  } catch (e) {
+    console.error(`google calendar callback: account ${accountId}: reading the current connection failed: ${scrub(e, [g.refreshToken])}`);
+  }
   let written: { version: number };
   try {
     const connectedBy = await readPersonId(db, accountId, access.userId); // null for the agency (never a member)
@@ -119,9 +143,15 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
     });
     // previousReconnectTaskId: the reconnect To-do is PR 4's (D12); none exists before it ships.
   } catch (e) {
-    console.error(`google calendar callback: account ${accountId}: the write failed: ${scrub(e, [g.refreshToken, g.accessToken])}`);
-    await revokeQuietly(g.refreshToken, deps, accountId);
+    console.error(`google calendar callback: account ${accountId}: the write failed: ${scrub(e, [g.refreshToken, g.accessToken, replaced?.token ?? ""])}`);
+    await revokeQuietly(g.refreshToken, deps, accountId, "revoking an unkept grant");
     return go(calendarPath(accountId, "failed"), origin, { clearNonce: true });
+  }
+  // Only once the new token is stored, and only a token of ANOTHER Google account (assumption A13: revoking one
+  // refresh token may end the whole grant for that Google account and this client, the new token included).
+  // A same-account token is left to Google's own expiry (V5, V6).
+  if (replaced?.token && replaced.googleEmail.trim().toLowerCase() !== g.email.trim().toLowerCase()) {
+    await revokeQuietly(replaced.token, deps, accountId, "revoking the replaced Google account's grant");
   }
   await recordGoogleEvent(db, accountId, "google_calendar.connected", access, { version: written.version });
   return go(calendarPath(accountId, "connected"), origin, { clearNonce: true });
@@ -144,9 +174,9 @@ export async function recordGoogleEvent(
   }
 }
 
-async function revokeQuietly(token: string, deps: GoogleRouteDeps, accountId: string): Promise<void> {
+async function revokeQuietly(token: string, deps: GoogleRouteDeps, accountId: string, what: string): Promise<void> {
   const r = await revokeGoogleToken(token, { fetch: deps.fetch });
-  if (!r.ok) console.error(`google calendar: account ${accountId}: revoking an unkept grant failed (${r.error})`);
+  if (!r.ok) console.error(`google calendar: account ${accountId}: ${what} failed (${r.error})`);
 }
 
 /** The route files' defaults: the real fetch, the process env. */

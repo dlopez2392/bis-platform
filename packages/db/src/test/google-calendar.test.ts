@@ -208,6 +208,23 @@ describe("deleteGoogleConnection", () => {
       expect(await deleteGoogleConnection(db, accountId)).toBe("none");
     }));
 
+  it("given the (id, version) a disconnect read: a reconnect that landed since survives, and says 'changed' (PR 2 review m4)", () =>
+    withTestAccount(async (db, accountId) => {
+      const first = await upsertGoogleConnection(db, write(accountId));                // the disconnect reads v1 ...
+      const again = await upsertGoogleConnection(db, write(accountId, { googleEmail: "new@example.com" })); // ... a reconnect lands
+      expect(again.version).toBe(2);
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 1 })).toBe("changed");
+      expect(await getGoogleConnectionStatus(db, accountId)).toMatchObject({ version: 2, google_email: "new@example.com" });
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 2 })).toBe("deleted");
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 2 })).toBe("none");
+    }));
+
+  it("the sealed read names the Google account, so a reconnect can tell whether it replaced another one", () =>
+    withTestAccount(async (db, accountId) => {
+      await upsertGoogleConnection(db, write(accountId, { googleEmail: "owner@example.com" }));
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ google_email: "owner@example.com" });
+    }));
+
   it("deletes only that account's row", () =>
     withTestAccount(async (db, accountA) => {
       await upsertGoogleConnection(db, write(accountA, { googleEmail: `a-${randomBytes(3).toString("hex")}@example.com` }));

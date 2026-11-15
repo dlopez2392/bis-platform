@@ -42,7 +42,10 @@ booking read.
 
 **Dormant unless all four of id, secret, key and redirect URI are set and
 sound.** A key under 32 bytes, a fixture value in production, or a redirect
-URI that is not https (http is allowed on localhost only) leaves the feature
+URI that is not https (http is allowed on `localhost` only, never
+`127.0.0.1`: Next reports a 127.0.0.1 request's origin as localhost, so the
+connect's origin check could never match it; open the app at
+`http://localhost:3000`) leaves the feature
 off: no card, both routes answer 404, nothing calls Google. A refused value
 logs one line naming the variable, never its value.
 
@@ -107,8 +110,17 @@ the person removed BIS at myaccount.google.com, six months unused, more than
 The callback lands on the Calendar page with `?google=connected`, `denied`
 (the person pressed Cancel or unticked the calendar box; nothing written, the
 grant revoked) or `failed` (the exchange or the write failed; logs say which
-by Google's error code only). A refused state (expired after 10 minutes, a
-different browser, another user) lands on `/`.
+by Google's error code only) or `paused` (a client on an account paused for
+billing: connecting is switching access ON, so it is refused at connect and
+again at the callback, before any token is issued; the agency is never
+refused). A refused state (expired after 10 minutes, a different browser,
+another user) lands on `/`. Every outcome clears the nonce cookie.
+
+A reconnect with a DIFFERENT Google account revokes the replaced account's
+refresh token once the new one is stored. A reconnect with the SAME Google
+account does not: revoking one of its refresh tokens may end the whole grant,
+the new token included (assumption A13, unverified); Google drops the old one
+on its own (100-token cap, six months unused).
 
 ## 5. Rotating the token key
 
@@ -131,5 +143,7 @@ connected owner to reconnect.
 
 Disconnect (the agency or the Owner) revokes the refresh token at Google,
 then deletes the row, even when the revoke fails (logged by error code). It
-has no Undo: undoing would need the revoked token. It works while the account
-is paused for billing.
+deletes only the row it read (id and version): if a reconnect landed in
+between, the new connection stays and the answer says it was reconnected
+meanwhile. It has no Undo: undoing would need the revoked token. It works
+while the account is paused for billing (it only takes access away).

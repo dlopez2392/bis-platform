@@ -34,9 +34,10 @@ export type GoogleConnectionStatus = {
   needs_reconnect_since: string | null; reconnect_task_id: string | null;
 };
 
-const SEALED_COLS = "id, account_id, version, status, refresh_token_sealed, key_version";
+/** google_email too: a reconnect revokes the token it replaced only when it belonged to ANOTHER Google account. */
+const SEALED_COLS = "id, account_id, version, status, google_email, refresh_token_sealed, key_version";
 export type GoogleConnectionSealed = {
-  id: string; account_id: string; version: number; status: GoogleConnectionState;
+  id: string; account_id: string; version: number; status: GoogleConnectionState; google_email: string;
   refresh_token_sealed: string; key_version: number;
 };
 
@@ -137,9 +138,21 @@ export async function stampGoogleChecked(db: SupabaseClient, id: string, version
   return (data ?? []).length === 1;
 }
 
-/** Disconnect: delete the account's connection. The caller revokes at Google first (D4). */
-export async function deleteGoogleConnection(db: SupabaseClient, accountId: string): Promise<"deleted" | "none"> {
-  const { data, error } = await db.from(TABLE).delete().eq("account_id", accountId).select("id");
+/**
+ * Disconnect: delete the account's connection. The caller revokes at Google first (D4). Given `read`, the (id, version)
+ * the caller read and revoked, ONLY that row is deleted: a reconnect that landed since (a new version, a token
+ * never revoked) survives, and the answer is "changed".
+ */
+export async function deleteGoogleConnection(
+  db: SupabaseClient, accountId: string, read?: { id: string; version: number },
+): Promise<"deleted" | "none" | "changed"> {
+  let q = db.from(TABLE).delete().eq("account_id", accountId);
+  if (read) q = q.eq("id", read.id).eq("version", read.version);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(`deleteGoogleConnection failed: ${error.message}`);
-  return (data ?? []).length > 0 ? "deleted" : "none";
+  if ((data ?? []).length > 0) return "deleted";
+  if (!read) return "none";
+  const { data: still, error: readErr } = await db.from(TABLE).select("id").eq("account_id", accountId).maybeSingle();
+  if (readErr) throw new Error(`deleteGoogleConnection failed reading: ${readErr.message}`);
+  return still ? "changed" : "none";
 }
