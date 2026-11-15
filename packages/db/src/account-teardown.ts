@@ -32,6 +32,9 @@ export const ACCOUNT_OWNED_TABLES = [
   "jobs",
   // F-048 part 2 (0104): calendar links (cascade with their membership too).
   "calendar_feeds",
+  // S-22 slice 1 (google_calendar_connections): the Google Calendar link (cascades with its account too; before
+  // tasks, whose delete would otherwise set its reconnect_task_id null first).
+  "google_calendar_connections",
   // F-032 (0115): owner-line enrollments (cascade with their membership too).
   "owner_line_enrollments",
   "site_traffic_breakdown", "site_traffic_daily", "sites",

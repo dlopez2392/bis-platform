@@ -3288,6 +3288,79 @@ export type Database = {
           },
         ]
       }
+      google_calendar_connections: {
+        Row: {
+          account_id: string
+          connected_at: string
+          connected_by: string | null
+          google_email: string
+          id: string
+          key_version: number
+          last_checked_at: string | null
+          needs_reconnect_since: string | null
+          reconnect_task_id: string | null
+          refresh_expires_at: string | null
+          refresh_token_sealed: string
+          scope: string
+          status: string
+          version: number
+        }
+        Insert: {
+          account_id: string
+          connected_at?: string
+          connected_by?: string | null
+          google_email: string
+          id: string
+          key_version: number
+          last_checked_at?: string | null
+          needs_reconnect_since?: string | null
+          reconnect_task_id?: string | null
+          refresh_expires_at?: string | null
+          refresh_token_sealed: string
+          scope: string
+          status: string
+          version?: number
+        }
+        Update: {
+          account_id?: string
+          connected_at?: string
+          connected_by?: string | null
+          google_email?: string
+          id?: string
+          key_version?: number
+          last_checked_at?: string | null
+          needs_reconnect_since?: string | null
+          reconnect_task_id?: string | null
+          refresh_expires_at?: string | null
+          refresh_token_sealed?: string
+          scope?: string
+          status?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_calendar_connections_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "google_calendar_connections_connected_by_fkey"
+            columns: ["connected_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "google_calendar_connections_reconnect_task_id_fkey"
+            columns: ["reconnect_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       inbound_emails: {
         Row: {
           account_id: string

@@ -136,6 +136,12 @@ export {
   claimCalendarFeedFetch, type CalendarFeedRow, type FeedClaim,
 } from "./calendar-feeds";
 export {
+  GOOGLE_CHECKED_STAMP_MINUTES, getGoogleConnectionStatus, readGoogleConnectionSealed, upsertGoogleConnection,
+  markGoogleNeedsReconnect, stampGoogleChecked, deleteGoogleConnection,
+  type GoogleConnectionState, type GoogleConnectionRef, type GoogleConnectionStatus, type GoogleConnectionSealed,
+  type GoogleSealResult, type GoogleConnectionWrite,
+} from "./google-calendar";
+export {
   AGENCY_VISIT_REASONS, ACCESS_LOG_KINDS, AGENCY_VISIT_HOURS, ACCESS_LOG_PAGE_SIZE, ACCESS_LOG_ITEMS_SHOWN,
   isAgencyVisitReason, startAgencyVisit, agencyVisitLive, noteAgencyOpen, newestAgencyVisitStart,
   readAgencyActorName, readAccessLogPage, parseAccessLogPage,
