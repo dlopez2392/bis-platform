@@ -114,7 +114,9 @@ by Google's error code only) or `paused` (a client on an account paused for
 billing: connecting is switching access ON, so it is refused at connect and
 again at the callback, before any token is issued; the agency is never
 refused). A refused state (expired after 10 minutes, a different browser,
-another user) lands on `/`. Every outcome clears the nonce cookie.
+another user) lands on `/`. Every outcome of the callback clears the nonce
+cookie; requireAccountAccess's own redirects and the dormant 404 do not, and
+the 10-minute cookie, scoped to the callback path, then simply expires.
 
 A reconnect with a DIFFERENT Google account revokes the replaced account's
 refresh token once the new one is stored. A reconnect with the SAME Google
