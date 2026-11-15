@@ -45,6 +45,14 @@ const READY_PR = "node .github/scripts/migrations-ready-pr.mjs";
  * before passed.
  */
 const APPLY_PRODUCTION = 'read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target production "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --parity "${files[@]}" && bash .github/scripts/migrations-apply.sh --target production --check "${files[@]}"';
+/**
+ * PR 6b (2026-11-15): the migrations open PRs into main add, read with the
+ * job's token on a step of its own BEFORE the secret step, into a file the
+ * runner's --parity reads (migrations-open-pr-stems.test.ts). The image's
+ * node runs it: this job installs nothing.
+ */
+const OPEN_PR_STEMS = "node .github/scripts/migrations-open-pr-stems.mjs";
+const OPEN_PR_STEMS_FILE = "${{ runner.temp }}/open-pr-stems.txt";
 /** When migrations-production is due: a branch (never main) that adds a migration. */
 const PRODUCTION_DUE = "github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != ''";
 /** When migrations-bis-ci is due: on main (the check alone), or a branch that adds a migration. */
@@ -708,19 +716,21 @@ describe("ci.yml's jobs", () => {
     );
   });
 
-  it("migrations-production installs and runs nothing but a SHA-pinned checkout, the guard and the one apply-parity-check step, which nothing can skip or soften (mutation: add setup-node or `pnpm install`, or `continue-on-error` → FAILS)", () => {
+  it("migrations-production installs and runs nothing but a SHA-pinned checkout, the guard, the open-PR list and the one apply-parity-check step, in that order, which nothing can skip or soften (mutation: add setup-node or `pnpm install`, `continue-on-error`, or list the open PRs after the secret step → FAILS)", () => {
     const lines = job("migrations-production");
     const all = steps(lines);
-    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, APPLY_PRODUCTION]);
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, OPEN_PR_STEMS, APPLY_PRODUCTION]);
     expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/)]);
     expect(lines.map((l) => l.trim())).toContain("persist-credentials: false");
-    const apply = all.find((s) => s.run === APPLY_PRODUCTION)!;
-    expect([...apply.keys].sort()).toEqual(["env", "name", "run"]);
+    for (const run of [OPEN_PR_STEMS, APPLY_PRODUCTION]) {
+      expect([...all.find((s) => s.run === run)!.keys].sort(), run).toEqual(["env", "name", "run"]);
+    }
     expect(stepEnv(lines, APPLY_PRODUCTION)).toEqual({
       BIS_CI_SUPABASE_REF: setupEnv.BIS_CI_SUPABASE_REF,
       BIS_MIGRATIONS_DB_URL: "${{ secrets.PROD_MIGRATIONS_DB_URL }}",
       BIS_MIGRATIONS_BISCI_DB_URL: "${{ secrets.CI_SUPABASE_DB_URL }}",
       MIGRATIONS_ADDED: "${{ needs.migrations-plan.outputs.added }}",
+      BIS_MIGRATIONS_OPEN_PR_STEMS: OPEN_PR_STEMS_FILE,
     });
     expect(lines.filter((l) => /continue-on-error|pnpm|npm |setup-node|upload-artifact/.test(l))).toEqual([]);
     for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-production")) {
@@ -729,7 +739,7 @@ describe("ci.yml's jobs", () => {
     }
   });
 
-  it("migrations-production queues in its own repo-wide group, never cancelling, and its token reads contents only (mutation: cancel-in-progress: true → FAILS)", () => {
+  it("migrations-production queues in its own repo-wide group, never cancelling, and its token reads contents and pull requests only (mutation: cancel-in-progress: true, or `pull-requests: write` → FAILS)", () => {
     const lines = job("migrations-production");
     const block = (key: string) => {
       const at = lines.findIndex((l) => new RegExp(`^ {4}${key}:\\s*$`).test(l));
@@ -737,7 +747,28 @@ describe("ci.yml's jobs", () => {
       return lines.slice(at + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => /^ {6}/.test(x))).map((l) => l.trim());
     };
     expect(block("concurrency")).toEqual(["group: production-migrations", "queue: max", "cancel-in-progress: false"]);
-    expect(block("permissions")).toEqual(["contents: read"]);
+    expect(block("permissions")).toEqual(["contents: read", "pull-requests: read"]);
+  });
+
+  // PR 6b: parity tells an in-flight bis-ci row from an orphan by the open
+  // PRs' added files. The job's token reads them on ITS OWN step, which holds
+  // no secret, and the secret step holds no token: neither step's code is
+  // handed the other's credential.
+  it("migrations-production's token is on the open-PR step alone, which holds no secret, and that step writes the file the secret step's parity reads (mutation: hand GITHUB_TOKEN to the secret step, or a secret to the token's → FAILS)", () => {
+    const lines = job("migrations-production");
+    expect(stepEnv(lines, OPEN_PR_STEMS)).toEqual({
+      GITHUB_TOKEN: "${{ github.token }}",
+      BIS_MIGRATIONS_OPEN_PR_STEMS: OPEN_PR_STEMS_FILE,
+    });
+    expect(Object.keys(stepEnv(lines, APPLY_PRODUCTION))).not.toContain("GITHUB_TOKEN");
+    expect(lines.filter((l) => l.includes("github.token"))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes("secrets.")).map((l) => l.trim())).toEqual([
+      "BIS_MIGRATIONS_DB_URL: ${{ secrets.PROD_MIGRATIONS_DB_URL }}",
+      "BIS_MIGRATIONS_BISCI_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}",
+    ]);
+    for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-production")) {
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(OPEN_PR_STEMS);
+    }
   });
 
   it("the e2e gate reads migrations-production as due exactly when it is due, so a migration PR cannot merge before production holds its files (mutation: map PRODUCTION_DUE to '' → FAILS)", () => {

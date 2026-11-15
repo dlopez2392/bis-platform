@@ -131,8 +131,12 @@ differing KEYS, never definitions.
   This repeats on every apply until each row is listed as `history | <stem> | reason` (the EXACT stem parity prints,
   version_slug, never the slug or a prefix: a slug-only line would hide a production drift row with that slug at any
   version; #370's re-review) or reaches production, so an
-  abandoned PR's orphan disables parity until it is listed; the notice says so. PR 6: fail when the orphan is older
-  than every open migration PR's.
+  abandoned PR's orphan disables parity until it is listed; the notice says so. PR 6b (2026-11-15, built; the
+  "older than every open PR" heuristic replaced by an exact rule): a bis-ci-only row is IN FLIGHT when an open PR
+  into main from this repository (drafts count, forks never) adds that exact file, else an ORPHAN, and any orphan
+  FAILS parity. The list is read by `migrations-open-pr-stems.mjs` with the job's read-only token on a step before
+  the secret step; parity refuses to run without it, and a list it cannot read fails the job. In-flight rows keep
+  the notice, now naming their PRs.
 - A production row that is the file's whole stem with no runner digest (the MCP fallback) is accepted only when
   bis-ci's recorded digest equals the file AND parity is judged and passes (a notice says "applied by hand"). Always judged, either way: each newly
   applied file's digest is equal in the file, bis-ci and production.
@@ -157,7 +161,9 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
 - PR abandoned after an apply: the schema stays. Remove it with a reverting migration in its own PR
   (`if exists` throughout, so it is a no-op where the original never landed). Corrected by #370's review: no
   gate notice named the orphan; parity's "not judged" notice names it on every production apply, and parity stays
-  unjudged until it is listed in `allowed-differences.txt` (D4). Failing on an old orphan is left to PR 6.
+  unjudged until it is listed in `allowed-differences.txt` (D4). Since PR 6b (2026-11-15) an orphan no open PR
+  adds FAILS parity, naming it, until its stem is listed (D4). A reverting migration does not remove the orphan's
+  history row, and `parity/` is pipeline (Q6), so the listing lands first in a PR of its own, then the revert.
 
 **D6. Security.** (The bis-ci half of D6's CLAUDE.md wording landed in PR 4: CI writes to bis-ci through
 `migrations-bis-ci`; production stays by hand until PR 5.)
@@ -294,11 +300,24 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
   A job that names an environment GitHub does not have CREATES it with no protection rules: until section 3 is done,
   such a run starts with no click and no secret, and the runner refuses ("PROD_MIGRATIONS_DB_URL is not set").
 
-**PR 6 — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
+**PR 6a — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
 `production-migrations` deployments of this branch (A6) and passes `prod_evidence` when one was on a commit
 whose migrations directory is byte-identical to HEAD's; missing or ambiguous evidence asks for the click.
 - Tests: fake `gh` + scratch repo: identical directory → evidence; one byte changed → none; force-pushed-away
   commit → none. Probe: compare the file list instead of the bytes → the "one byte" case fails.
+
+**PR 6b — Parity fails on a bis-ci orphan** (HIGH, ~620; built 2026-11-15, #373). Replaces D4's "older than every
+open PR" heuristic with an exact rule: a bis-ci-only row is in flight only when an OPEN PR into main from this
+repository (drafts count, forks never) ADDS that exact file, by its whole stem; otherwise it is an orphan and parity
+FAILS, naming it. `migrations-open-pr-stems.mjs` reads the list with the job's `pull-requests: read` token on a step
+of its own BEFORE the secret step (the image's node, no setup-node), writing `<stem> <pr>` lines whole or not at
+all; any page it cannot read, or a PR at GitHub's 3000-file cap, fails the job. `--parity` refuses to run without
+a readable list. In-flight rows keep the "not judged" notice, now naming their PRs. The error's advice is list
+first, then revert: a reverting migration never removes the orphan's history row, and `parity/` is pipeline (Q6),
+so a PR of its own lists the stem as `history | <stem> | reason`, then another PR reverts any schema it left.
+- Tests: the script against a fake API on loopback (paging, forks, status, the cap, errors on any page); the
+  runner on fake psql (in flight, orphan, exact stem vs slug/version/prefix, a listed orphan judged, the list
+  missing); workflow pins (permission, step order, the token off the secret step).
 
 Acceptance after PR 5: two PRs, each with one migration, both ready and approved the same day, both merged
 the same day; read each merge's head-SHA check runs, then production's history (pair + digest) and parity.
