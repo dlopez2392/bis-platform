@@ -99,6 +99,12 @@ beforeAll(() => {
   for (const [i, file] of PIPELINE_FILES.entries()) shas[`tree${i}`] = branch(`b/tree${i}`, { [MIG]: SQL, [file]: "before\n" }, { [file]: "after\n" });
   // Absent where production ran, present at HEAD (a missing tree is not an equal one).
   shas.appears = branch("b/appears", { [MIG]: SQL }, { "packages/db/supabase/parity/allowed-differences.txt": "history | x | reason\n" });
+  // The mirror: present where production ran, removed at HEAD.
+  const kept = branch("b/removed", { [MIG]: SQL, "packages/db/supabase/parity/allowed-differences.txt": "history | x | reason\n" }, null).evidence;
+  git(work, "rm", "-q", "packages/db/supabase/parity/allowed-differences.txt");
+  git(work, "commit", "-q", "-m", "b/removed head");
+  git(work, "push", "-q", "origin", "b/removed:b/removed");
+  shas.removed = { evidence: kept, head: git(work, "rev-parse", "HEAD") };
   // Force-pushed away: production ran on a commit the branch no longer has.
   const gone = branch("b/forced", { [MIG]: SQL }, null).evidence;
   shas.forced = { evidence: gone, head: branch("b/forced", { [MIG]: SQL, "apps/web/x.ts": "export const z = 2;\n" }, null).evidence };
@@ -223,6 +229,10 @@ describe("migrations-prod-evidence.mjs: no second click for migrations productio
 
   it("asks when a pipeline tree is absent where production ran and present at HEAD (absent is not equal)", async () => {
     none(await run("b/appears", world("b/appears", shas.appears!.evidence)), /packages\/db\/supabase\/parity differs/);
+  });
+
+  it("asks when a pipeline tree is present where production ran and removed at HEAD (mutation: treat a tree absent at HEAD as equal → FAILS)", async () => {
+    none(await run("b/removed", world("b/removed", shas.removed!.evidence)), /packages\/db\/supabase\/parity differs/);
   });
 
   it("asks when .github changed after production's run (the evidence must have run today's pipeline)", async () => {

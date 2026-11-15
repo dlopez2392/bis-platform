@@ -495,8 +495,18 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
   const bisci = () => rows(["0001", "tenancy"], ["0060", "owner_line"], ["20261114093000", "work_queue", md5(NEW)]);
   const prod = (...extra: [string, string, string?][]) =>
     rows(["0001", "tenancy"], ["20261111035059", "owner_line"], ["20261114093000", "work_queue", md5(NEW)], ...extra);
-  const parity = (target: string, b: string, tfp: string, bfp: string, extra: Record<string, string | undefined> = {}) =>
-    run(["--target", "local-as-production", "--parity", `${DIR}/${NEW}`], asLocalProd(target, b, { FAKE_TARGET_FP: tfp, FAKE_BISCI_FP: bfp, ...extra }));
+  // PR 6b: migrations-production writes `<stem> <pr>` lines (the migrations
+  // open PRs into main add, migrations-open-pr-stems.mjs) before its secret
+  // step; --parity reads the file BIS_MIGRATIONS_OPEN_PR_STEMS names. Every
+  // case gets one (empty: no open PR adds a migration) unless it says.
+  const STEMS_FILE = () => path.join(tree, "open-pr-stems.txt");
+  const parity = (target: string, b: string, tfp: string, bfp: string, extra: Record<string, string | undefined> = {}, openPrs = "") => {
+    fs.writeFileSync(STEMS_FILE(), openPrs);
+    return run(["--target", "local-as-production", "--parity", `${DIR}/${NEW}`],
+      asLocalProd(target, b, { FAKE_TARGET_FP: tfp, FAKE_BISCI_FP: bfp, BIS_MIGRATIONS_OPEN_PR_STEMS: toBashPath(STEMS_FILE()), ...extra }));
+  };
+  const OTHER = "20261115000000_other_branch";
+  const otherRow = (): [string, string, string] => ["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"];
 
   it("passes when the normalised histories and every item match: production's slug-only row equals bis-ci's pair for the same file", () => {
     setup();
@@ -546,14 +556,85 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
     expect(r.output).toContain("allowed: function app.current_account_id()");
   });
 
-  it("does not judge the schema when the histories differ (another PR is between bis-ci and production): a notice naming the migration, and a pass", () => {
+  it("does not judge the schema when bis-ci's extra row is IN FLIGHT (an open PR adds that exact file): a notice naming the migration and the PR(s), and a pass", () => {
     setup();
-    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
-    const r = parity(prod(), b, fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE));
+    const b = bisci() + rows(otherRow());
+    const r = parity(prod(), b, fp(...BASE, ["column", "public.x.y", "dddddddddddddddddddddddddddddddd"]), fp(...BASE), {}, `${OTHER} 412\n${OTHER} 415\n`);
     expect(r.status, r.output).toBe(0);
     expect(r.output).toMatch(/::notice::Parity not judged: bis-ci holds/);
-    expect(r.output).toContain("20261115000000_other_branch (bis-ci only)");
+    expect(r.output).toContain(`${OTHER} (bis-ci only; added by open PR #412, #415)`);
+    expect(r.output).not.toContain("::error::");
     expect(r.log.filter((l) => l.includes("from items"))).toHaveLength(0);
+  });
+
+  // PR 6b (2026-11-15): a bis-ci-only row no open PR adds is an ORPHAN (a PR
+  // closed unmerged after its bis-ci apply). It used to pass with the same
+  // notice, silently disabling parity on every later apply.
+  it("FAILS on a bis-ci-only row that no open PR adds (an orphan), saying how to resolve it (mutation: treat every bis-ci-only row as in flight → FAILS)", () => {
+    setup();
+    const b = bisci() + rows(otherRow());
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    // A reverting migration adds a row and never removes this one, and parity/
+    // is the pipeline's (a PR may not change it beside a migration): so the
+    // listing comes first, in a PR of its own, then the revert.
+    expect(r.output).toContain(`::error::Parity: bis-ci holds ${OTHER} that no open pull request adds (closed unmerged?). Until it is listed in packages/db/supabase/parity/allowed-differences.txt as \`history | ${OTHER} | reason\` (a PR of its own: that file is the pipeline's), parity cannot be judged; then, if it left schema on bis-ci, remove it with a reverting migration in another PR (runbook section 5).`);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; orphan: no open PR adds it)`);
+    expect(r.output).not.toContain("::notice::Parity not judged");
+    expect(r.log.filter((l) => l.includes("from items"))).toHaveLength(0);
+  });
+
+  it.each([
+    ["the same SLUG at another version", "20261116000000_other_branch"],
+    ["a PREFIX of the row's stem (same version)", "20261115000000_other"],
+    ["the same VERSION with another slug", "20261115000000_unrelated"],
+  ])("an open PR adding %s does not vouch for the row: the whole stem must match (mutation: match by slug, by version, or by prefix → FAILS)", (_l, listed) => {
+    setup();
+    const b = bisci() + rows(otherRow());
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE), {}, `${listed} 412\n`);
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toContain(`::error::Parity: bis-ci holds ${OTHER} that no open pull request adds`);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; orphan: no open PR adds it)`);
+  });
+
+  it("with an in-flight row AND an orphan, fails naming only the orphan as one; the in-flight row is listed with its PR", () => {
+    setup();
+    const b = bisci() + rows(otherRow(), ["20261116000000", "abandoned", "abcdefabcdefabcdefabcdefabcdefab"]);
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE), {}, `${OTHER} 412\n`);
+    expect(r.status, r.output).toBe(1);
+    expect(r.output.match(/::error::.*/g)).toEqual([
+      expect.stringContaining("::error::Parity: bis-ci holds 20261116000000_abandoned that no open pull request adds"),
+    ]);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; added by open PR #412)`);
+    expect(r.output).toContain("20261116000000_abandoned (bis-ci only; orphan: no open PR adds it)");
+  });
+
+  it("an orphan listed by its stem as `history` is dropped before this check: parity is judged and passes", () => {
+    setup(`${ALLOWED}history | ${OTHER} | PR closed unmerged; reverted by a later migration\n`);
+    const b = bisci() + rows(otherRow());
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain("Parity: production matches bis-ci");
+  });
+
+  it.each([
+    ["unset", { BIS_MIGRATIONS_OPEN_PR_STEMS: undefined }, /::error::BIS_MIGRATIONS_OPEN_PR_STEMS is not set/],
+    ["empty", { BIS_MIGRATIONS_OPEN_PR_STEMS: "" }, /::error::BIS_MIGRATIONS_OPEN_PR_STEMS is not set/],
+    ["naming no file", { BIS_MIGRATIONS_OPEN_PR_STEMS: "/nonexistent/open-pr-stems.txt" }, /::error::BIS_MIGRATIONS_OPEN_PR_STEMS names no readable file/],
+  ])("refuses parity when the open-PR list is %s, even with nothing on bis-ci alone, comparing nothing (mutation: pass when it is missing → FAILS)", (_l, extra, why) => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE), extra);
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(why);
+    expect(r.output).not.toContain("Parity: production matches bis-ci");
+    expect(r.log.filter((l) => l.includes("from items"))).toHaveLength(0);
+  });
+
+  it("refuses an open-PR list line that is not `<stem> <pr-number>`", () => {
+    setup();
+    const r = parity(prod(), bisci(), fp(...BASE), fp(...BASE), {}, `${OTHER} 412\nother_branch 412\n`);
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*line 2 of the open-PR list .* is not '<stem> <pr-number>'/);
   });
 
   it("treats a history row listed as allowed as absent, so production's extra hand-repair row does not stop the judgement (mutation: drop the history kind → FAILS)", () => {
@@ -628,12 +709,12 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
 
   // Item 2: a bis-ci-only row (an in-flight or abandoned PR) skips the
   // judgement, and the notice says it will keep doing so until resolved.
-  it("a bis-ci-only row skips the judgement with a notice that says it persists until the row is allowed or reaches production", () => {
+  it("an in-flight bis-ci-only row skips the judgement with a notice that says it persists until the migration reaches production or its PR closes", () => {
     setup();
-    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
-    const r = parity(prod(), b, fp(...BASE), fp(...BASE));
+    const b = bisci() + rows(otherRow());
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE), {}, `${OTHER} 412\n`);
     expect(r.status, r.output).toBe(0);
-    expect(r.output).toMatch(/every apply until each row above is listed in packages\/db\/supabase\/parity\/allowed-differences\.txt \(`history \| <stem> \| reason`\) or its migration reaches production/);
+    expect(r.output).toMatch(/every apply until each migration above reaches production; if its PR closes unmerged, parity fails on it/);
   });
 
   it("an orphan bis-ci row listed by its stem as `history` no longer stops the judgement (mutation: match history lines on the row's name only → FAILS)", () => {
@@ -673,10 +754,22 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
 
   it("refuses a hand-applied file when parity cannot be judged: nothing then vouches for its content (mutation: accept it on the notice path → FAILS)", () => {
     setup();
-    const b = bisci() + rows(["20261115000000", "other_branch", "0123456789abcdef0123456789abcdef"]);
-    const r = parity(prodHand(), b, fp(...BASE), fp(...BASE));
+    const b = bisci() + rows(otherRow());
+    const r = parity(prodHand(), b, fp(...BASE), fp(...BASE), {}, `${OTHER} 412\n`);
     expect(r.status, r.output).toBe(1);
     expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql was applied to production by hand, and parity could not be judged/);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; added by open PR #412)`);
+    expect(r.output).not.toMatch(/::error::Parity: bis-ci holds/);
+  });
+
+  it("a hand-applied file beside an ORPHAN fails on both, and the listing marks the orphan", () => {
+    setup();
+    const b = bisci() + rows(otherRow());
+    const r = parity(prodHand(), b, fp(...BASE), fp(...BASE));
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*20261114093000_work_queue\.sql was applied to production by hand/);
+    expect(r.output).toContain(`::error::Parity: bis-ci holds ${OTHER} that no open pull request adds`);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; orphan: no open PR adds it)`);
   });
 
   // Item 4 (M8): only parity's production-side content check can catch a
