@@ -324,28 +324,46 @@ describe("a billing-paused account: switching Google ON is refused for a client,
 
 describe("a reconnect does not leave the replaced grant behind at Google", () => {
   const OLD = "1//0gOLD-refresh-token_zyxwvutsrq";
-  const ROW = { accountId: A, id: "33333333-3333-4333-8333-333333333333", version: 1 };
-  const oldRow = (googleEmail: string) => {
-    const s = sealGoogleToken(OLD, ROW, googleTokenKey(KEY)!);
-    return { id: ROW.id, account_id: A, version: 1, status: "connected", refresh_token_sealed: s.sealed, key_version: s.keyVersion, google_email: googleEmail };
+  const ROW_ID = "33333333-3333-4333-8333-333333333333";
+  const sealedFor = (token: string, version: number) => sealGoogleToken(token, { accountId: A, id: ROW_ID, version }, googleTokenKey(KEY)!);
+  /** The upsert reports the row it ACTUALLY overwrote (its final read, after any retry). */
+  const replacing = (googleEmail: string, token = OLD, version = 1) => {
+    db.upsertGoogleConnection.mockReset().mockImplementation(async () => {
+      order.push("upsert");
+      const s = sealedFor(token, version);
+      return { id: ROW_ID, version: version + 1, previousReconnectTaskId: null, replaced: { version, googleEmail, sealed: s.sealed, keyVersion: s.keyVersion } };
+    });
   };
 
   it("another Google account was connected: its refresh token is revoked AFTER the new one is written", async () => {
-    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
+    replacing("someone-else@example.com");
     const { state, nonce } = await connect();
     expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
     expect(order).toEqual(["upsert", `revoke:${OLD}`]);
   });
 
+  it("a reconnect raced in (re-review m1): the token revoked is the one the write ACTUALLY overwrote, not one read before it", async () => {
+    // Before the write the account held X (token TX); B's reconnect landed (Y, TY); this write retried over Y.
+    const TX = "1//0gX-token-read-before_abcdefgh";
+    const TY = "1//0gY-token-overwritten_abcdefgh";
+    const x = sealedFor(TX, 1);
+    db.readGoogleConnectionSealed.mockResolvedValue({
+      id: ROW_ID, account_id: A, version: 1, status: "connected", google_email: "x@example.com", refresh_token_sealed: x.sealed, key_version: x.keyVersion,
+    });
+    replacing("y@example.com", TY, 2);
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    expect(order).toEqual(["upsert", `revoke:${TY}`]);
+  });
+
   it("the SAME Google account (A13): the old token is not revoked, since revoking it could end the new grant too", async () => {
-    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("Owner@Example.com"));
+    replacing("Owner@Example.com");
     const { state, nonce } = await connect();
     expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
     expect(order).toEqual(["upsert"]);
   });
 
   it("a failed write keeps the old connection and its token: only the NEW grant is revoked", async () => {
-    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
     db.upsertGoogleConnection.mockReset().mockRejectedValue(new Error("db down"));
     const { state, nonce } = await connect();
     expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=failed");
@@ -353,7 +371,7 @@ describe("a reconnect does not leave the replaced grant behind at Google", () =>
   });
 
   it("a failed revoke of the old token is logged by account and error code only; the connect stands", async () => {
-    db.readGoogleConnectionSealed.mockResolvedValue(oldRow("someone-else@example.com"));
+    replacing("someone-else@example.com");
     google.revoke = { status: 400 };
     const { state, nonce } = await connect();
     expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");

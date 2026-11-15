@@ -40,7 +40,7 @@ let logs: string[];
 beforeEach(() => {
   access.state = { userId: "user_A", isAgency: false, role: "owner", canManage: true };
   access.calls = [];
-  conn.value = { id: ROW_ID, version: 1, googleEmail: "owner@example.com", token: REFRESH };
+  conn.value = { id: ROW_ID, version: 7, googleEmail: "owner@example.com", token: REFRESH };
   conn.error = null;
   conn.calls = [];
   revoke = { status: 200 };
@@ -60,7 +60,8 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-const READ = { id: ROW_ID, version: 1 };
+/** Version 7, not 1: a delete pinned to version 1 must not pass by coincidence. */
+const READ = { id: ROW_ID, version: 7 };
 
 describe("disconnectGoogleCalendarAction (D4)", () => {
   it("an Owner: revokes the refresh token at Google, deletes exactly the row it read, records who did it", async () => {
