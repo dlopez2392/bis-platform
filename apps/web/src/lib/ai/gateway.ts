@@ -23,10 +23,10 @@ import { AI_TASKS, type AiTask, type ModelRoute } from "./tasks";
  * with at least FALLBACK_MIN_MS left of the caller's time limit, which the two attempts share. Each attempt writes
  * its own ledger row under its own model, so the cost is recorded against the model actually used.
  *
- * A task whose `feature` is null (the web chat, until a migration admits it to ai_ledger) skips steps 3-4 and
- * writes no ledger row: it honours the kill switch (step 1) and nothing else here. The AI settings copy promises
- * operators that the account switch, the global switch and the budget leave the website chat running; those
- * gates join the chat with the ledger migration and a copy rewrite, the owner's call (review of #362).
+ * A task whose row says `gated: false` (the web chat) skips steps 3-4: it honours the kill switch (step 1) and
+ * nothing else here. The AI settings copy promises operators that the account switch, the global switch and the
+ * budget leave the website chat running (review of #362). It still writes its ledger row (step 6), so its cost is
+ * recorded and counts toward the account's month: recording the cost never turns the gates on.
  *
  * The month and day keys are the account-zone date of `input.now ?? new Date()`, the real clock: 0086 accepts
  * any well-formed key and relies on the app never sending a far-future one.
@@ -82,12 +82,14 @@ const NO_USAGE: AiUsage = { inputTokens: null, outputTokens: null, costMicroUsd:
 const QUIET: ReadonlySet<AiOutcome> = new Set<AiOutcome>(["global_off", "account_off", "over_budget"]);
 
 /**
- * How long the gateway may spend on the gate read (steps 3-4) before a task's completion: GATE_TIMEOUT_MS, or 0
- * for a task with no ledger feature, which skips the gate (see aiComplete). A caller that budgets its own time
- * around a completion (the web chat's follow-up) subtracts this.
+ * The most time aiComplete may spend on one completion OUTSIDE the caller's time limit: the gate read before it
+ * (steps 3-4, GATE_TIMEOUT_MS, none for an ungated task) and the ledger write after it (step 6, LEDGER_TIMEOUT_MS,
+ * every task). A caller that budgets its own time around a completion (the web chat's follow-up) subtracts this
+ * before it sets the completion's time limit, so the gate, the call and its row fit together. With a fallback the
+ * second attempt adds one more ledger write; no task has a fallback today.
  */
-export function aiGateMs(task: AiTask): number {
-  return AI_TASKS[task].feature === null ? 0 : GATE_TIMEOUT_MS;
+export function aiOverheadMs(task: AiTask): number {
+  return (AI_TASKS[task].gated ? GATE_TIMEOUT_MS : 0) + LEDGER_TIMEOUT_MS;
 }
 
 /**
@@ -116,7 +118,6 @@ export async function aiComplete(db: SupabaseClient, input: AiInput): Promise<Ai
     const keys = periodKeys(input.now ?? new Date(), safeZone(input.timezone));
     const finish = async (outcome: AiOutcome, usage: AiUsage, model: string, detail = ""): Promise<void> => {
       if (outcome !== "ok") say(outcome, detail);
-      if (route.feature === null) return;
       try {
         await recordAiLedger(db, {
           accountId: input.accountId, feature: route.feature, model: model.slice(0, 64),
@@ -134,7 +135,7 @@ export async function aiComplete(db: SupabaseClient, input: AiInput): Promise<Ai
       await finish("unknown_model", NO_USAGE, primary.model);
       return { ok: false, reason: "unknown_model" };
     }
-    if (aiGateMs(input.task) > 0) {
+    if (route.gated) {
       let gate: AiGate;
       try {
         gate = await aiGateCheck(db, { accountId: input.accountId, ...keys, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });

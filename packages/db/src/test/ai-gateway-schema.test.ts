@@ -72,10 +72,25 @@ describe("0086: the tables (spec 3.3)", () => {
       const acct = await seed(c);
       const ins = (feature: string, outcome: string) =>
         attempt(c, "insert into ai_ledger (account_id, feature, model, outcome) values ($1, $2, 'gpt-4o-mini', $3)", [acct, feature, outcome]);
-      for (const f of ["call_summary", "call_proposals", "call_card", "record_summary"]) await ins(f, "ok");
+      for (const f of ["call_summary", "call_proposals", "call_card", "record_summary", "web_chat"]) await ins(f, "ok");
       for (const o of ["global_off", "account_off", "over_budget", "unknown_model", "gate_unreadable", "no_key", "timeout", "provider_error"]) await ins("call_card", o);
       await expect(ins("chat", "ok")).rejects.toMatchObject({ code: "23514", constraint: "ai_ledger_feature_check" });
       await expect(ins("call_card", "maybe")).rejects.toMatchObject({ code: "23514", constraint: "ai_ledger_outcome_check" });
+    }));
+
+  it("web_chat (web_chat_ledger migration): the check admits exactly the five features, and a web_chat row adds to the month's spend but never to today's record summaries (mutations: leave web_chat out of the check -> 23514 -> FAILS; count every feature toward the daily cap -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows: [def] } = await c.query<{ d: string }>(
+        "select pg_get_constraintdef(oid) as d from pg_constraint where conrelid = 'public.ai_ledger'::regclass and conname = 'ai_ledger_feature_check'");
+      for (const f of ["call_summary", "call_proposals", "call_card", "record_summary", "web_chat"]) expect(def!.d).toContain(`'${f}'::text`);
+      expect(def!.d.match(/'[a-z_]+'::text/g)).toHaveLength(5);
+      const acct = await seed(c);
+      await record(c, acct, { feature: "web_chat", cost: 40 });
+      await record(c, acct, { feature: "web_chat", cost: 2 });
+      expect(await gate(c, acct)).toMatchObject({ month_spend_microusd: 42, record_summaries_today: 0 });
+      const { rows } = await c.query<{ feature: string; cost: string }>(
+        "select feature, cost_microusd::text as cost from ai_ledger where account_id = $1 order by cost_microusd", [acct]);
+      expect(rows).toEqual([{ feature: "web_chat", cost: "2" }, { feature: "web_chat", cost: "40" }]);
     }));
 
   it("tokens, cost and latency are never negative (mutation: drop ai_ledger_cost_check -> FAILS)", () =>

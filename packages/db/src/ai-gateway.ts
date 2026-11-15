@@ -8,7 +8,8 @@ import type { CasOutcome } from "./documents";
  * (0086 lets the agency alone SELECT all three tables). Nothing here takes or returns a prompt or a
  * model's output: the ledger has no column for either.
  */
-export const AI_FEATURES = ["call_summary", "call_proposals", "call_card", "record_summary"] as const;
+/** 0086's four, and web_chat (migration web_chat_ledger). The check constraint ai_ledger_feature_check is this list. */
+export const AI_FEATURES = ["call_summary", "call_proposals", "call_card", "record_summary", "web_chat"] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 export const AI_OUTCOMES = ["ok", "global_off", "account_off", "over_budget", "unknown_model", "gate_unreadable", "no_key", "timeout", "provider_error"] as const;
 export type AiOutcome = (typeof AI_OUTCOMES)[number];
