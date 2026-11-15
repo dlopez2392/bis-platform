@@ -1,4 +1,4 @@
-import { type Page, type Request, expect, test } from "@playwright/test";
+import { type Locator, type Page, type Request, type Response, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { withAuthor, type RowAuthor } from "@bis/db";
 import { contrastRatio } from "../src/lib/branding/color";
@@ -153,6 +153,47 @@ export function readClientFixture(): { accountId: string; companyName: string } 
 export const RECORD_PAGE = "main [data-record-layout]:has([data-record-header])";
 export function recordPage(page: Page) {
   return page.locator(RECORD_PAGE);
+}
+
+/**
+ * Waits until React has attached to this element, so a click on it reaches its handler.
+ *
+ * A server-rendered button is visible, enabled and clickable the moment the HTML paints, long before
+ * hydration gives it an onClick; Playwright's own actionability checks cannot tell the difference, so a
+ * click in that gap does NOTHING, silently, and the spec then waits out its timeout for an effect (a toast,
+ * a row) that was never started. documents.spec.ts names the same gap on a fresh hard navigation. React
+ * stamps every DOM node it has hydrated with a `__reactProps$<random>` property (the object holding its
+ * onClick), so its presence on THIS element is the signal, with no sleep and no knowledge of the component.
+ * Use it before the first click on a client-component control after a `page.goto`/`page.reload`.
+ */
+export async function untilHydrated(target: Locator): Promise<void> {
+  await expect.poll(
+    () => target.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$"))),
+    { message: "React has not attached to the control yet (a click now would do nothing)" },
+  ).toBe(true);
+}
+
+/**
+ * Why a card's own client read was refused, said in the failure itself. The record page's read routes
+ * (documents, ai-summary) answer 404 with the same empty body for several different reasons (no signed-in
+ * person, a session that is not an agency visit's, a contact that is not there, no live visit), so the status
+ * alone cannot say which; two CI flakes (documents.spec "Take photo" and record-summary.spec "on again") each
+ * failed with a bare refusal and nothing to tell the reasons apart. This reads what does: Clerk's own auth
+ * verdict headers on that response (`x-clerk-auth-status`/`-reason`, never a token), the NAMES of the
+ * browser's cookies (never their values), and the same read repeated at once from the page, which says whether
+ * the refusal was momentary or stays.
+ */
+export async function explainRefusedRead(page: Page, refused: Response, what: string): Promise<string> {
+  const clerk = Object.entries(refused.headers()).filter(([k]) => k.startsWith("x-clerk")).map(([k, v]) => `${k}=${v}`);
+  const cookieNames = (await page.context().cookies()).map((c) => c.name).sort();
+  const again = await page.evaluate(async (u) => (await fetch(u, { cache: "no-store" })).status, refused.url()).catch((e: unknown) => `threw ${String(e)}`);
+  return [
+    `${what} answered ${refused.status()}, not 200`,
+    `body: ${(await refused.text().catch(() => "(unreadable)")).slice(0, 200)}`,
+    `clerk headers: ${clerk.join(" ") || "(none)"}`,
+    `cookies held: ${cookieNames.join(", ") || "(none)"}`,
+    `the same read repeated from the page: ${again}`,
+  ].join("\n");
 }
 
 /**

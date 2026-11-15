@@ -785,9 +785,16 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     // load would refresh it transparently; this keyboard interaction has none. window.Clerk.session's own
     // getToken, the same call clerk-js's background timer makes, forces exactly that refresh — in place,
     // with no reload, so the focus just proven above survives it.
-    await page.evaluate(() => (
-      window as unknown as { Clerk?: { session?: { getToken(opts: { skipCache: true }): Promise<string | null> } } }
-    ).Clerk?.session?.getToken({ skipCache: true }));
+    //
+    // Run 43439869435 (2026-11-13, shard 1) failed here the same way AFTER that refresh was in place. The call
+    // was `Clerk?.session?.getToken(...)`: when clerk-js had not finished loading on a busy runner, `window.Clerk`
+    // or its `session` was still undefined, the optional chain made the whole call a silent no-op, and nothing
+    // refreshed. So wait for the session to exist, then require a real token back: a refresh that did not
+    // happen now fails on this line, naming itself, instead of five lines later as a redirect to /sign-in.
+    type ClerkWindow = { Clerk?: { session?: { getToken(opts: { skipCache: true }): Promise<string | null> } } };
+    await page.waitForFunction(() => Boolean((window as unknown as ClerkWindow).Clerk?.session));
+    const refreshed = await page.evaluate(() => (window as unknown as ClerkWindow).Clerk!.session!.getToken({ skipCache: true }));
+    expect(refreshed, "clerk-js minted a fresh session token before the keyboard navigation").toBeTruthy();
 
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/calls\/[0-9a-f-]{36}$/);
