@@ -72,7 +72,7 @@ describe("GoogleCard", () => {
 
   it("status is dot + word: Connected with the email, Needs reconnecting, each with a dot", () => {
     const c = render(STATES.connected!);
-    expect(renderedText(c)).toContain("Connected · dan@example.com");
+    expect(renderedText(c)).toContain("Connected");
     expect(c).toMatch(/size-\[7px\][^>]*--good/);
     const n = render(STATES.needsReconnect!);
     expect(renderedText(n)).toContain("Needs reconnecting");
@@ -95,6 +95,22 @@ describe("GoogleCard", () => {
       expect(html, o).toContain("--warn-bg");
     }
     expect(render(STATES.empty!)).not.toContain("data-slot=\"notice\"");
+    // M-3: a status line the reader did not ask for is polite, never an interrupting alert.
+    expect(ok).toMatch(/data-slot="notice"[^>]*role="status"|role="status"[^>]*data-slot="notice"/);
+    expect(ok).not.toContain('role="alert"');
+  });
+
+  it("a long email wraps on its own line instead of widening the pill (I-3)", () => {
+    const email = "a.very.long.business.name.owner@example-company.com";
+    for (const body of [
+      { kind: "connected", email, lastCheckedAt: null } as const,
+      { kind: "needsReconnect", email, connect: link } as const,
+    ]) {
+      const html = render(v(body));
+      expect(html).toMatch(new RegExp(`<p[^>]*min-w-0[^>]*overflow-wrap:anywhere[^>]*>${email}</p>`));
+      expect(html).not.toMatch(new RegExp(`whitespace-nowrap[^>]*>(<span[^>]*></span>)?[^<]*${email}`));
+    }
+    expect(renderedText(render(STATES.connected!))).toContain("Connected");
   });
 
   it("survives the pseudo-locale and marks the card for the palette", () => {

@@ -13,8 +13,8 @@ describe("styleguide: the Google Calendar card (S-22 slice 1, PR 3)", () => {
   const html = renderToStaticMarkup(createElement(GoogleCardStates));
 
   it("shows the real card once per state plus the skeleton", () => {
-    expect(GOOGLE_CARD_DEMOS).toHaveLength(9);
-    expect(html.match(/data-google-card="true"/g)).toHaveLength(8);
+    expect(GOOGLE_CARD_DEMOS).toHaveLength(10);
+    expect(html.match(/data-google-card="true"/g)).toHaveLength(9);
     expect(html.match(/data-google-card-skeleton/g)).toHaveLength(1);
   });
 

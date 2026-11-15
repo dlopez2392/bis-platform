@@ -95,3 +95,19 @@ export function disconnectFeedback(r: GoogleDisconnectResult):
   { tone: "success"; key: "calendar.google.toast.disconnected" } | { tone: "error"; key: Extract<GoogleDisconnectResult, { ok: false }>["error"] } {
   return r.ok ? { tone: "success", key: "calendar.google.toast.disconnected" } : { tone: "error", key: r.error };
 }
+
+/**
+ * Disconnect's whole sequence, apart from React so it can be tested: the outcome banner of the trip to Google
+ * goes FIRST (a stale "connected" line above Connect would contradict the toast), then the action, the toast,
+ * and the page refresh.
+ */
+export async function runGoogleDisconnect(d: {
+  disconnect: () => Promise<GoogleDisconnectResult>;
+  clearOutcome: () => void;
+  notify: (f: ReturnType<typeof disconnectFeedback>) => void;
+  refresh: () => void;
+}): Promise<void> {
+  d.clearOutcome();
+  d.notify(disconnectFeedback(await d.disconnect()));
+  d.refresh();
+}

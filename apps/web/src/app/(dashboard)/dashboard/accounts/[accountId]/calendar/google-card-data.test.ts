@@ -14,7 +14,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
 }));
 vi.mock("@/lib/billing/standing-read", () => ({ billingVerdictFor: (id: string) => reads.paused(id) }));
 
-const { buildGoogleCardView, loadGoogleCardView, parseGoogleOutcome, disconnectFeedback } = await import("./google-card-data");
+const { buildGoogleCardView, loadGoogleCardView, parseGoogleOutcome, disconnectFeedback, runGoogleDisconnect } = await import("./google-card-data");
 
 const ACC = "6f1c2c1e-3b7a-4c51-9a55-0c7d7f3b2a10";
 const ORIGIN = "https://app.bis-rgv.com";
@@ -99,6 +99,27 @@ describe("disconnectFeedback", () => {
     for (const e of ["notAllowed", "failed", "changed"] as const) {
       expect(disconnectFeedback({ ok: false, error: `calendar.google.error.${e}` })).toEqual({ tone: "error", key: `calendar.google.error.${e}` });
     }
+  });
+});
+
+describe("runGoogleDisconnect (I-1: the stale banner)", () => {
+  it("clears the outcome banner BEFORE asking, then toasts and refreshes", async () => {
+    const order: string[] = [];
+    await runGoogleDisconnect({
+      disconnect: async () => { order.push("action"); return { ok: true as const }; },
+      clearOutcome: () => order.push("clear"),
+      notify: (f) => order.push(`notify:${f.tone}`),
+      refresh: () => order.push("refresh"),
+    });
+    expect(order).toEqual(["clear", "action", "notify:success", "refresh"]);
+  });
+  it("an action error still clears, toasts the error and refreshes", async () => {
+    const order: string[] = [];
+    await runGoogleDisconnect({
+      disconnect: async () => ({ ok: false as const, error: "calendar.google.error.changed" as const }),
+      clearOutcome: () => order.push("clear"), notify: (f) => order.push(`${f.tone}:${f.key}`), refresh: () => order.push("refresh"),
+    });
+    expect(order).toEqual(["clear", "error:calendar.google.error.changed", "refresh"]);
   });
 });
 

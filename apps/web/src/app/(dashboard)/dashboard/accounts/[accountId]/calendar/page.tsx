@@ -31,6 +31,7 @@ import { FeedCard } from "./feed-card";
 import { GoogleCardSkeleton } from "./google-card";
 import { GoogleCardSection } from "./google-card-section";
 import { parseGoogleOutcome } from "./google-card-data";
+import { googleCalendarConfig } from "@/lib/google/calendar-client";
 import { loadFeedCardView } from "./feed-card-data";
 import { makeFeedLinkAction, replaceFeedLinkAction, turnOffFeedLinkAction, undoFeedLinkAction } from "./feed-actions";
 import { updateCalendarSettingsAction, keepAppointmentAction } from "./actions";
@@ -328,13 +329,15 @@ export default async function CalendarPage({
               undo={undoFeedLinkAction.bind(null, accountId)}
             />
             {/* S-22 slice 1 (plan D16): busy times on Google are not offered. Its own boundary: nothing here
-                holds the rest of the page, and it draws nothing when dormant or for Staff and Technician. */}
-            <Suspense fallback={<GoogleCardSkeleton />}>
-              <GoogleCardSection
-                accountId={accountId} isAgency={isAgency} canManage={canManage} origin={origin}
-                outcome={parseGoogleOutcome(googleParam)} locale={locale} pseudo={pseudo}
-              />
-            </Suspense>
+                holds the rest of the page. No Suspense (so no skeleton flash) for Staff, Technician or a dormant feature. */}
+            {canManage && googleCalendarConfig() ? (
+              <Suspense fallback={<GoogleCardSkeleton />}>
+                <GoogleCardSection
+                  accountId={accountId} isAgency={isAgency} canManage={canManage} origin={origin}
+                  outcome={parseGoogleOutcome(googleParam)} locale={locale} pseudo={pseudo}
+                />
+              </Suspense>
+            ) : null}
           </div>
         </div>
       </div>

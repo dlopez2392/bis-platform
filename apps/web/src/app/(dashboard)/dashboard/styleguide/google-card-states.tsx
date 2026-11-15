@@ -24,6 +24,7 @@ export const GOOGLE_CARD_DEMOS: { id: string; label: string; view: GoogleCardVie
   { id: "empty", label: "Not connected — Connect is the one primary", view: v({ kind: "empty", connect: link }) },
   { id: "connected", label: "Connected — dot + word, Disconnect is ghost", view: v({ kind: "connected", email: "owner@example.com", lastCheckedAt: checked() }) },
   { id: "connected-just-now", label: "Connected, after the trip to Google", view: v({ kind: "connected", email: "owner@example.com", lastCheckedAt: null }, "connected") },
+  { id: "long-email", label: "Connected, a 46-character email wraps on its own line", view: v({ kind: "connected", email: "a.very.long.business.name.owner@example-co.com", lastCheckedAt: checked() }) },
   { id: "needs-reconnect", label: "Needs reconnecting — Reconnect is the one primary", view: v({ kind: "needsReconnect", email: "owner@example.com", connect: link }) },
   { id: "denied", label: "Box left unticked — nothing changed", view: v({ kind: "empty", connect: link }, "denied") },
   { id: "paused", label: "Paused client — no Connect", view: v({ kind: "empty", connect: { kind: "paused" } }, "paused") },

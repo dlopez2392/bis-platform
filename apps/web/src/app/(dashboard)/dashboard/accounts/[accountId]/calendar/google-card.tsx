@@ -7,7 +7,7 @@
 // off site. Disconnect runs at once with NO Undo (it would need the revoked token back: DESIGN.md rule 6's
 // "Change PIN" case) and says what happens next in its toast. One primary per state (rule 8). Tokens only.
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { DotPill } from "@/components/dot-pill";
 import { formatRelativeTime } from "@/lib/format";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
-import { disconnectFeedback, type GoogleCardView, type GoogleConnectOffer } from "./google-card-data";
+import { runGoogleDisconnect, type GoogleCardView, type GoogleConnectOffer } from "./google-card-data";
 import type { GoogleDisconnectResult } from "./google-actions";
 
 export type GoogleCardProps = {
@@ -28,6 +28,8 @@ export type GoogleCardProps = {
 };
 
 const muted = "text-[var(--text-2)]";
+/** An email has no break points: it wraps anywhere rather than widen the card at 375px or under the pseudo-locale. */
+const EMAIL = `min-w-0 [overflow-wrap:anywhere] ${muted}`;
 
 export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleCardProps) {
   const tr = makeTr(locale, pseudo);
@@ -35,11 +37,24 @@ export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleC
   const [pending, start] = useTransition();
   const { body } = view;
 
-  const onDisconnect = () => start(async () => {
-    const f = disconnectFeedback(await disconnect());
-    if (f.tone === "success") toast.success(tr.text(f.key)); else toast.error(tr.text(f.key));
-    router.refresh();
-  });
+  // The outcome of the trip to Google is held here, not read from the URL again: `?google=` stays on the address
+  // after the callback, so a refresh (Disconnect's own) would otherwise draw "connected" above Connect. Strip it
+  // once on mount, and clear the line when Disconnect starts.
+  const [outcome, setOutcome] = useState(view.outcome);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("google")) {
+      url.searchParams.delete("google");
+      window.history.replaceState(window.history.state, "", url);
+    }
+  }, []);
+
+  const onDisconnect = () => start(() => runGoogleDisconnect({
+    disconnect,
+    clearOutcome: () => setOutcome(null),
+    notify: (f) => { if (f.tone === "success") toast.success(tr.text(f.key)); else toast.error(tr.text(f.key)); },
+    refresh: () => router.refresh(),
+  }));
   const disconnectButton = (
     <Button type="button" variant="ghost" disabled={pending} onClick={onDisconnect}>{tr.text("calendar.google.disconnect")}</Button>
   );
@@ -50,9 +65,9 @@ export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleC
         <CardTitle>{tr.text("calendar.google.title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
-        {view.outcome ? (
-          <Notice tone={view.outcome === "connected" ? "good" : "warn"} className="text-foreground">
-            {tr.text(`calendar.google.outcome.${view.outcome}`)}
+        {outcome ? (
+          <Notice role="status" tone={outcome === "connected" ? "good" : "warn"} className="text-foreground">
+            {tr.text(`calendar.google.outcome.${outcome}`)}
           </Notice>
         ) : null}
 
@@ -68,9 +83,10 @@ export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleC
         {body.kind === "connected" ? (
           <>
             <DotPill
-              label={tr.text("calendar.google.status.connected", { email: body.email })}
+              label={tr.text("calendar.google.status.connected")}
               chip="border-transparent bg-[var(--good-bg)] text-foreground" dot="bg-[var(--good)]"
             />
+            <p className={EMAIL}>{body.email}</p>
             <p className={muted}>{tr.text("calendar.google.connected.note")}</p>
             <p className={muted} suppressHydrationWarning>
               {body.lastCheckedAt
@@ -87,7 +103,7 @@ export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleC
               label={tr.text("calendar.google.status.needsReconnect")}
               chip="border-transparent bg-[var(--crit-bg)] text-foreground" dot="bg-[var(--crit)]"
             />
-            <p className={muted}>{body.email}</p>
+            <p className={EMAIL}>{body.email}</p>
             <p className={muted}>{tr.text("calendar.google.needsReconnect.body")}</p>
             <div className="flex flex-wrap items-center gap-2">
               <ConnectOffer offer={body.connect} label={tr.text("calendar.google.reconnect")} tr={tr} />
