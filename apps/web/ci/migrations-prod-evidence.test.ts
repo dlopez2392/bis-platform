@@ -59,6 +59,14 @@ function branch(name: string, evidence: Record<string, string>, head: Record<str
 }
 
 const SQL = "create table thing (id int primary key);\n";
+/** One file in each tree, beside .github, that migrations-plan.mjs counts as the pipeline (migrations-plan.test.ts lists the same). */
+const PIPELINE_FILES = [
+  "packages/db/supabase/parity/allowed-differences.txt",
+  "packages/db/supabase/bootstrap/ci-project.sql",
+  "packages/db/supabase/config.toml",
+  "packages/db/src/migrations/names.ts",
+  "packages/db/src/ci/push.ts",
+];
 const shas: Record<string, { evidence: string; head: string }> = {};
 
 beforeAll(() => {
@@ -86,6 +94,11 @@ beforeAll(() => {
   shas.byte = branch("b/byte", { [MIG]: SQL }, { [MIG]: SQL.replace("int primary", "INT primary") });
   shas.added = branch("b/added", { [MIG]: SQL }, { [`${DIR}/20261114100000_more.sql`]: "select 1;\n" });
   shas.github = branch("b/github", { [MIG]: SQL }, { ".github/workflows/ci.yml": "on: [push]\n" });
+  // Review of #372: production's step reads more than the migrations and .github (parity's rules, the bootstrap,
+  // the stacks' config, @bis/db's migration code). Each tree migrations-plan counts as the pipeline, changed ALONE.
+  for (const [i, file] of PIPELINE_FILES.entries()) shas[`tree${i}`] = branch(`b/tree${i}`, { [MIG]: SQL, [file]: "before\n" }, { [file]: "after\n" });
+  // Absent where production ran, present at HEAD (a missing tree is not an equal one).
+  shas.appears = branch("b/appears", { [MIG]: SQL }, { "packages/db/supabase/parity/allowed-differences.txt": "history | x | reason\n" });
   // Force-pushed away: production ran on a commit the branch no longer has.
   const gone = branch("b/forced", { [MIG]: SQL }, null).evidence;
   shas.forced = { evidence: gone, head: branch("b/forced", { [MIG]: SQL, "apps/web/x.ts": "export const z = 2;\n" }, null).evidence };
@@ -193,11 +206,23 @@ describe("migrations-prod-evidence.mjs: no second click for migrations productio
   });
 
   it("asks when one byte of a migration changed and the file LIST did not (mutation: compare names instead of bytes → FAILS)", async () => {
-    none(await run("b/byte", world("b/byte", shas.byte!.evidence)), /migrations differ/);
+    none(await run("b/byte", world("b/byte", shas.byte!.evidence)), /packages\/db\/supabase\/migrations differs/);
   });
 
   it("asks when a migration was added after production's run", async () => {
-    none(await run("b/added", world("b/added", shas.added!.evidence)), /migrations differ/);
+    none(await run("b/added", world("b/added", shas.added!.evidence)), /packages\/db\/supabase\/migrations differs/);
+  });
+
+  it.each(PIPELINE_FILES.map((file, i) => [file, i] as const))(
+    "asks when only %s changed after production's run: the pipeline that checks production is not the one that ran (mutation: drop that tree from the compared set → FAILS)",
+    async (file, i) => {
+      const tree = file.endsWith(".toml") ? file : file.slice(0, file.lastIndexOf("/"));
+      none(await run(`b/tree${i}`, world(`b/tree${i}`, shas[`tree${i}`]!.evidence)), new RegExp(`${tree.replace(/[./]/g, "\\$&")} differs`));
+    },
+  );
+
+  it("asks when a pipeline tree is absent where production ran and present at HEAD (absent is not equal)", async () => {
+    none(await run("b/appears", world("b/appears", shas.appears!.evidence)), /packages\/db\/supabase\/parity differs/);
   });
 
   it("asks when .github changed after production's run (the evidence must have run today's pipeline)", async () => {

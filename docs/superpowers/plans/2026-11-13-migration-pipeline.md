@@ -111,8 +111,10 @@ commit SHA, then bash and psql), and runs `migrations-apply.sh --target producti
   branch's (in production by its gate). No ruleset change.
 - No production gate on `main`'s own run (no credential outside the environment); `main` keeps the bis-ci check.
 - One click per migration: the job runs only when the branch adds files, after bis-ci. A later push on the
-  same branch asks again until PR 6, which skips the click when a previous production run succeeded on
-  byte-identical migration files (a no-op approval is confusing, and the e2e check waits on it).
+  same branch asks again until PR 6, which skips the click when the branch's newest production run succeeded on
+  byte-identical migration files AND pipeline trees (`.github`, `packages/db/supabase/parity`, `bootstrap`,
+  `config.toml`, `packages/db/src/migrations` and `src/ci`) (a no-op approval is confusing, and the e2e check
+  waits on it).
 - Rejected: apply in a post-merge workflow before Vercel deploys. It needs Vercel's auto-deploy rerouted, and a
   failed apply leaves main deployed without its schema, which is the 0115 failure.
 - Rejected: `workflow_run` (main-defined workflow). It closes the "branch edits the job" hole, but its check
@@ -306,11 +308,19 @@ whose migrations directory is byte-identical to HEAD's; missing or ambiguous evi
   only). The NEWEST deployment of the branch decides (A6 confirmed on #371: one per job attempt, waiting ones
   included, so a later failed or cancelled attempt outranks an earlier success); its newest status must be
   `success`, the job its log URL names must be a successful `migrations-production` on that sha and branch, of a
-  run whose `path` is ci.yml; that sha must be an ancestor of HEAD with identical tree ids for the migrations
-  directory AND `.github`. Anything else, an unreadable answer included, asks (exit 0, a notice saying why); a
-  missing env variable is the step's own misconfiguration and fails it. A fake REST API on loopback replaced the
-  fake `gh`. A6's unverified half: if GitHub marks an older success `inactive` once another branch deploys to the
-  environment, that branch's next push asks again (the safe side).
+  run whose `path` is ci.yml; that sha must be an ancestor of HEAD with identical object ids (or absent on both)
+  for the migrations directory AND every pipeline tree, the same list migrations-plan refuses beside a migration
+  (one module, `.github/scripts/migrations-pipeline.mjs`): `.github`, `packages/db/supabase/parity`,
+  `packages/db/supabase/bootstrap`, `packages/db/supabase/config.toml`, `packages/db/src/migrations` and
+  `packages/db/src/ci` (review of #372: production's step reads parity's rules from `parity/`, so a merge of main
+  that changed them had skipped them). Anything else, an unreadable answer included, asks (exit 0, a notice saying
+  why); a missing env variable is the step's own misconfiguration and fails it. `migrations-plan`'s checkout keeps
+  no token (`persist-credentials: false`). A fake REST API on loopback replaced the fake `gh`. Verified
+  2026-11-15: later successes in an environment do not mark an older success `inactive` (deployment 7797475925
+  still `success` after 7802386746; both in the `production` environment, made by Actions and flagged
+  `production_environment: false` as production-migrations' are, so the same rule applies there). Residual gap, on the record: the skip carries the evidence run's parity
+  verdict forward and never re-judges it, so a parity that was "not judged" there (bis-ci held other PRs' rows)
+  stays unjudged for the branch's later pushes.
 
 Acceptance after PR 5: two PRs, each with one migration, both ready and approved the same day, both merged
 the same day; read each merge's head-SHA check runs, then production's history (pair + digest) and parity.

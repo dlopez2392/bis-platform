@@ -38,21 +38,13 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
+// The migration pipeline (what decides how a migration is checked, applied and
+// compared): one list, shared with migrations-prod-evidence.mjs.
+import { isPipeline } from "./migrations-pipeline.mjs";
 
 const DIR = "packages/db/supabase/migrations/";
 const NEW_NAME = /^[0-9]{14}_[a-z][a-z0-9_]*\.sql$/;
 const NEW_FILE = "create new migrations with `pnpm --filter @bis/db migration:new <slug>`";
-/** The migration pipeline: what decides how a migration is checked, applied and compared. */
-const PIPELINE = [
-  /^\.github\/workflows\//,
-  /^\.github\/scripts\/(ci-|migrations-)/,
-  /^packages\/db\/supabase\/(parity|bootstrap)\//,
-  // [db.migrations] enabled and major_version decide whether and how the CI
-  // stacks apply migrations. (Not packages/db/package.json: a dependency bump
-  // in a schema PR is ordinary.)
-  /^packages\/db\/supabase\/config\.toml$/,
-  /^packages\/db\/src\/(migrations|ci)\//,
-];
 
 const errors = [];
 const refuse = (message) => errors.push(message);
@@ -392,7 +384,7 @@ for (const file of added) {
 
 // ---- a migration and the pipeline, never both (owner decision Q6) ------------
 
-const pipeline = allPaths.filter((p) => PIPELINE.some((re) => re.test(p)));
+const pipeline = allPaths.filter(isPipeline);
 if (added.length > 0 && pipeline.length > 0) {
   refuse(`This branch adds a migration (${added.join(", ")}) AND changes the migration pipeline (${pipeline.join(", ")}). Owner decision 2026-11-13: a PR adds a migration OR changes the pipeline, never both. Split it into two PRs.`);
 }

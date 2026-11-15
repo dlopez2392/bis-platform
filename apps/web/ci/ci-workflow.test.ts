@@ -779,6 +779,9 @@ describe("ci.yml's jobs", () => {
     expect(lines.filter((l) => /secrets\./.test(l))).toEqual([]);
     expect(lines.filter((l) => /^\s+env:\s*$/.test(l))).toHaveLength(1);
     expect(stepEnv(lines, PROD_EVIDENCE)).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+    // Review of #372: checkout must not leave the token in .git/config for every
+    // later step; the repo is public, so the fetches of main and the branch need none.
+    expect(lines.map((l) => l.trim())).toContain("persist-credentials: false");
     expect(jobKeys(lines)).not.toContain("environment");
     // No other job runs either, and it runs nothing that could install code.
     for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-plan")) {

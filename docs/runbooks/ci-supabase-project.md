@@ -314,12 +314,20 @@ CI first, then production.
      new click) when traffic is quiet.
    - parity fails: step 6.
    - a later push to the same branch does NOT ask again (since 2026-11-15,
-     the pipeline's PR 6) when its migrations and `.github` are byte-identical
-     to an ancestor commit where this job succeeded: `migrations-plan`'s
-     notice names that run, and `migrations-production` is skipped. It asks
-     again when a migration or `.github` changed, the branch was rebased or
-     force-pushed past that commit, the newest attempt failed or was
-     cancelled, or the API could not be read; that notice says which.
+     the pipeline's PR 6) when the branch's NEWEST run of this job succeeded,
+     on an ancestor commit whose migrations and pipeline files (`.github`,
+     `packages/db/supabase/parity`, `bootstrap`, `config.toml`,
+     `packages/db/src/migrations` and `src/ci`;
+     `.github/scripts/migrations-pipeline.mjs`) are byte-identical to this
+     one's: `migrations-plan`'s notice names that run, and
+     `migrations-production` is skipped. It asks again when any of those
+     changed (a merge of main that touches parity/ included), the branch was
+     rebased or force-pushed past that commit, the newest attempt failed or
+     was cancelled, or the API could not be read; that notice says which.
+     **Residual gap, on the record:** the skip carries the earlier run's
+     parity verdict forward and never re-judges it. If parity was "not
+     judged" there (bis-ci held other PRs' rows), it stays unjudged for this
+     branch's later pushes. Recorded, not fixed (review of #372).
    **Fallback, only when CI cannot run:** the MCP procedure (for an OPEN PR:
    afterwards Re-run failed jobs; the runner skips the file as applied, and
    parity accepts the hand-applied row only when bis-ci holds the same bytes

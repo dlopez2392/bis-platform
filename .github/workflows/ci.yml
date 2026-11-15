@@ -406,7 +406,9 @@ jobs:
   # No second click for unchanged migrations (2026-11-15, plan PR 6): on a
   # branch that adds migrations, the evidence step asks the REST API for this
   # branch's newest production-migrations deployment and git whether HEAD
-  # holds byte-identical migrations and .github trees to the commit that
+  # holds byte-identical migrations AND pipeline (.github, parity/, bootstrap/,
+  # config.toml, @bis/db's migration code: migrations-pipeline.mjs, the same
+  # list migrations-plan.mjs refuses beside a migration) to the commit that
   # production run succeeded on. If so, `prod_evidence` names that commit and
   # migrations-production is not due: production already holds these files,
   # and the approval would only have re-run a no-op. Anything less (no run, a
@@ -424,7 +426,11 @@ jobs:
       added: ${{ steps.plan.outputs.added }}
       prod_evidence: ${{ steps.evidence.outputs.prod_evidence }}
     steps:
+      # No token left in .git/config for later steps: the repository is public,
+      # so the fetches of main and of this branch need none.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # It holds no Supabase value either; the guard proves that, as in every part.
       - name: Check that migrations-plan holds no cloud Supabase credential
@@ -541,7 +547,7 @@ jobs:
   #
   # Not due, and no click asked, when migrations-plan found prod_evidence
   # (2026-11-15, plan PR 6): an earlier successful run of THIS job, on an
-  # ancestor of this commit with byte-identical migrations and .github, already
+  # ancestor of this commit with byte-identical migrations and pipeline, already
   # gave production these files. The click is asked only for files production
   # has not received through this pipeline.
   migrations-production:

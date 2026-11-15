@@ -20,11 +20,15 @@
 //     ran on the deployment's commit and this branch; that run's workflow
 //     file (actions/runs/{id} `path`) is .github/workflows/ci.yml;
 //   - in git, that commit is an ancestor of HEAD (a commit force-pushed away
-//     is not fetched and is no evidence), and HEAD's tree ids for
-//     packages/db/supabase/migrations AND .github equal that commit's. A tree
+//     is not fetched and is no evidence), and HEAD's object id for EVERY
+//     entry of EVIDENCE_TREES (migrations-pipeline.mjs: the migrations
+//     directory and every tree migrations-plan counts as the pipeline:
+//     .github, parity/, bootstrap/, config.toml, @bis/db's src/migrations and
+//     src/ci) equals that commit's, or the entry is absent on both. An object
 //     id is the hash of every byte below it, so "identical" means identical
-//     files, not identical names; .github identical means the evidence ran
-//     today's pipeline.
+//     files, not identical names; an identical pipeline means the evidence ran
+//     the checks this commit would run (review of #372: parity's rules live in
+//     packages/db/supabase/parity, not in .github).
 // Anything missing, unreadable or different writes `prod_evidence=` and a
 // notice saying why the click is asked, and exits 0: asking is the safe side.
 // The newest deployment decides, so a later failed or cancelled attempt
@@ -41,11 +45,11 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { EVIDENCE_TREES } from "./migrations-pipeline.mjs";
 
 const ENVIRONMENT = "production-migrations";
 const JOB_NAME = "migrations-production";
 const WORKFLOW = ".github/workflows/ci.yml";
-const TREES = [["packages/db/supabase/migrations", "migrations differ"], [".github", ".github differs"]];
 const MAX_PAGES = 5;
 
 const env = {};
@@ -81,6 +85,15 @@ async function get(path, what) {
 
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+/** The object id of `path` at `rev`; "" when rev has no such path (exit 1 under --quiet); any other failure asks. */
+function objectId(rev, path) {
+  try {
+    return git("rev-parse", "--verify", "--quiet", `${rev}:${path}`);
+  } catch (error) {
+    if (error?.status === 1) return "";
+    return ask(`${path} could not be read at ${rev.slice(0, 7)}`);
+  }
 }
 const gitOk = (...args) => { try { git(...args); return true; } catch { return false; } };
 
@@ -127,10 +140,8 @@ async function evidence() {
     if (!gitOk("cat-file", "-e", `${sha}^{commit}`)) ask(`production's commit ${short} is not on this branch any more (force-pushed away?)`);
   }
   if (!gitOk("merge-base", "--is-ancestor", sha, head)) ask(`production's commit ${short} is not an ancestor of this commit`);
-  for (const [dir, differ] of TREES) {
-    let before, now;
-    try { before = git("rev-parse", `${sha}:${dir}`); now = git("rev-parse", `HEAD:${dir}`); } catch { ask(`${dir} could not be read at ${short} or here`); }
-    if (before !== now) ask(`${differ} from ${short}, where production last ran`);
+  for (const path of EVIDENCE_TREES) {
+    if (objectId(sha, path) !== objectId("HEAD", path)) ask(`${path} differs from ${short}, where production last ran`);
   }
   return { sha, url };
 }
