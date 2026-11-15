@@ -111,8 +111,10 @@ commit SHA, then bash and psql), and runs `migrations-apply.sh --target producti
   branch's (in production by its gate). No ruleset change.
 - No production gate on `main`'s own run (no credential outside the environment); `main` keeps the bis-ci check.
 - One click per migration: the job runs only when the branch adds files, after bis-ci. A later push on the
-  same branch asks again until PR 6, which skips the click when a previous production run succeeded on
-  byte-identical migration files (a no-op approval is confusing, and the e2e check waits on it).
+  same branch asks again until PR 6, which skips the click when the branch's newest production run succeeded on
+  byte-identical migration files AND pipeline trees (`.github`, `packages/db/supabase/parity`, `bootstrap`,
+  `config.toml`, `packages/db/src/migrations` and `src/ci`) (a no-op approval is confusing, and the e2e check
+  waits on it).
 - Rejected: apply in a post-merge workflow before Vercel deploys. It needs Vercel's auto-deploy rerouted, and a
   failed apply leaves main deployed without its schema, which is the 0115 failure.
 - Rejected: `workflow_run` (main-defined workflow). It closes the "branch edits the job" hole, but its check
@@ -210,6 +212,8 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
   approve unless "prevent self-review" is on; a re-run asks again; a newer run's cancel cancels a waiting job;
   secrets are released only after approval. Verify in PR 5 with a no-op job before the secret exists.
 - A6 an environment job creates a deployment carrying `sha` and `ref`, listable with `deployments: read` (PR 6).
+  CONFIRMED 2026-11-15 (read-only, #371's branch): one per job attempt, created at `waiting`; statuses newest
+  first, each `log_url` the job's URL; `?ref=<branch>` filters.
 - A7 runner psql is 15+, and `\set var \`cat file\`` reads the file whole, dropping one trailing newline.
 - A8 `GITHUB_TOKEN` with `pull-requests: read` lists the PRs of a commit.
 - A9 `queue: max` concurrency (already used by `screenshots.yml:39`) keeps every waiting bis-ci apply.
@@ -305,6 +309,25 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
 whose migrations directory is byte-identical to HEAD's; missing or ambiguous evidence asks for the click.
 - Tests: fake `gh` + scratch repo: identical directory → evidence; one byte changed → none; force-pushed-away
   commit → none. Probe: compare the file list instead of the bytes → the "one byte" case fails.
+- Built (PR 6a, 2026-11-15): `.github/scripts/migrations-prod-evidence.mjs`, a step of `migrations-plan` (only
+  when the plan passed with added files, never on main; the job's token reads contents, deployments and actions
+  only). The NEWEST deployment of the branch decides (A6 confirmed on #371: one per job attempt, waiting ones
+  included, so a later failed or cancelled attempt outranks an earlier success); its newest status must be
+  `success`, the job its log URL names must be a successful `migrations-production` on that sha and branch, of a
+  run whose `path` is ci.yml; that sha must be an ancestor of HEAD with identical object ids (or absent on both)
+  for the migrations directory AND every pipeline tree, the same list migrations-plan refuses beside a migration
+  (one module, `.github/scripts/migrations-pipeline.mjs`): `.github`, `packages/db/supabase/parity`,
+  `packages/db/supabase/bootstrap`, `packages/db/supabase/config.toml`, `packages/db/src/migrations` and
+  `packages/db/src/ci` (review of #372: production's step reads parity's rules from `parity/`, so a merge of main
+  that changed them had skipped them). Anything else, an unreadable answer included, asks (exit 0, a notice saying
+  why); a missing env variable is the step's own misconfiguration and fails it. `migrations-plan`'s checkout keeps
+  no token (`persist-credentials: false`). A fake REST API on loopback replaced the fake `gh`. Whether a later
+  success marks an older one `inactive`: observed only by analogy, on the `production` environment (deployments
+  7797475925 and 7802386746, both on main at one sha, the older still `success`); cross-branch behaviour in
+  `production-migrations` is not observed. If it is wrong, the next push asks for the click (the safe side).
+  Residual gap, on the record: the skip carries the evidence run's parity verdict forward and never re-judges
+  it, so a parity that was "not judged" there (bis-ci held other PRs' rows) stays unjudged for the branch's
+  later pushes.
 
 **PR 6b — Parity fails on a bis-ci orphan** (HIGH, ~620; built 2026-11-15, #373). Replaces D4's "older than every
 open PR" heuristic with an exact rule: a bis-ci-only row is in flight only when an OPEN PR into main from this

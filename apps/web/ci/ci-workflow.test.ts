@@ -53,8 +53,15 @@ const APPLY_PRODUCTION = 'read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/s
  */
 const OPEN_PR_STEMS = "node .github/scripts/migrations-open-pr-stems.mjs";
 const OPEN_PR_STEMS_FILE = "${{ runner.temp }}/open-pr-stems.txt";
-/** When migrations-production is due: a branch (never main) that adds a migration. */
-const PRODUCTION_DUE = "github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != ''";
+/**
+ * When migrations-production is due: a branch (never main) that adds a
+ * migration, unless migrations-plan found evidence that production already
+ * received those exact files (2026-11-15, PR 6a; migrations-prod-evidence.test.ts).
+ */
+const PRODUCTION_DUE = "github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '' && needs.migrations-plan.outputs.prod_evidence == ''";
+/** PR 6a: the evidence step, in migrations-plan, only on a branch whose passed plan adds migrations. */
+const PROD_EVIDENCE = "node .github/scripts/migrations-prod-evidence.mjs";
+const PROD_EVIDENCE_IF = "steps.plan.outcome == 'success' && steps.plan.outputs.added != '' && github.ref != 'refs/heads/main'";
 /** When migrations-bis-ci is due: on main (the check alone), or a branch that adds a migration. */
 const BIS_CI_DUE = "github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != ''";
 /** The credential-free migration plan check (migrations-plan part, 2026-11-13). */
@@ -548,8 +555,10 @@ describe("ci.yml's jobs", () => {
     const all = steps(job(id));
     expect(all.length).toBeGreaterThan(3);
     expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
-    // The diagnostics' own conditions are pinned exactly, below.
-    expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF && !isDiagnostic(s))).toEqual([]);
+    // The diagnostics' own conditions are pinned exactly, below; the evidence
+    // step's is its own (it can only make production NOT due, never a part green).
+    const own = (s: Step) => s.run === PROD_EVIDENCE && s.if === PROD_EVIDENCE_IF;
+    expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF && !isDiagnostic(s) && !own(s))).toEqual([]);
   });
 
   // 2026-10-13: Kong 502s in bursts with keep-alive already off. The dump
@@ -707,7 +716,7 @@ describe("ci.yml's jobs", () => {
     expect(hits).toEqual(["ci.yml: environment: production-migrations", "ci.yml: group: production-migrations"]);
   });
 
-  it("migrations-production runs only after migrations-bis-ci SUCCEEDED, for a branch (never main) that adds migrations (mutation: drop migrations-bis-ci's success from the if, or run it for every branch → FAILS)", () => {
+  it("migrations-production runs only after migrations-bis-ci SUCCEEDED, for a branch (never main) that adds migrations production has no evidence of already holding (mutation: drop migrations-bis-ci's success from the if, run it for every branch, or drop the prod_evidence term → FAILS)", () => {
     const lines = job("migrations-production");
     expect(jobNeeds(lines)).toEqual(["migrations-plan", "migrations-bis-ci"]);
     expect(jobValue(lines, "if")).toBe(
@@ -771,7 +780,7 @@ describe("ci.yml's jobs", () => {
     }
   });
 
-  it("the e2e gate reads migrations-production as due exactly when it is due, so a migration PR cannot merge before production holds its files (mutation: map PRODUCTION_DUE to '' → FAILS)", () => {
+  it("the e2e gate reads migrations-production as due exactly when it is due, so a migration PR cannot merge before production holds its files, and not due when prod_evidence shows it already does (mutation: map PRODUCTION_DUE to '', or drop its prod_evidence term → FAILS)", () => {
     const gate = steps(job("e2e")).find((s) => s.run?.startsWith(GATE_SCRIPT))!;
     expect(gate.run).toBe(`${GATE_SCRIPT} E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE MIGRATIONS_PRODUCTION@PRODUCTION_DUE`);
     const env = stepEnv(job("e2e"), gate.run!);
@@ -789,22 +798,48 @@ describe("ci.yml's jobs", () => {
   // apply safely, from git alone. It must hold NOTHING: no secret, no env, no
   // install, so no branch's code reaches a credential through it, and it can
   // never be what makes a push without migrations slower.
-  it("migrations-plan runs exactly the guard, the docs-only decision, node 24 without pnpm and the plan check, and holds no secret, no env and no install (mutation: map CI_SUPABASE_DB_URL onto its step, or add `pnpm install` → FAILS)", () => {
+  it("migrations-plan runs exactly the guard, the docs-only decision, node 24 without pnpm, the plan check and the production-evidence step, and holds no secret, no install and no env but the evidence step's token (mutation: map CI_SUPABASE_DB_URL onto its step, or add `pnpm install` → FAILS)", () => {
     const lines = job("migrations-plan");
     const all = steps(lines);
-    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_PLAN]);
+    expect(all.flatMap((s) => (s.run ? [s.run] : []))).toEqual([GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_PLAN, PROD_EVIDENCE]);
     expect(all.filter((s) => s.uses).map((s) => s.uses)).toEqual([
       expect.stringMatching(/^actions\/checkout@/),
       expect.stringMatching(/^actions\/setup-node@/),
     ]);
     expect(lines.filter((l) => /package-manager-cache:\s*false\s*$/.test(l))).toHaveLength(1);
     expect(lines.filter((l) => /secrets\./.test(l))).toEqual([]);
-    expect(lines.filter((l) => /^\s+env:\s*$/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /^\s+env:\s*$/.test(l))).toHaveLength(1);
+    expect(stepEnv(lines, PROD_EVIDENCE)).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+    // Review of #372: checkout must not leave the token in .git/config for every
+    // later step; the repo is public, so the fetches of main and the branch need none.
+    expect(lines.map((l) => l.trim())).toContain("persist-credentials: false");
     expect(jobKeys(lines)).not.toContain("environment");
-    // No other job runs it, and it runs nothing that could install code.
+    // No other job runs either, and it runs nothing that could install code.
     for (const id of Object.keys(ciJobs).filter((j) => j !== "migrations-plan")) {
       expect(steps(job(id)).map((s) => s.run), id).not.toContain(MIGRATIONS_PLAN);
+      expect(steps(job(id)).map((s) => s.run), id).not.toContain(PROD_EVIDENCE);
     }
+  });
+
+  // PR 6 (2026-11-15): no second click for unchanged migrations. The evidence
+  // step runs only on a branch (never main) whose PASSED plan adds migrations,
+  // and only it can empty or fill prod_evidence; with the step skipped the
+  // output is empty, so production stays due. Its token reads, never writes.
+  it("migrations-plan's evidence step runs only after a passed plan that adds migrations, off main, and hands prod_evidence out as a job output (mutation: drop `github.ref != 'refs/heads/main'` from its if, or the output → FAILS)", () => {
+    const lines = job("migrations-plan");
+    const evidence = steps(lines).find((s) => s.run === PROD_EVIDENCE)!;
+    expect([...evidence.keys].sort()).toEqual(["env", "id", "if", "name", "run"]);
+    expect(evidence.id).toBe("evidence");
+    expect(evidence.if).toBe(PROD_EVIDENCE_IF);
+    expect(lines.map((l) => l.trim())).toContain("prod_evidence: ${{ steps.evidence.outputs.prod_evidence }}");
+  });
+
+  it("migrations-plan's token may read contents, deployments and actions only (mutation: add `deployments: write`, or drop the block so the repository default applies → FAILS)", () => {
+    const lines = job("migrations-plan");
+    const at = lines.findIndex((l) => /^ {4}permissions:\s*$/.test(l));
+    expect(at).toBeGreaterThanOrEqual(0);
+    const block = lines.slice(at + 1).filter((l, i, a) => a.slice(0, i + 1).every((x) => /^ {6}/.test(x)));
+    expect(block.map((l) => l.trim())).toEqual(["contents: read", "deployments: read", "actions: read"]);
   });
 
   // Each shard is a whole e2e run on its own stack: setup and teardown are
@@ -867,7 +902,9 @@ describe("ci.yml's jobs", () => {
     // guard refuses a production target whether or not anything follows it.
     expect(all.slice(0, decision + 1).filter((s) => s.keys.includes("if"))).toEqual([]);
     // The stack diagnostics carry their own conditions, pinned in their own case.
-    const after = all.slice(decision + 1).filter((s) => !isDiagnostic(s));
+    // So does the evidence step (PR 6), whose condition requires the plan step's
+    // success, which a docs-only push never has: it is stricter, never looser.
+    const after = all.slice(decision + 1).filter((s) => !isDiagnostic(s) && !(s.run === PROD_EVIDENCE && s.if === PROD_EVIDENCE_IF));
     expect(after.length).toBeGreaterThan(0);
     // `!= 'true'`, never `== 'false'`: when the decision writes nothing (a
     // crash, a renamed output), the condition still holds and the suites RUN.

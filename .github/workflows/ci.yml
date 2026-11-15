@@ -393,20 +393,44 @@ jobs:
   # branch (owner decision Q6). The refusals and their messages:
   # .github/scripts/migrations-plan.mjs.
   #
-  # Holds NO credential: no secret, no env, nothing but git (main's history,
-  # fetched as ci-docs-only.sh fetches it) and node's built-ins (no install).
-  # Its own part, not a step of migrations-bis-ci, because that job holds the
-  # CI project's DB URL on a later step. It needs nothing and runs beside the
-  # shards, about 12 seconds of work against their several minutes, so it
-  # makes no push slower. Its `added` output (the files the branch ADDS,
-  # written only when the plan passed) is what makes migrations-bis-ci due.
+  # Holds NO secret and no DB URL: nothing but git (main's history, fetched as
+  # ci-docs-only.sh fetches it), node's built-ins (no install) and, on ONE
+  # step, the job's own token, which may only READ contents, deployments and
+  # actions. Its own part, not a step of migrations-bis-ci, because that job
+  # holds the CI project's DB URL on a later step. It needs nothing and runs
+  # beside the shards, about 12 seconds of work against their several
+  # minutes, so it makes no push slower. Its `added` output (the files the
+  # branch ADDS, written only when the plan passed) is what makes
+  # migrations-bis-ci due.
+  #
+  # No second click for unchanged migrations (2026-11-15, plan PR 6): on a
+  # branch that adds migrations, the evidence step asks the REST API for this
+  # branch's newest production-migrations deployment and git whether HEAD
+  # holds byte-identical migrations AND pipeline (.github, parity/, bootstrap/,
+  # config.toml, @bis/db's migration code: migrations-pipeline.mjs, the same
+  # list migrations-plan.mjs refuses beside a migration) to the commit that
+  # production run succeeded on. If so, `prod_evidence` names that commit and
+  # migrations-production is not due: production already holds these files,
+  # and the approval would only have re-run a no-op. Anything less (no run, a
+  # failure, a changed byte, a force-push, an unreadable answer) leaves it
+  # empty, with a notice saying why, and the click is asked as before.
+  # .github/scripts/migrations-prod-evidence.mjs.
   migrations-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+      actions: read
     outputs:
       added: ${{ steps.plan.outputs.added }}
+      prod_evidence: ${{ steps.evidence.outputs.prod_evidence }}
     steps:
+      # No token left in .git/config for later steps: the repository is public,
+      # so the fetches of main and of this branch need none.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # It holds no Supabase value either; the guard proves that, as in every part.
       - name: Check that migrations-plan holds no cloud Supabase credential
@@ -428,6 +452,13 @@ jobs:
         id: plan
         if: steps.scope.outputs.docs_only != 'true'
         run: node .github/scripts/migrations-plan.mjs
+
+      - name: Look for production's earlier run on these exact migrations
+        id: evidence
+        if: steps.plan.outcome == 'success' && steps.plan.outputs.added != '' && github.ref != 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/migrations-prod-evidence.mjs
 
   # bis-ci receives a branch's migrations from CI (2026-11-13; docs/
   # superpowers/plans/2026-11-13-migration-pipeline.md, D2 and PR 4), never
@@ -523,9 +554,15 @@ jobs:
   #
   # The e2e gate reads it as due (PRODUCTION_DUE), so a migration PR cannot
   # merge, and so cannot deploy, until production holds its migrations.
+  #
+  # Not due, and no click asked, when migrations-plan found prod_evidence
+  # (2026-11-15, plan PR 6): an earlier successful run of THIS job, on an
+  # ancestor of this commit with byte-identical migrations and pipeline, already
+  # gave production these files. The click is asked only for files production
+  # has not received through this pipeline.
   migrations-production:
     needs: [migrations-plan, migrations-bis-ci]
-    if: ${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '' && needs.migrations-plan.result == 'success' && needs.migrations-bis-ci.result == 'success' }}
+    if: ${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '' && needs.migrations-plan.outputs.prod_evidence == '' && needs.migrations-plan.result == 'success' && needs.migrations-bis-ci.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production-migrations
@@ -804,7 +841,10 @@ jobs:
   # migration (a skip there means verify or a shard failed), and must be
   # SKIPPED otherwise (ci-gate.sh). migrations-production the same way, by
   # PRODUCTION_DUE (2026-11-13, PR 5): a branch that adds a migration is green
-  # only once production holds it, and production is never due on main.
+  # only once production holds it, and production is never due on main. Since
+  # 2026-11-15 (PR 6) it is not due either when migrations-plan's
+  # prod_evidence names an earlier successful production run on byte-identical
+  # migrations, so the gate then requires the job SKIPPED, as it is.
   e2e:
     needs: [e2e-shard, migrations-plan, migrations-bis-ci, migrations-production]
     if: always()
@@ -819,7 +859,7 @@ jobs:
           MIGRATIONS_BIS_CI: ${{ needs.migrations-bis-ci.result }}
           MIGRATIONS_PRODUCTION: ${{ needs.migrations-production.result }}
           BIS_CI_DUE: ${{ (github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != '') && 'due' || '' }}
-          PRODUCTION_DUE: ${{ (github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '') && 'due' || '' }}
+          PRODUCTION_DUE: ${{ (github.ref != 'refs/heads/main' && needs.migrations-plan.outputs.added != '' && needs.migrations-plan.outputs.prod_evidence == '') && 'due' || '' }}
         run: bash .github/scripts/ci-gate.sh E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE MIGRATIONS_PRODUCTION@PRODUCTION_DUE
 
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
