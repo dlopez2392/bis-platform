@@ -584,12 +584,17 @@ describe("migrations-apply.sh --parity compares production with bis-ci (D4)", ()
     expect(r.log.filter((l) => l.includes("from items"))).toHaveLength(0);
   });
 
-  it("an open PR adding the same SLUG at another version does not vouch for the row: the whole stem must match (mutation: match by slug → FAILS)", () => {
+  it.each([
+    ["the same SLUG at another version", "20261116000000_other_branch"],
+    ["a PREFIX of the row's stem (same version)", "20261115000000_other"],
+    ["the same VERSION with another slug", "20261115000000_unrelated"],
+  ])("an open PR adding %s does not vouch for the row: the whole stem must match (mutation: match by slug, by version, or by prefix → FAILS)", (_l, listed) => {
     setup();
     const b = bisci() + rows(otherRow());
-    const r = parity(prod(), b, fp(...BASE), fp(...BASE), {}, "20261116000000_other_branch 412\n");
+    const r = parity(prod(), b, fp(...BASE), fp(...BASE), {}, `${listed} 412\n`);
     expect(r.status, r.output).toBe(1);
     expect(r.output).toContain(`::error::Parity: bis-ci holds ${OTHER} that no open pull request adds`);
+    expect(r.output).toContain(`${OTHER} (bis-ci only; orphan: no open PR adds it)`);
   });
 
   it("with an in-flight row AND an orphan, fails naming only the orphan as one; the in-flight row is listed with its PR", () => {

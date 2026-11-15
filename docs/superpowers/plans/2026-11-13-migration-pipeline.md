@@ -300,11 +300,24 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
   A job that names an environment GitHub does not have CREATES it with no protection rules: until section 3 is done,
   such a run starts with no click and no secret, and the runner refuses ("PROD_MIGRATIONS_DB_URL is not set").
 
-**PR 6 — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
+**PR 6a — No second click for unchanged migrations** (HIGH, ~250). `migrations-plan` reads successful
 `production-migrations` deployments of this branch (A6) and passes `prod_evidence` when one was on a commit
 whose migrations directory is byte-identical to HEAD's; missing or ambiguous evidence asks for the click.
 - Tests: fake `gh` + scratch repo: identical directory → evidence; one byte changed → none; force-pushed-away
   commit → none. Probe: compare the file list instead of the bytes → the "one byte" case fails.
+
+**PR 6b — Parity fails on a bis-ci orphan** (HIGH, ~620; built 2026-11-15, #373). Replaces D4's "older than every
+open PR" heuristic with an exact rule: a bis-ci-only row is in flight only when an OPEN PR into main from this
+repository (drafts count, forks never) ADDS that exact file, by its whole stem; otherwise it is an orphan and parity
+FAILS, naming it. `migrations-open-pr-stems.mjs` reads the list with the job's `pull-requests: read` token on a step
+of its own BEFORE the secret step (the image's node, no setup-node), writing `<stem> <pr>` lines whole or not at
+all; any page it cannot read, or a PR at GitHub's 3000-file cap, fails the job. `--parity` refuses to run without
+a readable list. In-flight rows keep the "not judged" notice, now naming their PRs. The error's advice is list
+first, then revert: a reverting migration never removes the orphan's history row, and `parity/` is pipeline (Q6),
+so a PR of its own lists the stem as `history | <stem> | reason`, then another PR reverts any schema it left.
+- Tests: the script against a fake API on loopback (paging, forks, status, the cap, errors on any page); the
+  runner on fake psql (in flight, orphan, exact stem vs slug/version/prefix, a listed orphan judged, the list
+  missing); workflow pins (permission, step order, the token off the secret step).
 
 Acceptance after PR 5: two PRs, each with one migration, both ready and approved the same day, both merged
 the same day; read each merge's head-SHA check runs, then production's history (pair + digest) and parity.

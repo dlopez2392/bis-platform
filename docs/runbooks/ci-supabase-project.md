@@ -217,7 +217,10 @@ bis-ci's pairs). Then:
   list, and a list it cannot read fails the job (Re-run failed jobs).
   - **In flight** (an open PR adds that exact file, by its whole stem): the
     schema is NOT judged; a notice names each migration with its PR number,
-    and the next apply whose histories match judges it.
+    and the next apply whose histories match judges it. The list is read
+    just before the apply, so a PR closed between that read and parity
+    still counts as in flight for that one run ("not judged"); the next
+    production apply sees it as an orphan.
   - **Orphan** (no open PR adds it: a PR closed unmerged after its bis-ci
     apply): parity FAILS, "bis-ci holds <stem> that no open pull request
     adds (closed unmerged?)". Until 2026-11-15 this passed with the notice
@@ -236,6 +239,10 @@ bis-ci's pairs). Then:
     names ONE row by the EXACT stem parity prints (version_slug, e.g.
     `20261115000000_other_branch`), never by slug or prefix: a slug-only
     line would hide a production drift row with that slug at any version.
+  - GitHub may report a new migration as `renamed` (not `added`) when the
+    same PR deletes a similar `.sql` file elsewhere; its bis-ci row then
+    reads as an orphan (red, never a silent pass), and Re-run will not fix
+    it: do not pair such a deletion with a new migration in one PR.
 - **A file applied to production by hand** (the MCP fallback, section 6: a
   whole-stem row with no runner digest) is accepted only when bis-ci's
   recorded copy equals the file AND parity is judged and passes; a notice

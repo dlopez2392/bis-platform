@@ -174,6 +174,27 @@ describe("migrations-open-pr-stems.mjs: the migrations open pull requests add (m
     expect(r.stems).toBeNull();
   });
 
+  // A failure on a LATER page is as unreadable as one on page 1: never the
+  // end of the list (review of #373: two probes survived without these).
+  it("fails closed, writing no list, when page 2 of the open PRs answers 500 (mutation: a non-OK page ≥2 ends the list → FAILS)", async () => {
+    const many = Array.from({ length: 101 }, (_, i) => pr(1000 + i));
+    serve(many, { 1100: [added("20261115000000_on_page_two")] });
+    routes[pullsUrl(2)] = [500, "{}"];
+    const r = await run();
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::The API answered 500 for open pull requests \(page 2\)/);
+    expect(r.stems).toBeNull();
+  });
+
+  it("fails closed, writing no list, when page 2 of a PR's files answers 500 (mutation: a non-OK page ≥2 ends the list → FAILS)", async () => {
+    serve([pr(3)], { 3: [...Array.from({ length: 100 }, (_, i) => other(i)), added("20261115000000_on_page_two")] });
+    routes[filesUrl(3, 2)] = [500, "{}"];
+    const r = await run();
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::The API answered 500 for PR #3's files \(page 2\)/);
+    expect(r.stems).toBeNull();
+  });
+
   it("fails closed when the API cannot be reached at all", async () => {
     const r = await run({ GITHUB_API_URL: "http://127.0.0.1:1" });
     expect(r.status, r.output).toBe(1);
