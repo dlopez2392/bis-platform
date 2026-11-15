@@ -293,9 +293,14 @@ done
 #  2. The histories are compared NORMALISED: each row becomes the file stem it
 #     covers by D1's rule (production's slug-only and stem rows equal bis-ci's
 #     pairs); a row covering no file in the tree keeps its stem-form name, or
-#     version_name; a `history` line in the allowed list drops a row. If they
-#     differ (another PR is between bis-ci and production), the schema is NOT
-#     judged: a notice names each migration, and the next apply whose
+#     version_name; a `history` line in the allowed list drops a row. A row
+#     on production alone is drift: FAIL. A row on bis-ci alone is IN FLIGHT
+#     when an open PR into main, from this repository, adds that exact file
+#     (the list BIS_MIGRATIONS_OPEN_PR_STEMS names, `<stem> <pr>` lines,
+#     written by migrations-open-pr-stems.mjs; parity refuses to run without
+#     it), else an ORPHAN (a PR closed unmerged after its bis-ci apply): any
+#     orphan FAILS (PR 6b, 2026-11-15). Only in-flight rows: the schema is NOT
+#     judged, a notice names each with its PR(s), and the next apply whose
 #     histories match judges it.
 #  3. If equal: fingerprint-detail.sql on both sides, each in ONE read-only
 #     transaction sent as one command, its final select rewritten to hash each
@@ -350,6 +355,25 @@ run_parity() {
     elif [ "$key" = "*" ]; then ALLOW_KIND["$kind"]=1
     else ALLOW_KEY["$kind$SEP$key"]=1; fi
   done < "$allowed"
+  # The migrations open PRs add: without the list an orphan cannot be told
+  # from an in-flight row, so parity refuses rather than guess either way.
+  declare -gA OPEN_PR=()
+  local stems="${BIS_MIGRATIONS_OPEN_PR_STEMS:-}"
+  if [ -z "$stems" ]; then
+    refuse "BIS_MIGRATIONS_OPEN_PR_STEMS is not set: parity needs the list of migrations open pull requests add (.github/scripts/migrations-open-pr-stems.mjs, the step before this one in migrations-production) to tell an in-flight bis-ci row from an orphan. Nothing was compared."
+  elif [ ! -f "$stems" ] || [ ! -r "$stems" ]; then
+    refuse "BIS_MIGRATIONS_OPEN_PR_STEMS names no readable file, so an in-flight bis-ci row cannot be told from an orphan. Nothing was compared."
+  else
+    n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      n=$((n + 1)); line="${line%$'\r'}"
+      if [[ "$line" =~ ^([0-9]{14}_[a-z][a-z0-9_]*)\ ([1-9][0-9]*)$ ]]; then
+        OPEN_PR["${BASH_REMATCH[1]}"]+="${OPEN_PR[${BASH_REMATCH[1]}]:+, }#${BASH_REMATCH[2]}"
+      else
+        refuse "line $n of the open-PR list (BIS_MIGRATIONS_OPEN_PR_STEMS) is not '<stem> <pr-number>'. Nothing was compared."
+      fi
+    done < "$stems"
+  fi
   body="$(cat "$detail" 2>/dev/null)"
   body="${body%"${body##*[![:space:]]}"}"
   if [ -z "$body" ] || [[ "$body" != *"$final" ]]; then
@@ -389,19 +413,33 @@ run_parity() {
     done <<< "$drift"
     rm -rf "$work_p"; return 1
   fi
-  # bis-ci alone holding a migration is another PR between the two projects
-  # (or one closed unmerged): the schema is not judged.
-  if ! cmp -s "$work_p/t.hist" "$work_p/b.hist"; then
+  # bis-ci alone holding a migration: IN FLIGHT when an open PR adds that
+  # exact stem (another PR between the two projects; the schema is not
+  # judged), else an ORPHAN, which FAILS (PR 6b): left alone it would stop
+  # parity on every later apply.
+  local only
+  only="$(LC_ALL=C comm -13 "$work_p/t.hist" "$work_p/b.hist")"
+  if [ -n "$only" ]; then
     rm -rf "$work_p"
-    if [ "${#by_hand[@]}" -gt 0 ]; then
-      for name in "${by_hand[@]}"; do
-        echo "::error::$name was applied to production by hand, and parity could not be judged (bis-ci holds migrations production does not), so nothing vouches for its content there. Resolve the bis-ci-only rows below, then Re-run failed jobs."
-      done
-      LC_ALL=C comm -13 <(LC_ALL=C sort -u <(normalised_history T production)) <(LC_ALL=C sort -u <(normalised_history B bis-ci)) | sed 's/$/ (bis-ci only)/; s/^/  - /'
-      return 1
-    fi
-    LC_ALL=C comm -13 <(LC_ALL=C sort -u <(normalised_history T production)) <(LC_ALL=C sort -u <(normalised_history B bis-ci)) | sed 's/$/ (bis-ci only)/; s/^/  - /'
-    echo "::notice::Parity not judged: bis-ci holds the migrations listed above that production does not (another PR between the two, or one closed unmerged). This repeats on every apply until each row above is listed in $allowed (\`history | <stem> | reason\`) or its migration reaches production. The newly applied files are recorded with the same content on both."
+    local -a orphans=()
+    while IFS= read -r line; do
+      if [ -n "${OPEN_PR[$line]:-}" ]; then
+        echo "  - $line (bis-ci only; added by open PR ${OPEN_PR[$line]})"
+      else
+        echo "  - $line (bis-ci only; orphan: no open PR adds it)"
+        orphans+=("$line")
+      fi
+    done <<< "$only"
+    for name in "${by_hand[@]}"; do
+      echo "::error::$name was applied to production by hand, and parity could not be judged (bis-ci holds migrations production does not), so nothing vouches for its content there. Resolve the bis-ci-only rows above, then Re-run failed jobs."
+    done
+    for line in "${orphans[@]}"; do
+      # A reverting migration adds a row and never removes this one, and
+      # parity/ is the pipeline's (no PR changes it beside a migration).
+      echo "::error::Parity: bis-ci holds $line that no open pull request adds (closed unmerged?). Until it is listed in $allowed as \`history | $line | reason\` (a PR of its own: that file is the pipeline's), parity cannot be judged; then, if it left schema on bis-ci, remove it with a reverting migration in another PR (runbook section 5). If a PR adding it was reopened or opened during this run: Re-run failed jobs."
+    done
+    [ "${#by_hand[@]}" -eq 0 ] && [ "${#orphans[@]}" -eq 0 ] || return 1
+    echo "::notice::Parity not judged: bis-ci holds the migrations listed above that production does not, each added by an open pull request. This repeats on every apply until each migration above reaches production; if its PR closes unmerged, parity fails on it. The newly applied files are recorded with the same content on both."
     return 0
   fi
 

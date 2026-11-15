@@ -209,15 +209,33 @@ bis-ci's pairs). Then:
   hand change on production. Investigate with `fingerprint-detail.sql` on both;
   a known, reasoned row goes in `allowed-differences.txt` as
   `history | <stem> | reason`.
-- **A row on bis-ci alone** (another PR between the two projects) means the
-  schema is NOT judged: a notice names each migration. **This repeats on EVERY
-  apply until the row is resolved**, so a PR closed unmerged after its
-  bis-ci apply silently stops parity for good: list its stem in
-  `allowed-differences.txt` (`history | <stem> | reason`, ideally beside the
-  reverting migration) or let the migration reach production. A `history`
-  line names ONE row by the EXACT stem parity prints (version_slug, e.g.
-  `20261115000000_other_branch`), never by slug or prefix: a slug-only line
-  would hide a production drift row with that slug at any version.
+- **A row on bis-ci alone** is told apart by the open pull requests (PR 6b,
+  2026-11-15). Before the secret step, `migrations-production` lists the
+  migrations every OPEN PR into main from this repository ADDS
+  (`.github/scripts/migrations-open-pr-stems.mjs`, the job's read-only
+  token; drafts count, forks never do); parity refuses to run without that
+  list, and a list it cannot read fails the job (Re-run failed jobs).
+  - **In flight** (an open PR adds that exact file, by its whole stem): the
+    schema is NOT judged; a notice names each migration with its PR number,
+    and the next apply whose histories match judges it.
+  - **Orphan** (no open PR adds it: a PR closed unmerged after its bis-ci
+    apply): parity FAILS, "bis-ci holds <stem> that no open pull request
+    adds (closed unmerged?)". Until 2026-11-15 this passed with the notice
+    and silently stopped parity on every later apply, and while it stands
+    EVERY migration PR's production run fails. A reverting migration does
+    not remove the orphan's history row, and `parity/` is the pipeline's (a
+    PR may not change it beside a migration), so the order is: (1) a PR of
+    its own listing the stem in `allowed-differences.txt` (`history | <stem>
+    | reason`); (2) if the orphan left schema on bis-ci, a reverting
+    migration in another PR (`if exists` throughout, so it is a no-op where
+    the original never landed), whose own parity then judges the two
+    schemas; until it lands, other migration PRs' parity is judged and
+    fails on the orphan's objects. Then Re-run failed jobs on any PR it
+    blocked. A PR reopened, or one adding the file opened during the run,
+    makes the row in flight again: Re-run failed jobs. A `history` line
+    names ONE row by the EXACT stem parity prints (version_slug, e.g.
+    `20261115000000_other_branch`), never by slug or prefix: a slug-only
+    line would hide a production drift row with that slug at any version.
 - **A file applied to production by hand** (the MCP fallback, section 6: a
   whole-stem row with no runner digest) is accepted only when bis-ci's
   recorded copy equals the file AND parity is judged and passes; a notice
@@ -307,6 +325,9 @@ CI first, then production.
    migration never runs it. Failures:
    - `PROD_MIGRATIONS_DB_URL is not set`: the environment or its secret is
      missing (owner's checklist). Nothing was read or applied.
+   - the open pull requests' migrations could not be listed (the step
+     before the secret step, PR 6b): nothing was read or applied. Re-run
+     failed jobs (a new click).
    - an apply fails: production keeps the files before it; this file left
      neither schema nor row. A SQL error here, after bis-ci took the same
      file, means DRIFT: run `fingerprint-detail.sql` on both, fix by a new
@@ -332,7 +353,8 @@ CI first, then production.
    CLI's form (`0001`, `tenancy`).
 6. Parity (section 5): CI's `--parity` in the same step. A failure names
    each differing kind and key; the merge is blocked until a new migration
-   fixes it or `allowed-differences.txt` gains a reasoned line.
+   fixes it or `allowed-differences.txt` gains a reasoned line. An orphan on
+   bis-ci (a migration no open PR adds) fails it too, naming the stem.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
