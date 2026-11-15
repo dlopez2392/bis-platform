@@ -4,7 +4,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { serviceDb, createContact } from "@bis/db";
 import { m } from "../src/lib/messages";
 import { formatPhone } from "../src/lib/document-requests/customer-state";
-import { recordPage, e2eAuthor } from "./support";
+import { recordPage, e2eAuthor, untilHydrated } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -39,7 +39,13 @@ loadEnv({ path: ".env.local" });
  * each is its OWN `[data-timeline-item="change"]` entry, newest first, each carrying exactly one
  * `[data-change-field="phone"]` line (never several folded into one row's disclosure).
  */
-test.describe.configure({ timeout: 60_000 });
+//
+// QUARANTINED (2026-11-15): one retry. One CI sighting (run 43444905708, shard 3, 2026-11-13): "Put back" showed
+// no toast within 10 s. The likely cause is a click before hydration (the wait on `untilHydrated` below is the
+// fix for it), but it was NOT reproduced (15 local edit/reload/click rounds, the button was hydrated every
+// time), so this is a hypothesis; the retry stays until a sighting-free month says the wait did it. This file is
+// one test with its own beforeAll/afterAll, so a retry makes a fresh contact and shares nothing with the failed try.
+test.describe.configure({ timeout: 60_000, retries: 1 });
 
 const FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 function fixture(): { accountId: string } {
@@ -140,7 +146,14 @@ test("a changed phone shows Was/Now on the timeline, Put back reverts it, and Un
   // Step 4: Put back, on the edit row's own (only) field line. The button's accessible name is
   // "Put back {field}" (`history.putBack.aria`, design D2 — a folded group can show several "Put
   // back" buttons, so each needs its OWN name), not the visible "Put back" text alone.
-  await editField.getByRole("button", { name: m["history.putBack.aria"].replace("{field}", m["history.label.phone"]), exact: true }).click();
+  //
+  // The click waits for hydration first. CI run 43444905708 (shard 3, 2026-11-13) failed on the toast below with
+  // no error toast and no refusal on screen: the button is server-rendered and clickable straight after the
+  // reload above, and a click before React attaches its onClick does nothing at all, so nothing ever produced
+  // a toast. The reload-to-click gap here is a handful of fast assertions, shorter than a loaded runner's hydration.
+  const putBackButton = editField.getByRole("button", { name: m["history.putBack.aria"].replace("{field}", m["history.label.phone"]), exact: true });
+  await untilHydrated(putBackButton);
+  await putBackButton.click();
   const putBackToast = toastWith(page, m["history.putBack.done"].replace("{field}", m["history.label.phone"]));
   await expect(putBackToast).toBeVisible();
   await expect.poll(readPhone).toBe(PHONE_BEFORE);
