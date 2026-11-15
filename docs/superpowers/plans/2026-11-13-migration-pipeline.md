@@ -204,6 +204,8 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
   approve unless "prevent self-review" is on; a re-run asks again; a newer run's cancel cancels a waiting job;
   secrets are released only after approval. Verify in PR 5 with a no-op job before the secret exists.
 - A6 an environment job creates a deployment carrying `sha` and `ref`, listable with `deployments: read` (PR 6).
+  CONFIRMED 2026-11-15 (read-only, #371's branch): one per job attempt, created at `waiting`; statuses newest
+  first, each `log_url` the job's URL; `?ref=<branch>` filters.
 - A7 runner psql is 15+, and `\set var \`cat file\`` reads the file whole, dropping one trailing newline.
 - A8 `GITHUB_TOKEN` with `pull-requests: read` lists the PRs of a commit.
 - A9 `queue: max` concurrency (already used by `screenshots.yml:39`) keeps every waiting bis-ci apply.
@@ -299,6 +301,16 @@ orchestrator no longer applies by MCP; the MCP path stays the documented fallbac
 whose migrations directory is byte-identical to HEAD's; missing or ambiguous evidence asks for the click.
 - Tests: fake `gh` + scratch repo: identical directory → evidence; one byte changed → none; force-pushed-away
   commit → none. Probe: compare the file list instead of the bytes → the "one byte" case fails.
+- Built (PR 6a, 2026-11-15): `.github/scripts/migrations-prod-evidence.mjs`, a step of `migrations-plan` (only
+  when the plan passed with added files, never on main; the job's token reads contents, deployments and actions
+  only). The NEWEST deployment of the branch decides (A6 confirmed on #371: one per job attempt, waiting ones
+  included, so a later failed or cancelled attempt outranks an earlier success); its newest status must be
+  `success`, the job its log URL names must be a successful `migrations-production` on that sha and branch, of a
+  run whose `path` is ci.yml; that sha must be an ancestor of HEAD with identical tree ids for the migrations
+  directory AND `.github`. Anything else, an unreadable answer included, asks (exit 0, a notice saying why); a
+  missing env variable is the step's own misconfiguration and fails it. A fake REST API on loopback replaced the
+  fake `gh`. A6's unverified half: if GitHub marks an older success `inactive` once another branch deploys to the
+  environment, that branch's next push asks again (the safe side).
 
 Acceptance after PR 5: two PRs, each with one migration, both ready and approved the same day, both merged
 the same day; read each merge's head-SHA check runs, then production's history (pair + digest) and parity.

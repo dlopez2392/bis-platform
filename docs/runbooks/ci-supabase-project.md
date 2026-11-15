@@ -313,8 +313,13 @@ CI first, then production.
      migration. A `lock_timeout` (55P03) is transient: Re-run failed jobs (a
      new click) when traffic is quiet.
    - parity fails: step 6.
-   - a later push to the same branch asks for the click again (the runner
-     applies nothing new; until the pipeline's PR 6).
+   - a later push to the same branch does NOT ask again (since 2026-11-15,
+     the pipeline's PR 6) when its migrations and `.github` are byte-identical
+     to an ancestor commit where this job succeeded: `migrations-plan`'s
+     notice names that run, and `migrations-production` is skipped. It asks
+     again when a migration or `.github` changed, the branch was rebased or
+     force-pushed past that commit, the newest attempt failed or was
+     cancelled, or the API could not be read; that notice says which.
    **Fallback, only when CI cannot run:** the MCP procedure (for an OPEN PR:
    afterwards Re-run failed jobs; the runner skips the file as applied, and
    parity accepts the hand-applied row only when bis-ci holds the same bytes

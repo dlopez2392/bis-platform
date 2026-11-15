@@ -70,7 +70,12 @@
   and `ops-health.yml` keep their `production` environment secrets (main
   only). The required `e2e` check is pending while that job waits for the
   click, and red on a rejection, a timeout or a failure, so a migration PR
-  cannot merge, and the app never deploys ahead of its schema. A missing
+  cannot merge, and the app never deploys ahead of its schema. The click is
+  asked ONCE per set of migration files (since 2026-11-15, pipeline PR 6): a
+  later push whose migrations and `.github` are byte-identical to an
+  ancestor commit where that job succeeded skips it (`migrations-plan`'s
+  `prod_evidence`, with a notice naming the earlier run); anything less asks
+  again. A missing
   environment or secret fails that job closed, naming it. After the MCP
   FALLBACK (below) an open PR can still merge: its next run accepts the
   hand-applied row (whole stem, no digest) only when bis-ci holds the file
