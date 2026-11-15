@@ -243,7 +243,7 @@ screen and a real freeBusy run before production holds anything. Agents never ca
   checked against Google" line in the booking alert; a cron token-health check; the agency's cross-account
   column (F-148); Google's verification (decision 34).
 
-## 8. Owner questions (each with a recommendation)
+## 8. Owner questions — ANSWERED 2026-11-15 (danlo, tiles): Q1 (a), Q2 yes, Q3 as recommended; Q4, Q5 yes
 
 - **Q1. Fail mode.** When Google is slow, down or the connection has expired: (a) offer slots as today, or
   (b) withhold all slots. **Recommend (a)**: (b) stops every booking during any Google hiccup and every 7
