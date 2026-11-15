@@ -137,7 +137,7 @@ export {
 } from "./calendar-feeds";
 export {
   GOOGLE_CHECKED_STAMP_MINUTES, getGoogleConnectionStatus, readGoogleConnectionSealed, upsertGoogleConnection,
-  markGoogleNeedsReconnect, stampGoogleChecked, deleteGoogleConnection,
+  markGoogleNeedsReconnect, stampGoogleChecked, deleteGoogleConnection, setGoogleReconnectTask,
   type GoogleConnectionState, type GoogleConnectionRef, type GoogleConnectionStatus, type GoogleConnectionSealed,
   type GoogleSealResult, type GoogleConnectionWrite,
 } from "./google-calendar";

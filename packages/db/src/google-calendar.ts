@@ -125,6 +125,23 @@ export async function markGoogleNeedsReconnect(db: SupabaseClient, id: string, v
 }
 
 /**
+ * Keep the reconnect To-do on the connection the mark was made on (D12, PR 4): a compare-and-set, written only
+ * while the row is still that version, still needs reconnecting and holds no To-do yet, so a second failure keeps
+ * none. The To-do must be this connection's ACCOUNT's: the table has no composite key tying the two, so its
+ * account is read first (a task never changes account) and the write is bound to it. True when written.
+ */
+export async function setGoogleReconnectTask(db: SupabaseClient, id: string, version: number, taskId: string): Promise<boolean> {
+  const { data: task, error: readErr } = await db.from("tasks").select("account_id").eq("id", taskId).maybeSingle();
+  if (readErr) throw new Error(`setGoogleReconnectTask failed reading the To-do: ${readErr.message}`);
+  if (!task) return false;
+  const { data, error } = await db.from(TABLE).update({ reconnect_task_id: taskId })
+    .eq("id", id).eq("version", version).eq("status", "needs_reconnect").is("reconnect_task_id", null)
+    .eq("account_id", (task as { account_id: string }).account_id).select("id");
+  if (error) throw new Error(`setGoogleReconnectTask failed: ${error.message}`);
+  return (data ?? []).length === 1;
+}
+
+/**
  * Record a successful Google read of `version`, unless one was recorded within GOOGLE_CHECKED_STAMP_MINUTES. Only
  * the version that was read and only while it is connected: a read that finishes after a reconnect or a
  * needs-reconnect mark says nothing about the row as it is now. True when written.

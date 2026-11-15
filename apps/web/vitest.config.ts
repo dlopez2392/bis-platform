@@ -54,8 +54,14 @@ export default defineConfig({
     // red); the tests that exercise the switch set it with `vi.stubEnv`.
     // CRON_FANOUT (F-196): a developer's ambient CRON_FANOUT=1 must not flip
     // route.test.ts onto the fan-out path; that test sets it with
-    // `vi.stubEnv` itself.
-    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "", CRON_FANOUT: "" },
+    // `vi.stubEnv` itself. GOOGLE_CALENDAR_CLIENT_ID (S-22 PR 4): a .env.local or
+    // shell holding the development client would wake the Google busy read in
+    // every booking and voice suite; blank keeps it dormant (D15), and the
+    // Google tests hand their own env object.
+    env: {
+      APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "", CRON_FANOUT: "",
+      GOOGLE_CALENDAR_CLIENT_ID: "",
+    },
   },
   resolve: {
     alias: {

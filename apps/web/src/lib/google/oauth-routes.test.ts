@@ -49,6 +49,7 @@ const db = vi.hoisted(() => ({
   emit: vi.fn(),
   emitAgencyEvent: vi.fn(),
   readGoogleConnectionSealed: vi.fn(),
+  completeTask: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -58,6 +59,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   upsertGoogleConnection: (...a: unknown[]) => db.upsertGoogleConnection(...a),
   emit: (...a: unknown[]) => db.emit(...a),
   emitAgencyEvent: (...a: unknown[]) => db.emitAgencyEvent(...a),
+  completeTask: (...a: unknown[]) => db.completeTask(...a),
 }));
 /** The billing pause (M7a): a client's switch ON is refused while paused; billingVerdictFor fails open itself. */
 const billing = vi.hoisted(() => ({ paused: false, calls: [] as string[] }));
@@ -101,6 +103,7 @@ beforeEach(() => {
   });
   db.emit.mockReset().mockResolvedValue(undefined);
   db.emitAgencyEvent.mockReset().mockResolvedValue(undefined);
+  db.completeTask.mockReset().mockResolvedValue(undefined);
   logs = [];
   for (const level of ["log", "info", "warn", "error", "debug"] as const) {
     vi.spyOn(console, level).mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(" ")); });
@@ -360,6 +363,34 @@ describe("a reconnect does not leave the replaced grant behind at Google", () =>
     const line = logs.find((l) => l.includes("replaced"));
     expect(line).toContain(A);
     expect(logs.join("\n")).not.toContain(OLD);
+  });
+});
+
+describe("a reconnect completes the reconnect To-do (PR 4, D12)", () => {
+  const TASK = "44444444-4444-4444-8444-444444444444";
+  const reconnectClearing = (taskId: string | null) =>
+    db.upsertGoogleConnection.mockReset().mockResolvedValue({ id: "33333333-3333-4333-8333-333333333333", version: 2, previousReconnectTaskId: taskId });
+
+  it("the To-do the write cleared is completed, scoped to THIS account, by the system (never naming which BIS person reconnected)", async () => {
+    reconnectClearing(TASK);
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    expect(db.completeTask.mock.calls).toEqual([[{ fake: "service" }, A, TASK, "google-calendar", "system"]]);
+  });
+
+  it("no To-do cleared, none completed", async () => {
+    reconnectClearing(null);
+    const { state, nonce } = await connect();
+    await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps());
+    expect(db.completeTask).not.toHaveBeenCalled();
+  });
+
+  it("a failed completion is logged and the connect stands", async () => {
+    reconnectClearing(TASK);
+    db.completeTask.mockRejectedValue(new Error("complete failed"));
+    const { state, nonce } = await connect();
+    expect(locationOf(await handleGoogleCallback(callbackReq({ code: CODE, state, scope: SCOPES }, nonce), deps()))).toContain("google=connected");
+    expect(logs.some((l) => l.includes(A) && l.includes("complete failed"))).toBe(true);
   });
 });
 
