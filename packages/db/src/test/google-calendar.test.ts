@@ -78,6 +78,27 @@ describe("upsertGoogleConnection", () => {
       expect((await getGoogleConnectionStatus(db, accountId))!.google_email).toBe("owner@example.com");
     }));
 
+  it("a needs-reconnect mark and its To-do that land while a reconnect is sealing are seen, not nulled blind: the To-do comes back as previousReconnectTaskId (probe: CAS on version only -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      const task = await newTask(db, accountId);
+      const seen: GoogleConnectionRef[] = [];
+      const racing = async (ref: GoogleConnectionRef) => {
+        seen.push(ref);
+        if (seen.length === 1) {
+          // markGoogleNeedsReconnect does not bump version, so only status and the To-do say the row changed.
+          expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+          const { error } = await db.from("google_calendar_connections").update({ reconnect_task_id: task }).eq("id", id);
+          if (error) throw error;
+        }
+        return fakeSeal(ref);
+      };
+      const r = await upsertGoogleConnection(db, write(accountId, { seal: racing }));
+      expect(r).toEqual({ id, version: 2, previousReconnectTaskId: task });
+      expect(seen.length).toBe(2);
+      expect(await getGoogleConnectionStatus(db, accountId)).toMatchObject({ status: "connected", reconnect_task_id: null });
+    }));
+
   it("two first connects at once end as one row, not a unique-constraint failure", () =>
     withTestAccount(async (db, accountId) => {
       let raced = false;
@@ -152,12 +173,29 @@ describe("stampGoogleChecked (at most every GOOGLE_CHECKED_STAMP_MINUTES)", () =
       expect(GOOGLE_CHECKED_STAMP_MINUTES).toBe(10);
       const { id } = await upsertGoogleConnection(db, write(accountId));
       const t0 = new Date(Date.UTC(2026, 10, 15, 9));
-      expect(await stampGoogleChecked(db, id, t0)).toBe(true);
-      expect(await stampGoogleChecked(db, id, new Date(t0.getTime() + 9 * 60_000))).toBe(false);
+      expect(await stampGoogleChecked(db, id, 1, t0)).toBe(true);
+      expect(await stampGoogleChecked(db, id, 1, new Date(t0.getTime() + 9 * 60_000))).toBe(false);
       expect(Date.parse((await getGoogleConnectionStatus(db, accountId))!.last_checked_at!)).toBe(t0.getTime());
       const t1 = new Date(t0.getTime() + 10 * 60_000);
-      expect(await stampGoogleChecked(db, id, t1)).toBe(true);
+      expect(await stampGoogleChecked(db, id, 1, t1)).toBe(true);
       expect(Date.parse((await getGoogleConnectionStatus(db, accountId))!.last_checked_at!)).toBe(t1.getTime());
+    }));
+
+  it("a read of a stale version stamps nothing: a reconnect that landed meanwhile is not shown as checked (probe: drop the version predicate -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      await upsertGoogleConnection(db, write(accountId));
+      expect(await stampGoogleChecked(db, id, 1)).toBe(false);
+      expect((await getGoogleConnectionStatus(db, accountId))!.last_checked_at).toBeNull();
+      expect(await stampGoogleChecked(db, id, 2)).toBe(true);
+    }));
+
+  it("a connection marked needs_reconnect is not stamped checked (probe: drop the status predicate -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      expect(await stampGoogleChecked(db, id, 1)).toBe(false);
+      expect((await getGoogleConnectionStatus(db, accountId))!.last_checked_at).toBeNull();
     }));
 });
 

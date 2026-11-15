@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { googleTokenKey, googleTokenKeys, sealGoogleToken, openGoogleToken } from "./token-seal";
 
 /**
@@ -31,11 +31,16 @@ describe("sealGoogleToken / openGoogleToken", () => {
     expect(openGoogleToken(s.sealed, s.keyVersion, ROW, [A])).toBe(TOKEN);
   });
 
-  it("the longest token it seals (2048 characters) still fits the table's 4096; a longer one is refused", () => {
-    const s = sealGoogleToken("x".repeat(2048), ROW, A);
-    expect(s.sealed).toMatch(SQL_SHAPE);
-    expect(s.sealed.length).toBeLessThanOrEqual(4096);
-    expect(() => sealGoogleToken("x".repeat(2049), ROW, A)).toThrow();
+  it("the cap is 2048 BYTES, not characters: the largest token it seals fits the table's 4096, multi-byte or not (probe: cap on .length -> FAILS)", () => {
+    for (const t of ["x".repeat(2048), "é".repeat(1024), "😀".repeat(512)]) {
+      const s = sealGoogleToken(t, ROW, A);
+      expect(s.sealed).toMatch(SQL_SHAPE);
+      expect(s.sealed.length).toBeLessThanOrEqual(4096);
+    }
+    // 2049, 2050 and 2052 bytes in 2049, 1025 and 1026 UTF-16 characters.
+    for (const t of ["x".repeat(2049), "é".repeat(1025), "😀".repeat(513)]) {
+      expect(() => sealGoogleToken(t, ROW, A)).toThrow();
+    }
   });
 
   it("two seals of one token differ (a fresh IV each time)", () => {
@@ -140,6 +145,39 @@ describe("googleTokenKeys (GOOGLE_CALENDAR_TOKEN_KEY, GOOGLE_CALENDAR_TOKEN_KEY_
 
   it("the same fixture key is accepted outside production (CI and local runs may use one)", () => {
     expect(googleTokenKeys({ VERCEL_ENV: "preview", GOOGLE_CALENDAR_TOKEN_KEY: FIXTURE_KEY }).current).not.toBeNull();
+  });
+
+  it("two DIFFERENT keys whose ids clash: one line naming both variables (never a value) asks for a new key, and both still open", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Deterministic keys until two share an id (15 bits: a clash within a few hundred).
+    const byId = new Map<number, string>();
+    let pair: [string, string] | null = null;
+    for (let i = 0; !pair; i++) {
+      const v = createHash("sha256").update(`clash-${i}`).digest("base64url");
+      const id = googleTokenKey(v)!.id;
+      const prior = byId.get(id);
+      if (prior) pair = [prior, v]; else byId.set(id, v);
+    }
+    const [cur, prev] = pair;
+    const k = googleTokenKeys({ GOOGLE_CALENDAR_TOKEN_KEY: cur, GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS: prev });
+    expect(k.current!.id).toBe(k.previous!.id);
+    expect(err).toHaveBeenCalledTimes(1);
+    const line = String(err.mock.calls[0]![0]);
+    expect(line).toContain("GOOGLE_CALENDAR_TOKEN_KEY");
+    expect(line).toContain("GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS");
+    expect(line).toMatch(/new key/i);
+    expect(line).not.toContain(cur);
+    expect(line).not.toContain(prev);
+    const old = sealGoogleToken(TOKEN, ROW, k.previous!);
+    expect(openGoogleToken(old.sealed, old.keyVersion, ROW, [k.current, k.previous])).toBe(TOKEN);
+    const now = sealGoogleToken(TOKEN, ROW, k.current!);
+    expect(openGoogleToken(now.sealed, now.keyVersion, ROW, [k.current, k.previous])).toBe(TOKEN);
+  });
+
+  it("the SAME key in both slots is not a clash and says nothing", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    googleTokenKeys({ GOOGLE_CALENDAR_TOKEN_KEY: KEY_A, GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS: KEY_A });
+    expect(err).not.toHaveBeenCalled();
   });
 
   it("surrounding whitespace is trimmed, as a pasted value carries it", () => {

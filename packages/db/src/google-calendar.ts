@@ -77,10 +77,10 @@ export async function upsertGoogleConnection(
   db: SupabaseClient, w: GoogleConnectionWrite,
 ): Promise<{ id: string; version: number; previousReconnectTaskId: string | null }> {
   for (let attempt = 0; attempt < UPSERT_ATTEMPTS; attempt++) {
-    const { data: cur, error: readErr } = await db.from(TABLE).select("id, version, reconnect_task_id")
+    const { data: cur, error: readErr } = await db.from(TABLE).select("id, version, status, reconnect_task_id")
       .eq("account_id", w.accountId).maybeSingle();
     if (readErr) throw new Error(`upsertGoogleConnection failed reading: ${readErr.message}`);
-    const row = cur as { id: string; version: number; reconnect_task_id: string | null } | null;
+    const row = cur as { id: string; version: number; status: GoogleConnectionState; reconnect_task_id: string | null } | null;
     const ref: GoogleConnectionRef = row
       ? { accountId: w.accountId, id: row.id, version: row.version + 1 }
       : { accountId: w.accountId, id: randomUUID(), version: 1 };
@@ -98,8 +98,12 @@ export async function upsertGoogleConnection(
       if (error.code === "23505") continue; // another first connect won; reconnect over it
       throw new Error(`upsertGoogleConnection failed inserting: ${error.message}`);
     }
-    const { data: hit, error } = await db.from(TABLE).update(fields)
-      .eq("id", row.id).eq("version", row.version).select("id");
+    // The whole state read, not only version: a needs-reconnect mark and its To-do do not bump version, and
+    // nulling a To-do this write never saw would orphan it open.
+    const update = db.from(TABLE).update(fields).eq("id", row.id).eq("version", row.version).eq("status", row.status);
+    const { data: hit, error } = await (row.reconnect_task_id === null
+      ? update.is("reconnect_task_id", null)
+      : update.eq("reconnect_task_id", row.reconnect_task_id)).select("id");
     if (error) throw new Error(`upsertGoogleConnection failed updating: ${error.message}`);
     if ((hit ?? []).length === 1) return { id: row.id, version: ref.version, previousReconnectTaskId: row.reconnect_task_id };
   }
@@ -119,11 +123,16 @@ export async function markGoogleNeedsReconnect(db: SupabaseClient, id: string, v
   return (data ?? []).length === 1 ? "marked" : "unchanged";
 }
 
-/** Record a successful Google read, unless one was recorded within GOOGLE_CHECKED_STAMP_MINUTES. True when written. */
-export async function stampGoogleChecked(db: SupabaseClient, id: string, now: Date = new Date()): Promise<boolean> {
+/**
+ * Record a successful Google read of `version`, unless one was recorded within GOOGLE_CHECKED_STAMP_MINUTES. Only
+ * the version that was read and only while it is connected: a read that finishes after a reconnect or a
+ * needs-reconnect mark says nothing about the row as it is now. True when written.
+ */
+export async function stampGoogleChecked(db: SupabaseClient, id: string, version: number, now: Date = new Date()): Promise<boolean> {
   const cutoff = new Date(now.getTime() - GOOGLE_CHECKED_STAMP_MINUTES * 60_000).toISOString();
   const { data, error } = await db.from(TABLE).update({ last_checked_at: now.toISOString() })
-    .eq("id", id).or(`last_checked_at.is.null,last_checked_at.lte."${cutoff}"`).select("id");
+    .eq("id", id).eq("version", version).eq("status", "connected")
+    .or(`last_checked_at.is.null,last_checked_at.lte."${cutoff}"`).select("id");
   if (error) throw new Error(`stampGoogleChecked failed: ${error.message}`);
   return (data ?? []).length === 1;
 }

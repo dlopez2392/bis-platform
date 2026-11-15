@@ -22,7 +22,7 @@ import { readSecret } from "@/lib/fixture-secrets";
  *
  * KEYS. Each is at least 32 bytes of base64url (`openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, or
  * Node's `randomBytes(32).toString("base64url")`). A shorter or non-base64url value is refused in EVERY
- * environment (stricter than the plan's production-only rule: nothing should seal under a weak key), and in
+ * environment (plan D5: nothing should seal under a weak key), and in
  * production a value published in this repo (`fixture_only`, lib/fixture-secrets.ts) is refused too. A
  * refused key reads as no key, so the feature stays dormant; one log line names the variable, never the value.
  *
@@ -34,9 +34,9 @@ const FORMAT = "g1";
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const MIN_KEY_BYTES = 32;
-/** A cap on what is sealed, so the sealed value always fits the column's 4096 characters. */
-const MAX_TOKEN_CHARS = 2048;
-/** Longer than any value this module seals (MAX_TOKEN_CHARS sealed is ~2,780); a bound on work. */
+/** A cap on what is sealed, in UTF-8 BYTES (what is encrypted), so the sealed value always fits the column's 4096. */
+const MAX_TOKEN_BYTES = 2048;
+/** Longer than any value this module seals (MAX_TOKEN_BYTES sealed is ~2,780 characters); a bound on work. */
 const MAX_SEALED_CHARS = 4096;
 const SALT = "bis-google-calendar-token";
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
@@ -67,10 +67,14 @@ function readKey(name: string, env: NodeJS.ProcessEnv | Record<string, string | 
 export function googleTokenKeys(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): { current: GoogleTokenKey | null; previous: GoogleTokenKey | null } {
-  return {
-    current: readKey("GOOGLE_CALENDAR_TOKEN_KEY", env),
-    previous: readKey("GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS", env),
-  };
+  const current = readKey("GOOGLE_CALENDAR_TOKEN_KEY", env);
+  const previous = readKey("GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS", env);
+  // Two different keys with one id (1 in 32767): opening still works (each same-id key is tried), but key_version
+  // can no longer tell which rows a rotation has re-sealed. Ask for a new key; never print either value.
+  if (current && previous && current.id === previous.id && !current.enc.equals(previous.enc)) {
+    console.error("GOOGLE_CALENDAR_TOKEN_KEY and GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS are different keys with the same key id, so key_version cannot tell them apart; generate a new key for GOOGLE_CALENDAR_TOKEN_KEY");
+  }
+  return { current, previous };
 }
 
 function validRow(row: GoogleConnectionRef): boolean {
@@ -85,7 +89,7 @@ function aad(row: GoogleConnectionRef): Buffer {
 /** Seal a refresh token for exactly this row. Throws on an empty or oversized token or a malformed row. */
 export function sealGoogleToken(token: string, row: GoogleConnectionRef, key: GoogleTokenKey): GoogleSealResult {
   if (!token) throw new Error("sealGoogleToken: no token");
-  if (token.length > MAX_TOKEN_CHARS) throw new Error(`sealGoogleToken: token longer than ${MAX_TOKEN_CHARS} characters`);
+  if (Buffer.byteLength(token, "utf8") > MAX_TOKEN_BYTES) throw new Error(`sealGoogleToken: token longer than ${MAX_TOKEN_BYTES} bytes`);
   if (!validRow(row)) throw new Error("sealGoogleToken: the row is not a connection row");
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key.enc, iv);

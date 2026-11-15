@@ -45,11 +45,11 @@ or a Technician; one connection per account; disconnect, the same people. Q2.
 still deleted. No Undo: it would need the revoked token back, the "Change PIN" case of DESIGN.md rule 6
 (amended 2026-11-09). An `emit` event records who did it.
 **D5. Tokens.** The refresh token is sealed with AES-256-GCM under `GOOGLE_CALENDAR_TOKEN_KEY` (env, never the
-database), HKDF-derived as in `consent/token.ts`, with additional data `account_id|id|version` so a
-ciphertext copied onto another row does not open; `key_version` stored, one `_PREVIOUS` slot for rotation.
-Production refuses a key under 32 characters or a fixture value (`readSecret`): the feature stays dormant.
-Access tokens live in module memory only, keyed by connection and version, until `expires_in` minus 5 min
-(A12). Nothing logs a token; Google's error bodies are reduced to their `error` code.
+database), HKDF-derived as in `consent/token.ts`, with additional data `account_id|id|version` so a ciphertext
+copied onto another row does not open; `key_version` stored, one `_PREVIOUS` slot for rotation. A key under
+32 bytes of base64url (43 chars) is refused in every environment, a fixture value (`readSecret`) in production:
+the feature stays dormant. Access tokens live in module memory only, keyed by connection and version, until
+`expires_in` minus 5 min (A12). Nothing logs a token; Google's error bodies are reduced to their `error` code.
 **D6. The table is server-only** (0104's pattern). "The agency and that Owner see status only" is the
 server's job: `requireAccountAccess`, `canManage`, then `getGoogleConnectionStatus`, whose column list
 excludes the ciphertext. One accessor reads the ciphertext, called only from `lib/google/calendar-client.ts`
@@ -105,18 +105,18 @@ account's status on its card; a cross-account column waits for F-148's agency vi
 
 ## 2. Data (PR 1, one migration from `pnpm --filter @bis/db migration:new google_calendar_connections`)
 
-`public.google_calendar_connections`: `id uuid pk`; `account_id uuid not null unique` (one per account)
-`references accounts on delete cascade` (a token is not a lead); `version int not null default 1` (bumped on
-every connect); `google_email text not null`; `scope text not null`; `status text not null check (status in
-('connected','needs_reconnect'))`; `refresh_token_sealed text not null`; `key_version smallint not null`;
-`refresh_expires_at timestamptz` (Google's time-limited grant, V7); `connected_by uuid references users on
-delete set null` (not 0104's memberships FK: the agency may connect, D3); `connected_at`,
-`last_checked_at` (stamped at most every 10 min), `needs_reconnect_since timestamptz`; `reconnect_task_id
-uuid references tasks on delete set null`; pair checks (`needs_reconnect_since` set iff status is
-`needs_reconnect`). Grants: 0104's revoke-all-then-grant-back to service_role. `account-teardown.ts` lists
-the table. Accessors in `packages/db/src/google-calendar.ts`: `getGoogleConnectionStatus` (no ciphertext),
-`readGoogleConnectionSealed` (the one ciphertext reader), `upsertGoogleConnection` (version + 1),
-`markGoogleNeedsReconnect(id, version)` (CAS), `stampGoogleChecked`, `deleteGoogleConnection`.
+`public.google_calendar_connections`: one row per account (`account_id` unique, on delete cascade); `version`
+bumped on every connect; `google_email`, `scope`; `status` `connected` or `needs_reconnect`,
+`needs_reconnect_since` set iff the latter; `refresh_token_sealed` (sealed shape) and `key_version`;
+`refresh_expires_at` (V7); `connected_at`, `last_checked_at`; `connected_by` (users, D3) and `reconnect_task_id`
+(tasks), both set null. Grants: all revoked from PUBLIC, anon, authenticated, service_role; service_role gets
+SELECT, INSERT, DELETE, and UPDATE on every column but `id` and `account_id`. Teardown lists it. Accessors
+(`packages/db/src/google-calendar.ts`): `getGoogleConnectionStatus` (no ciphertext),
+`readGoogleConnectionSealed` (the one ciphertext reader), `upsertGoogleConnection` (version + 1; CAS on version,
+status and To-do), `markGoogleNeedsReconnect(id, version)`, `stampGoogleChecked(id, version)` (both CAS),
+`deleteGoogleConnection`; PR 4 adds `setGoogleReconnectTask(id, version, taskId)` (CAS: only while
+`reconnect_task_id` is null AND the task's `account_id` matches); whoever completes `previousReconnectTaskId`
+scopes by account.
 
 ## 3. UI and copy (PR 3; every string through `t()`, keys under `calendar.google.*`)
 
@@ -182,11 +182,11 @@ half only after PR 4 merges.
 **PR 1 (HIGH): table, accessors, sealing.** ~600 lines. Migration (section 2);
 `packages/db/src/google-calendar.ts` + barrel exports; `lib/google/token-seal.ts`. Ships inert.
 Tests: schema/grants matrix modelled on `calendar-feeds-schema.test.ts` (bis-db-schema's file, see Needs);
-accessor tests on bis-ci (CAS refuses a stale version; upsert bumps version; status read has no ciphertext
-field); seal round trip, wrong key, previous key, tampered tag, moved-row AAD, short or fixture key refused
-in production. Probes: `grant select ... to authenticated` fails the matrix; `select("*")` in the status
-read fails "no ciphertext"; dropping the AAD fails "moved row does not open"; dropping the CAS predicate
-fails "stale version is not marked".
+accessor tests on CI's verify-db local stack (CAS refuses a stale version; upsert bumps version; status read
+has no ciphertext field); seal round trip, wrong key, previous key, tampered tag, moved-row AAD, short or
+fixture key refused. Probes: `grant select ... to authenticated` fails the matrix; `select("*")` in the status
+read fails "no ciphertext"; dropping the AAD fails "moved row does not open"; dropping the CAS predicate fails
+"stale version is not marked".
 **PR 2 (HIGH): OAuth and the Google client.** ~550 lines. `lib/google/calendar-client.ts` (token exchange,
 refresh, freeBusy, revoke; `fetch` injected, never a real Google call in a test or script); routes
 `/api/google-calendar/connect`, `/callback`, and a disconnect server action. Tests: a state minted for user
