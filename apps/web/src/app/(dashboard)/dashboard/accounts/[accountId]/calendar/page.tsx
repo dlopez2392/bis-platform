@@ -28,6 +28,9 @@ import { JobDrawer, type JobDrawerView } from "./job-drawer";
 import { ClosedDaysCard, type ClosedDaysRangeView } from "./closed-days-card";
 import { EmbedSnippet } from "./embed-snippet";
 import { FeedCard } from "./feed-card";
+import { GoogleCardSkeleton } from "./google-card";
+import { GoogleCardSection } from "./google-card-section";
+import { parseGoogleOutcome } from "./google-card-data";
 import { loadFeedCardView } from "./feed-card-data";
 import { makeFeedLinkAction, replaceFeedLinkAction, turnOffFeedLinkAction, undoFeedLinkAction } from "./feed-actions";
 import { updateCalendarSettingsAction, keepAppointmentAction } from "./actions";
@@ -48,7 +51,7 @@ export default async function CalendarPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string; closedDay?: string; locale?: string; view?: string; day?: string; job?: string }>;
+  searchParams: Promise<{ from?: string; closedDay?: string; locale?: string; view?: string; day?: string; job?: string; google?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
@@ -57,7 +60,7 @@ export default async function CalendarPage({
   // card's own range opens already expanded.
   // F-046 part 1 (spec 5.1, 5.5): `view`, `day` and `job` drive the agenda and its drawer; a `job` that is not
   // a uuid is ignored, never read.
-  const { from, closedDay, locale: localeParam, view: viewParam, day: dayParam, job: jobParam } = await searchParams;
+  const { from, closedDay, locale: localeParam, view: viewParam, day: dayParam, job: jobParam, google: googleParam } = await searchParams;
   // Both audiences — calendar is the client's own business data, the same
   // class of surface `requireAccountAccess` already gates contacts with.
   // `canManage` (Task 7, staff and roles): the agency and a client Owner
@@ -324,6 +327,14 @@ export default async function CalendarPage({
               turnOff={turnOffFeedLinkAction.bind(null, accountId)}
               undo={undoFeedLinkAction.bind(null, accountId)}
             />
+            {/* S-22 slice 1 (plan D16): busy times on Google are not offered. Its own boundary: nothing here
+                holds the rest of the page, and it draws nothing when dormant or for Staff and Technician. */}
+            <Suspense fallback={<GoogleCardSkeleton />}>
+              <GoogleCardSection
+                accountId={accountId} isAgency={isAgency} canManage={canManage} origin={origin}
+                outcome={parseGoogleOutcome(googleParam)} locale={locale} pseudo={pseudo}
+              />
+            </Suspense>
           </div>
         </div>
       </div>
