@@ -26,6 +26,7 @@ import {
   ShieldAlert,
   Activity,
   CreditCard,
+  Mic,
   Receipt,
   type LucideIcon,
 } from "lucide-react";
@@ -123,6 +124,8 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   screened: ShieldAlert,
   // `CreditCard`: the screen is what clients are charged, not a report.
   plans: CreditCard,
+  // `Mic`: the screen is a live conversation with Sofía, not a phone line or a setting.
+  demo: Mic,
   // `Receipt`, not `CreditCard`: the client's page is what they were billed
   // and will be, not the agency's price list.
   billing: Receipt,

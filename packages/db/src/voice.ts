@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit, type ActorType } from "./events";
+import { emit, emitAgencyEvent, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { withTimelinePage, forContacts, type TimelineCursor } from "./timeline-cursor";
 import type { BusinessStatusCode } from "./business-status";
@@ -1474,4 +1474,28 @@ export async function callerInTouchSince(
   if (mErr) throw new Error(`callerInTouchSince messages read failed: ${mErr.message}`);
   if (texts === null) throw new Error("callerInTouchSince messages read failed: no count returned");
   return texts > 0;
+}
+
+/** F-140 slice 1: one prospect demo the agency started (/dashboard/demo). An agency-only `events` row
+ *  (account_id null, `emitAgencyEvent`): there is no account for a prospect, and no new table. */
+export const PROSPECT_DEMO_EVENT_TYPE = "voice.prospect_demo";
+
+/** Records one demo for this agency person, BEFORE its secret is minted, so the next request can count it.
+ *  The payload is empty on purpose: nothing about the prospect is stored. Service client only; throws. */
+export async function recordProspectDemo(db: SupabaseClient, actorClerkUserId: string): Promise<void> {
+  await emitAgencyEvent(db, PROSPECT_DEMO_EVENT_TYPE, actorClerkUserId, {});
+}
+
+/** Demos this agency person started since `sinceIso`. THROWS on a read error and on a null count (a head
+ *  count can come back {count: null, error: null}); the caller fails closed. */
+export async function countProspectDemosSince(
+  db: SupabaseClient, actorClerkUserId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("events")
+    .select("id", { count: "exact", head: true })
+    .is("account_id", null).eq("type", PROSPECT_DEMO_EVENT_TYPE)
+    .eq("actor_id", actorClerkUserId).gte("created_at", sinceIso);
+  if (error) throw new Error(`countProspectDemosSince failed: ${error.message}`);
+  if (count === null) throw new Error("countProspectDemosSince failed: no count returned");
+  return count;
 }

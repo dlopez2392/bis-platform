@@ -14,7 +14,7 @@ describe("buildNavGroups", () => {
     expect(groups[0]!.label).toBeNull();
     expect(hrefs(groups)).toEqual([
       "/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers",
-      "/dashboard/screened", "/dashboard/plans",
+      "/dashboard/screened", "/dashboard/plans", "/dashboard/demo",
     ]);
   });
 
@@ -222,7 +222,8 @@ describe("buildNavGroups — a non-agency caller at the top level sees none of t
     expect(hrefs(buildNavGroups(null, false, false, true))).toEqual([]);
   });
 
-  it("the agency itself is unaffected — still the full six (sanity, so the two tests above are not vacuously trivial)", () => {
-    expect(hrefs(buildNavGroups(null, true, false))).toHaveLength(6);
+  it("the agency itself is unaffected — still the full seven (sanity, so the two tests above are not vacuously trivial)", () => {
+    // Seven since F-140 slice 1 added the prospect demo.
+    expect(hrefs(buildNavGroups(null, true, false))).toHaveLength(7);
   });
 });

@@ -122,6 +122,7 @@ describe("AGENCY_ONLY_ALLOWLIST — the six agency-only top-level routes and the
     ["phone numbers", "src/app/(dashboard)/dashboard/numbers/numbers-table.tsx"],
     ["screened calls", "src/app/(dashboard)/dashboard/screened/screened-table.tsx"],
     ["plans", "src/app/(dashboard)/dashboard/plans/plan-dialog.tsx"],
+    ["the prospect demo (F-140)", "src/app/(dashboard)/dashboard/demo/prospect-demo.tsx"],
     ["the styleguide (S-10 T0)", "src/app/(dashboard)/dashboard/styleguide/page.tsx"],
   ])("excludes %s, by exactly one pattern (mutation: delete that pattern → FAILS by name)", (_route, key) => {
     expect(excluded(key)).toBe(1);
@@ -131,6 +132,7 @@ describe("AGENCY_ONLY_ALLOWLIST — the six agency-only top-level routes and the
     for (const key of [
       "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/work/row.tsx",
       "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/plans/x.tsx",
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/demo/x.tsx",
       "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/numbers/x.tsx",
       "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/screened/x.tsx",
       "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/accounts/page.tsx",
@@ -139,8 +141,8 @@ describe("AGENCY_ONLY_ALLOWLIST — the six agency-only top-level routes and the
     ]) expect(excluded(key), key).toBe(0);
   });
 
-  it("has exactly seven patterns (mutation: add an eighth without a test row → FAILS)", () => {
-    expect(AGENCY_ONLY_ALLOWLIST).toHaveLength(7);
+  it("has exactly eight patterns (mutation: add a ninth without a test row → FAILS)", () => {
+    expect(AGENCY_ONLY_ALLOWLIST).toHaveLength(8);
   });
 
   it("keeps every client-reachable account route scanned — billing, tasks, the dashboard's work row, contacts (mutation: widen the accounts pattern to /dashboard\\/accounts\\// → FAILS) (plan-review I1)", () => {
