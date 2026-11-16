@@ -93,6 +93,7 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
   "nav:numbers": ["phone", "telnyx", "did", "line", "inventory", "reassign"],
   "nav:screened": ["refused", "blocked", "spam", "declined", "rejected", "turned away"],
   "nav:plans": ["billing", "pricing", "stripe", "subscription", "tier", "allowance", "overage"],
+  "nav:demo": ["prospect", "sales", "pitch", "try", "hear", "sofia", "sofía", "receptionist"],
   "nav:billing": ["invoice", "invoices", "card", "payment", "plan", "subscription", "receipt"],
   // Staff and roles (Task 8): "equipo" (F-095 part 1) — nav.team's own
   // Spanish label, the word itself was missing before so an English-locale

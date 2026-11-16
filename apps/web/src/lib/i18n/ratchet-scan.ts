@@ -153,6 +153,7 @@ export const AGENCY_ONLY_ALLOWLIST: RegExp[] = [
   /^src\/app\/\(dashboard\)\/dashboard\/numbers\//,
   /^src\/app\/\(dashboard\)\/dashboard\/screened\//,
   /^src\/app\/\(dashboard\)\/dashboard\/plans\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/demo\//, // F-140 slice 1, requireAgency
   // S-10 T0: the design reference, requireAgency at its first line
   // (styleguide/page.tsx:2). Its prose is notes to ourselves; its component
   // demos render EN and ES through the components' own t() reads.

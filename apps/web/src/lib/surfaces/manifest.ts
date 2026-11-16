@@ -45,6 +45,7 @@ export type NavIconKey =
   | "work"
   | "screened"
   | "plans"
+  | "demo"
   | "billing";
 
 /** Spec §2.1. "action" has no entry in SURFACE_MANIFEST yet (part 1's own
@@ -272,6 +273,12 @@ export const SURFACE_MANIFEST: SurfaceEntry[] = [
   {
     id: "nav:plans", kind: "page", scope: "agency-top", group: null,
     labelKey: "nav.plans", iconKey: "plans", route: () => "/dashboard/plans",
+    audience: { agency: true, client: false, technician: false },
+  },
+  {
+    // F-140 slice 1: the prospect demo, the agency's sales tool. One more row in this existing list.
+    id: "nav:demo", kind: "page", scope: "agency-top", group: null,
+    labelKey: "nav.demo", iconKey: "demo", route: () => "/dashboard/demo",
     audience: { agency: true, client: false, technician: false },
   },
 
