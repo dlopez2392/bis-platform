@@ -89,6 +89,9 @@ const ALLOWED: Record<string, Reason> = {
   // and write is keyed by readPersonId(route account, the caller's own Clerk id), after requireAccountAccess.
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card-data.ts": "proven-target",
+  // S-22 slice 1 PR 2: disconnect Google Calendar (google_calendar_connections is service-only), after
+  // requireAccountAccess and canManage (the agency or the Owner).
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/google-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",
@@ -232,6 +235,9 @@ const ALLOWED: Record<string, Reason> = {
   // caller just created.
   "lib/contacts/add-contact-by-hand.ts": "proven-target",
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
+  // S-22 slice 1 PR 2: the Google Calendar connect callback writes the account's connection after
+  // requireAccountAccess, canManage and a state minted for this same user and account.
+  "lib/google/oauth-routes.ts": "owner-only",
   "lib/ops/stamp.ts": "public-or-cron",
   // F-032 Task 8 (classified in Task 5): the lockout email, imported only by the signed TeXML owner-pin route after
   // the SQL lock; it reads the account's team and branding to email the person and the Owner, never customer data.

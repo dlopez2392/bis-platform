@@ -36,6 +36,8 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/docs", "/dashboard/d", "/api/d/sometoken/start",
     "/api/s/sometoken/download", "/settings", "/s",
     "/cal", "/cal/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    // S-22: both Google Calendar routes call requireAccountAccess, which reads Clerk's request state.
+    "/api/google-calendar/connect?account=x", "/api/google-calendar/callback?code=x&state=y",
   ])("%s still runs the proxy: the dashboard stays protected and every API keeps Clerk's request state (mutation: an over-broad exclusion → FAILS)", (path) => {
     expect(runs(path)).toBe(true);
   });
