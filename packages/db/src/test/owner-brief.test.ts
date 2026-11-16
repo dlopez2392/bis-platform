@@ -487,6 +487,15 @@ describe("claimBriefDay / releaseBriefDay / stampBriefOutcome (D4)", () => {
       const db = serviceDb();
       await expect(claimBriefDay(db, "00000000-0000-0000-0000-000000000000", day)).rejects.toThrow(/not a calendar day/);
     });
+
+  it.each([["the same day", "2027-03-14"], ["a later day", "2027-03-15"]])(
+    "release refuses a previous day that is %s, before any write (probe: drop the previous-before-day throw -> FAILS)",
+    async (_name, previous) => {
+      // No database reached: the guard throws first, so any id will do.
+      const db = serviceDb();
+      await expect(releaseBriefDay(db, { id: "00000000-0000-0000-0000-000000000000", day: "2027-03-14", previous }))
+        .rejects.toThrow(/releaseBriefDay: previous .* is not before 2027-03-14/);
+    });
 });
 
 describe("listDueBriefSubscriptions (D1)", () => {
@@ -598,6 +607,14 @@ describe("listDueBriefSubscriptions: the pager (PostgREST's silent max_rows)", (
     expect(f.calls.filter((c) => c[0] === "from")).toEqual([["from", "owner_brief_subscriptions"]]);
     expect(f.calls).toContainEqual(["order", "created_at", { ascending: true }]);
     expect(f.calls).toContainEqual(["order", "id", { ascending: true }]);
+  });
+
+  it("joins memberships and accounts with !inner, so the role and account filters drop the ROW server-side, not just the embed (probe: memberships!inner -> memberships FAILS)", async () => {
+    const f = fakeDb([{ data: [], error: null }]);
+    await listDueBriefSubscriptions(f.db);
+    const select = String(f.calls.find((c) => c[0] === "select")?.[1]);
+    expect(select).toContain("memberships!inner(");
+    expect(select).toContain("accounts!inner(");
   });
 
   it("a page error throws, naming the read", async () => {
