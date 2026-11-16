@@ -92,6 +92,8 @@ const ALLOWED: Record<string, Reason> = {
   // S-22 slice 1 PR 2: disconnect Google Calendar (google_calendar_connections is service-only), after
   // requireAccountAccess and canManage (the agency or the Owner).
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/google-actions.ts": "owner-only",
+  // PR 3: the Google Calendar card's status read (service-only table), after canManage, never for Staff.
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/google-card-data.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",
