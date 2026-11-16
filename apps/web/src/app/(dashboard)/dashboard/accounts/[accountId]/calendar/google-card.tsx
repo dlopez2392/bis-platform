@@ -45,7 +45,7 @@ export function GoogleCard({ view, locale, pseudo = false, disconnect }: GoogleC
     const url = new URL(window.location.href);
     if (url.searchParams.has("google")) {
       url.searchParams.delete("google");
-      window.history.replaceState(window.history.state, "", url);
+      window.history.replaceState(null, "", url);
     }
   }, []);
 
