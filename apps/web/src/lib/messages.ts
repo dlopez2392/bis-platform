@@ -8468,6 +8468,9 @@ export const m = {
   "ownerLine.calls.kind.lookup.es": "un cliente",
   "ownerLine.calls.askedAboutError": "We couldn't load what was asked on this call.",
   "ownerLine.calls.askedAboutError.es": "No pudimos cargar lo que se preguntó en esta llamada.",
+  // S-22 PR 4 (D12): the To-do a busy read opens when Google stops accepting the connection.
+  "calendar.googleBusy.reconnectTodo": "Reconnect your Google Calendar",
+  "calendar.googleBusy.reconnectTodo.es": "Vuelva a conectar su Google Calendar",
 } as const;
 
 export type MessageKey = keyof typeof m;

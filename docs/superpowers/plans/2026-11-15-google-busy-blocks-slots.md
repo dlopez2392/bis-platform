@@ -69,21 +69,20 @@ their own key against bis-ci, so neither side can open the other's rows.
 times, no sync job (F-196 not needed). Window: the asked day in the account zone, plus one day each side. A
 candidate on day D meets only ranges within the buffer (240 min max) of D, so that covers every conflict and
 every re-anchor point (`bookableRange`'s anchors) across DST and UTC+14, and never nears a range limit (A4).
-The picker and `check_availability` share a per-instance memo keyed by connection, version and window, which
+The picker and `check_availability` share a per-instance memo keyed by connection, version and day, which
 also bounds what a bot on the public endpoint costs in quota (A6). The SUBMIT checks (`bookableSlot`,
 `movableSlot`) always read fresh: a time taken on Google since the picker loaded is refused, as in BIS.
-**D10. Busy blocks join `booked`, buffer and all.** `readsFor` merges them into the same `Range[]`, so
-`slots.ts` does not change: one predicate, the two-sided buffer (travel time around the owner's 9:00 too),
-D-028's re-anchor and the picker/submit invariant hold as they are; Google's `[start, end)` is the `[)` of
-`bookings_no_overlap` (V3). The answer is validated BEFORE the merge: an unparseable instant or an
-`errors[]` entry makes the whole answer `unchecked`, never an Invalid Date in the engine (which closes every
-slot). Q4.
-**D11. Fail mode (recommended; Q1): when Google cannot answer, offer slots exactly as today.** Outcomes:
-`checked` (merged); `unchecked` (timeout, network, 429, 5xx, malformed, `errors[]`); `disconnected`
-(`invalid_grant`, or 401 after a fresh token). Both failures offer what BIS alone would and log one line
-(account, outcome; never a token or a busy time). Why: failing closed switches booking OFF for the account
-during any Google slowness, and in Testing mode every connection dies every 7 days (V4); before this feature
-every booking was unchecked anyway. Never silent: `disconnected` sets `needs_reconnect` (D12).
+**D10. Busy blocks join `booked`, buffer and all.** `readsFor` merges them into the same `Range[]`: one
+predicate, the two-sided buffer (travel time around the owner's 9:00 too), D-028's re-anchor (Google events re-anchor
+the grid) and the picker/submit invariant hold; Google's `[start, end)` is the `[)` of `bookings_no_overlap` (V3).
+Validated BEFORE the merge: an unparseable instant or `errors[]` makes it `unchecked`, never an Invalid Date. Q4.
+**D11. Fail mode (Q1): Google failing never closes booking.** `unchecked` (timeout, network, 429, 5xx, malformed,
+`errors[]`, 401 on a cached token) or `disconnected` (`invalid_grant`, 401 on a fresh token) log one line; picker AND
+submit merge this instance's last answer for (connection, version, day) if any, else BIS alone. At SUBMIT, with
+no past answer and only when Google was actually asked (a connected row, an opened token, a refresh or freeBusy
+made), `anyStart` drops the on-grid rule so a start Google re-anchored is not refused (I1); BIS rules all bind and
+the start must sit on the 5-minute wall clock. Still refused: a re-anchor off that clock (an event ending 10:07).
+Why: failing closed turns booking OFF during any Google slowness and every 7 days in Testing (V4). Never silent: D12.
 **D12. `invalid_grant`.** The read marks the row `needs_reconnect` by compare-and-set on the `version` it read
 (a reconnect that landed meanwhile survives), stops calling Google for it, and opens ONE To-do (no contact,
 the account's language), its id kept on the row so a second failure opens none; reconnecting completes it.
@@ -237,7 +236,8 @@ their own key and bis-ci (danlo's Google as a test user), ahead of production. A
   (bookings continue, the card and a To-do say so); removed only by Google's verification. Q3.
 - **Double booking remains possible** in the gaps: an event added after the submit check, any `unchecked`
   read (Q1), a non-primary calendar (D2), staff-made bookings (F-046's agenda does not read Google).
-- **Quota and abuse**: the public picker triggers Google reads; the 60 s memo bounds it per instance (A6).
+- **Quota and abuse**: the public picker triggers Google reads; the 60 s memo bounds it per instance (A6). The
+  memo (500 days) and token cache evict only oldest-first or on 401; stale versions linger until the instance dies.
 - **Orphan grants: fixed in PR 2.** A reconnect with another Google account revokes the replaced token after the
   write (same account: kept, A13); disconnect deletes only the (id, version) it read, so a reconnect survives.
 - **Out:** slice 2, writing bookings to Google with Meet links (`calendar.events`; it must then drop

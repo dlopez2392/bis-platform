@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { serviceDb, readPersonId, upsertGoogleConnection, emit, emitAgencyEvent } from "@bis/db";
+import { serviceDb, readPersonId, upsertGoogleConnection, emit, emitAgencyEvent, completeGoogleReconnectTask } from "@bis/db";
 import { requireAccountAccess, accountHome } from "@/lib/auth";
 import { isUuid } from "@/lib/assign/action-guards";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
@@ -133,7 +133,6 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
       accountId, googleEmail: g.email, scope: g.scope, refreshExpiresAt: g.refreshExpiresAt, connectedBy,
       seal: (ref) => sealGoogleToken(g.refreshToken, ref, cfg.keys.current),
     });
-    // previousReconnectTaskId: the reconnect To-do is PR 4's (D12); none exists before it ships.
   } catch (e) {
     console.error(`google calendar callback: account ${accountId}: the write failed: ${scrub(e, [g.refreshToken, g.accessToken])}`);
     await revokeQuietly(g.refreshToken, deps, accountId, "revoking an unkept grant");
@@ -147,6 +146,16 @@ export async function handleGoogleCallback(req: NextRequest, deps: GoogleRouteDe
   if (r && r.googleEmail.trim().toLowerCase() !== g.email.trim().toLowerCase()) {
     const old = openGoogleToken(r.sealed, r.keyVersion, { accountId, id: written.id, version: r.version }, [cfg.keys.current, cfg.keys.previous]);
     if (old) await revokeQuietly(old, deps, accountId, "revoking the replaced Google account's grant");
+  }
+  // PR 4 (D12): the "Reconnect your Google Calendar" To-do this write cleared off the row is done now: only while
+  // it is still open (an owner who ticked it keeps their tick), only in THIS account, by the system (which BIS
+  // person reconnected is not the client's to read on a To-do). A failure is logged; the connect stands.
+  if (written.previousReconnectTaskId) {
+    try {
+      await completeGoogleReconnectTask(db, accountId, written.previousReconnectTaskId);
+    } catch (e) {
+      console.error(`google calendar callback: account ${accountId}: completing the reconnect To-do failed: ${scrub(e, [g.refreshToken, g.accessToken])}`);
+    }
   }
   await recordGoogleEvent(db, accountId, "google_calendar.connected", access, { version: written.version });
   return go(calendarPath(accountId, "connected"), origin, { clearNonce: true });

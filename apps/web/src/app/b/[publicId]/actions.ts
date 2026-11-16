@@ -1,6 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
+import { after } from "next/server";
 import {
   serviceDb, getCalendarByPublicId, createContact, fillContactBlanks, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
@@ -15,7 +16,7 @@ import { bookingAlertEmail, bookingAlertSubject, bookingConfirmationEmail } from
 import { composeBookingAlertSms, formatAlertWhen, sendAlertSms } from "@/lib/sms/alerts";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
+import { computeDaySlots, bookableSlot } from "@/lib/booking/availability";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
@@ -142,8 +143,8 @@ export async function getSlotsAction(
     const timezone = account?.timezone ?? "UTC";
 
     const now = new Date();
-    const all = await computeAllSlots(db, calendar, timezone, now);
-    const wanted = all.filter((s) => dayKeyInZone(s.startsAt, timezone) === dayIso);
+    // One day (S-22 PR 4, D14), Google's busy time included; its follow-up writes run after the answer.
+    const wanted = await computeDaySlots(db, calendar, timezone, now, dayIso, { defer: after });
     return { slots: wanted.map((s) => s.startsAt.toISOString()) };
   } catch (e) {
     console.error(`getSlotsAction ${publicId} (${dayIso}) failed: ${String(e)}`);
@@ -268,7 +269,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // guarantee against a race that lands between this check and the insert —
     // this only saves a doomed write in the common case.
     const now = new Date();
-    const bookable = await bookableSlot(db, calendar, timezone, now, startsAt);
+    const bookable = await bookableSlot(db, calendar, timezone, now, startsAt, { defer: after });
     if (!bookable) return { ok: false, error: s.slotTaken, slotTaken: true };
     const { endsAt } = bookable;
 

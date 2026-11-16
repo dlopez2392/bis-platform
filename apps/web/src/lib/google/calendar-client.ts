@@ -1,4 +1,4 @@
-import { readGoogleConnectionSealed, type SupabaseClient } from "@bis/db";
+import { readGoogleConnectionSealed, type GoogleConnectionState, type SupabaseClient } from "@bis/db";
 import { googleTokenKeys, openGoogleToken, type GoogleTokenKey } from "./token-seal";
 
 /**
@@ -187,12 +187,20 @@ export async function revokeGoogleToken(token: string, deps: GoogleDeps): Promis
  * The ONLY caller of readGoogleConnectionSealed (D6). Any key in the environment will do: disconnect must work even
  * while the rest of the feature is dormant.
  */
-export type AccountConnection = { id: string; version: number; googleEmail: string; token: string | null };
+export type AccountConnection = {
+  id: string; version: number; googleEmail: string; token: string | null;
+  /** PR 4: a busy read skips Google for a row that needs reconnecting (D12), and opens its To-do when it has none. */
+  status: GoogleConnectionState;
+  reconnectTaskId: string | null;
+};
 export async function readAccountConnection(
   db: SupabaseClient, accountId: string, keys: readonly (GoogleTokenKey | null)[] = Object.values(googleTokenKeys()),
 ): Promise<AccountConnection | null> {
   const row = await readGoogleConnectionSealed(db, accountId);
   if (!row) return null;
   const token = openGoogleToken(row.refresh_token_sealed, row.key_version, { accountId: row.account_id, id: row.id, version: row.version }, keys);
-  return { id: row.id, version: row.version, googleEmail: row.google_email, token };
+  return {
+    id: row.id, version: row.version, googleEmail: row.google_email, token, status: row.status,
+    reconnectTaskId: row.reconnect_task_id ?? null,
+  };
 }
