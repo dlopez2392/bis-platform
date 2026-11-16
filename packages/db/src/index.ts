@@ -193,6 +193,12 @@ export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampS
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
 export * from "./weekly-report";
+// The daily owner brief (migration owner_brief_subscriptions): the opt-in and its per-day claim. See ./owner-brief.ts.
+export {
+  DAILY_BRIEF_ROLES, subscribeToBrief, unsubscribeFromBrief, listMySubscriptions, listDueBriefSubscriptions,
+  claimBriefDay, releaseBriefDay, stampBriefOutcome,
+  type DailyBriefRole, type BriefOutcome, type BriefSubscription, type DueBriefSubscription,
+} from "./owner-brief";
 export * from "./automation-log";
 export * from "./automation-settings";
 
