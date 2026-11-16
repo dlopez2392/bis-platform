@@ -137,9 +137,9 @@ export {
 } from "./calendar-feeds";
 export {
   GOOGLE_CHECKED_STAMP_MINUTES, getGoogleConnectionStatus, readGoogleConnectionSealed, upsertGoogleConnection,
-  markGoogleNeedsReconnect, stampGoogleChecked, deleteGoogleConnection,
+  markGoogleNeedsReconnect, stampGoogleChecked, deleteGoogleConnection, setGoogleReconnectTask, completeGoogleReconnectTask,
   type GoogleConnectionState, type GoogleConnectionRef, type GoogleConnectionStatus, type GoogleConnectionSealed,
-  type GoogleSealResult, type GoogleConnectionWrite,
+  type GoogleSealResult, type GoogleConnectionWrite, type GoogleReplacedConnection,
 } from "./google-calendar";
 export {
   AGENCY_VISIT_REASONS, ACCESS_LOG_KINDS, AGENCY_VISIT_HOURS, ACCESS_LOG_PAGE_SIZE, ACCESS_LOG_ITEMS_SHOWN,

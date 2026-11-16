@@ -1,13 +1,21 @@
 ﻿// apps/web/src/lib/voice/tools/registry.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// The fake engine's whole horizon. `computeDaySlots` (S-22 PR 4, D14: the tool asks for ONE day) keeps the
+// asked day of it, by the real `dayKeyInZone`, and records what it was asked.
 const computeAllSlotsMock = vi.fn();
+const computeDaySlotsCalls: unknown[][] = [];
 const bookableSlotMock = vi.fn();
 vi.mock("@/lib/booking/availability", async (importOriginal) => {
-  const real = await importOriginal<object>();
+  const real = await importOriginal<typeof import("@/lib/booking/availability")>();
   return {
     ...real,
-    computeAllSlots: (...a: unknown[]) => computeAllSlotsMock(...a),
+    computeDaySlots: async (...a: unknown[]) => {
+      computeDaySlotsCalls.push(a);
+      const [db, cal, tz, now, day] = a as [unknown, unknown, string, Date, string];
+      const all = ((await computeAllSlotsMock(db, cal, tz, now)) ?? []) as { startsAt: Date; endsAt: Date }[];
+      return all.filter((s) => real.dayKeyInZone(s.startsAt, tz) === day);
+    },
     bookableSlot: (...a: unknown[]) => bookableSlotMock(...a),
   };
 });
@@ -147,6 +155,12 @@ describe("check_availability", () => {
     expect(slots[0]!.startsAt).toBe("2027-06-01T14:00:00.000Z");
     expect(slots[0]!.local).toContain("9:00 AM");
     expect(slots[0]!.local).toContain("CDT");
+  });
+  it("asks the engine for the caller's day only (S-22 PR 4, D14), so Google is asked about that day, not the horizon", async () => {
+    computeDaySlotsCalls.length = 0;
+    computeAllSlotsMock.mockResolvedValue([]);
+    await runTool(emptyCallState(), ctx, "check_availability", { date: "2027-06-03" });
+    expect(computeDaySlotsCalls.map((c) => [c[2], c[4]])).toEqual([[ctx.timezone, "2027-06-03"]]);
   });
   it("local rendering follows ctx.timezone, never the machine zone", async () => {
     // This dev machine IS Central, so the Chicago assertions above cannot

@@ -9,7 +9,7 @@ import {
   recordLanguageSignal,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
-import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
+import { computeDaySlots, bookableSlot } from "@/lib/booking/availability";
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { bookingMoveUrl } from "@/lib/booking/links";
 import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
@@ -339,9 +339,9 @@ export async function runTool(
       if (!DAY_RE.test(date)) {
         return { state, result: { ok: false, error: "date must be YYYY-MM-DD" } };
       }
-      const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
-      const slots = all
-        .filter((s) => dayKeyInZone(s.startsAt, ctx.timezone) === date)
+      // One day, never the horizon (S-22 PR 4, D14): the owner's busy time on Google is read for this day,
+      // inside a 1,500 ms budget run beside the database reads.
+      const slots = (await computeDaySlots(ctx.db, ctx.calendar, ctx.timezone, now, date))
         .slice(0, 20)
         .map((s) => ({
           startsAt: s.startsAt.toISOString(),

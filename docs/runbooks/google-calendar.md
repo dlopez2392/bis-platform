@@ -1,0 +1,208 @@
+# Google Calendar busy times (S-22)
+
+Audience: danlo (Google Cloud and Vercel steps) and the orchestrator (rotation,
+reading a connection's health). Plan:
+`docs/superpowers/plans/2026-11-15-google-busy-blocks-slots.md`.
+
+## 1. What it is
+
+An account's Owner (or the agency, on their behalf) connects one Google
+account from the Calendar page. BIS asks Google for `openid`, `email` and
+`calendar.freebusy` only: it sees WHEN the owner is busy on their main
+calendar, never what an event is. Those times are then not offered to
+customers (booking page and Sofía; slice 1 is read-only).
+
+Stored, per account, in `public.google_calendar_connections` (service role
+only, RLS on with no policy): the Google email, the granted scope, the
+health of the link, and the refresh token SEALED with AES-256-GCM under
+`GOOGLE_CALENDAR_TOKEN_KEY`. The key lives in the environment, never in the
+database; the sealed value is bound to its row (account, id, version), so a
+copy on any other row does not open. Access tokens are never stored.
+
+Code: `apps/web/src/lib/google/` (`calendar-client.ts`, `token-seal.ts`,
+`oauth-state.ts`, `oauth-routes.ts`), the routes
+`/api/google-calendar/connect` and `/api/google-calendar/callback`, and
+`disconnectGoogleCalendarAction` beside the Calendar page.
+
+**Never call Google from a script, a test or a REPL.** Every function in
+`calendar-client.ts` takes `fetch` as an argument; tests hand it a fake and
+make the global `fetch` throw. Agents never call Google at all. The only
+real calls are a person pressing Connect or Disconnect, and (from PR 4) a
+booking read.
+
+## 2. The environment (five names, `.env.example`)
+
+| Name | What | Sensitive |
+|---|---|---|
+| `GOOGLE_CALENDAR_CLIENT_ID` | the OAuth Web client's id | no |
+| `GOOGLE_CALENDAR_CLIENT_SECRET` | its secret | yes |
+| `GOOGLE_CALENDAR_TOKEN_KEY` | 32 random bytes, base64url | yes |
+| `GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS` | the key before a rotation; unset otherwise | yes |
+| `GOOGLE_CALENDAR_REDIRECT_URI` | the exact callback URI registered on the client | no |
+
+**Dormant unless all four of id, secret, key and redirect URI are set and
+sound.** A key under 32 bytes, a fixture value in production, or a redirect
+URI that is not https (http is allowed on `localhost` only, never
+`127.0.0.1`: Next reports a 127.0.0.1 request's origin as localhost, so the
+connect's origin check could never match it; open the app at
+`http://localhost:3000`) leaves the feature
+off: no card, both routes answer 404, nothing calls Google. A refused value
+logs one line naming the variable, never its value.
+
+One Google Cloud project, two Web clients. Production holds the production
+client (`https://app.bis-rgv.com/api/google-calendar/callback`). Preview and
+`apps/web/.env.local` hold the development client and their OWN key each,
+against bis-ci. Never put a production value in Preview
+(`production-isolation.md`). In Vercel: Remove-then-Add on an existing name,
+then redeploy. Generate a key without echoing it:
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`,
+piped straight into `vercel env add`.
+
+Google matches the redirect URI exactly (scheme, host, port, path, no
+trailing slash) and allows no wildcard, and the connect's nonce cookie is
+bound to that host. So Connect works only on the page at the redirect URI's
+origin: a per-push Preview URL is sent back to the Calendar page with
+`?google=failed`; use the stable Preview alias registered on the
+development client.
+
+## 3. Google Cloud setup (danlo, once; labels as of 2026-11, check as you click)
+
+1. console.cloud.google.com > New project "BIS Platform".
+2. APIs & Services > Library > "Google Calendar API" > Enable.
+3. Google Auth Platform > Get started: app name "BIS", support email,
+   Audience **External**, contact email.
+4. Audience: leave Publishing status at **Testing** (never "Publish app" in
+   slice 1). Test users: your own address, later each pilot owner's (100 max).
+5. Data access > add `openid`, `.../auth/userinfo.email`,
+   `.../auth/calendar.freebusy`. Note whether `calendar.freebusy` is filed as
+   sensitive and tell the orchestrator.
+6. Branding: authorized domain `bis-rgv.com`.
+7. Clients > Create client > Web application "BIS web (production)",
+   redirect URI `https://app.bis-rgv.com/api/google-calendar/callback`.
+8. A second Web client "BIS web (development)": redirect URIs
+   `http://localhost:3000/api/google-calendar/callback` and the stable Preview
+   alias's `/api/google-calendar/callback`.
+9. Vercel env as in section 2. Production only after the busy-blocks PR (PR 4)
+   has merged.
+
+## 4. Reading a connection's health
+
+Read only; never select `refresh_token_sealed`:
+
+```sql
+select account_id, google_email, status, needs_reconnect_since, last_checked_at,
+       refresh_expires_at, key_version, version, connected_at
+from public.google_calendar_connections;
+```
+
+- `status = 'connected'`: BIS can read busy times. `last_checked_at` is the
+  last successful read (stamped at most every 10 minutes).
+- `status = 'needs_reconnect'`: Google refused the refresh token
+  (`invalid_grant`). Bookings carry on exactly as before the feature (owner
+  answer Q1: no Google answer means today's slots), and the card says
+  "Needs reconnecting". The owner presses Reconnect; nothing else fixes it.
+
+Why a token dies: **in Testing mode every connection expires after 7 days**
+(Google's rule for External apps in Testing; only verification removes it),
+the person removed BIS at myaccount.google.com, six months unused, more than
+100 tokens for one client and Google account, or an admin restriction.
+
+The callback lands on the Calendar page with `?google=connected`, `denied`
+(the person pressed Cancel or unticked the calendar box; nothing written, the
+grant revoked) or `failed` (the exchange or the write failed; logs say which
+by Google's error code only) or `paused` (a client on an account paused for
+billing: connecting is switching access ON, so it is refused at connect and
+again at the callback, before any token is issued; the agency is never
+refused). A refused state (expired after 10 minutes, a different browser,
+another user) lands on `/`. Every outcome of the callback clears the nonce
+cookie; requireAccountAccess's own redirects and the dormant 404 do not, and
+the 10-minute cookie, scoped to the callback path, then simply expires.
+
+A reconnect with a DIFFERENT Google account revokes the replaced account's
+refresh token once the new one is stored. A reconnect with the SAME Google
+account does not: revoking one of its refresh tokens may end the whole grant,
+the new token included (assumption A13, unverified); Google drops the old one
+on its own (100-token cap, six months unused).
+
+## 5. Rotating the token key
+
+1. Generate a new key (section 2). In each environment separately: set
+   `GOOGLE_CALENDAR_TOKEN_KEY_PREVIOUS` to the CURRENT key, then
+   `GOOGLE_CALENDAR_TOKEN_KEY` to the new one; redeploy.
+2. Rows keep opening under the previous key; each reconnect re-seals under
+   the new one. `key_version` names the key (an id derived from it), so
+   `select key_version, count(*) from public.google_calendar_connections group by 1`
+   shows how many rows still need the old key.
+3. When none do (or after asking those owners to reconnect), remove
+   `_PREVIOUS` and redeploy. A row whose key is gone cannot be read; Disconnect
+   still deletes it (it cannot revoke at Google without the token).
+
+If a key LEAKED, rotation is not enough (the old key still opens old rows):
+remove both values, rotate the client secret in Google Cloud, and ask every
+connected owner to reconnect.
+
+## 6. Disconnect
+
+Disconnect (the agency or the Owner) revokes the refresh token at Google,
+then deletes the row, even when the revoke fails (logged by error code). It
+deletes only the row it read (id and version): if a reconnect landed in
+between, the new connection stays and the answer says it was reconnected
+meanwhile. It has no Undo: undoing would need the revoked token. It works
+while the account is paused for billing (it only takes access away).
+
+## 7. The busy-read log line (`google_busy`), and reading a week of it
+
+Every booking-page, move-page and Sofía slot read that reaches for Google
+logs ONE line (`apps/web/src/lib/booking/google-busy.ts`):
+
+```
+google_busy account=<account uuid> outcome=<checked|unchecked|disconnected> [reason=<code>] google_busy_ms=<n>
+```
+
+- `outcome=checked`: Google answered; its busy times were taken out of the
+  slots. No `reason`.
+- `outcome=unchecked`: Google could not answer in time or answered
+  something unusable. The slots were offered as BIS alone would (owner answer
+  Q1: fail open). `reason` is `timeout` (the 1,500 ms budget ran out),
+  `network`, `http_<status>` (429, 5xx, a 401 on a cached token), Google's
+  OAuth error code, `malformed` (an `errors[]` entry or an unparseable
+  instant), `connection_read` (the database row could not be read) or
+  `token_unopened` (no key in the environment opens the stored token; see
+  section 5). On a failure the picker AND the submit both use the instance's
+  last answer for that connection and day, if it has one, so they agree. With
+  none, the picker offers BIS's own times; and at a submit where Google itself
+  was asked and failed, a start only has to pass BIS's own rules and sit on a
+  5-minute mark (it may be off the usual grid). A database or key problem
+  never loosens the grid.
+- `outcome=disconnected`: `invalid_grant`, or a 401 right after a fresh
+  token. After the answer the row is marked `needs_reconnect` and ONE
+  "Reconnect your Google Calendar" To-do opens; from then on reads skip Google
+  and log nothing until the owner reconnects. If that To-do failed to open,
+  a later read opens it (at most every 10 minutes per instance). So a To-do
+  the owner DELETES comes back within about 10 minutes while the row still
+  needs reconnecting (intended: only reconnecting ends it), and if keeping it
+  on the row keeps failing, each instance leaves one completed To-do behind
+  every 10 minutes until the database recovers.
+- `google_busy_ms`: the whole Google leg (row read, token refresh when the
+  in-memory one has lapsed, freeBusy). It runs BESIDE the database reads, so
+  a caller waits for whichever is slower, and never more than 1,500 ms for
+  Google.
+
+No line is logged when the feature is dormant, the account has no
+connection, the row already needs reconnecting, or the picker answered from
+its 60-second memo. The line never carries a token, a busy time or Google's
+error text.
+
+**A week of it (acceptance step 5, assumption A5).** In Vercel > the
+production project > Logs, filter on `google_busy` for the last 7 days, then:
+
+1. Count lines by `outcome`. Mostly `checked` is healthy. A run of
+   `unchecked reason=timeout` means Google is often slower than the budget;
+   any other `unchecked` reason that repeats is a defect to look at.
+2. Read `google_busy_ms` on the `checked` lines: the share above 1,000 ms,
+   and the largest values. If timeouts are more than a few percent, or many
+   `checked` reads land near 1,500, the budget (D13) is revisited; raising
+   it lengthens what a caller on the phone waits.
+3. Every `disconnected` line should match one open To-do and a "Needs
+   reconnecting" card for that account (section 4's query). In Testing mode
+   expect one per connection about every 7 days.

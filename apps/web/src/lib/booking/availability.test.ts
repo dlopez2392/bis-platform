@@ -15,7 +15,7 @@ vi.mock("@bis/db", async (importOriginal) => {
 });
 
 import type { CalendarRow, serviceDb } from "@bis/db";
-import { bookableSlot, computeAllSlots, moveSlots, movableSlot } from "./availability";
+import { bookableSlot, computeDaySlots, moveSlots, movableSlot } from "./availability";
 
 beforeEach(() => {
   getBusinessStatusRowMock.mockReset().mockResolvedValue(null); // no row reads as open
@@ -28,14 +28,14 @@ const calendar = {
   max_advance_days: 2, open_hours: { tue: [["09:00", "12:00"]] }, notify_emails: [],
 } as unknown as CalendarRow;
 
-describe("computeAllSlots", () => {
+describe("computeDaySlots", () => {
   it("returns Date ranges for open hours minus booked ranges", async () => {
     // Tue 2027-06-01, zone UTC for a deterministic test
     listBookedRangesMock.mockResolvedValue([
       { starts_at: "2027-06-01T09:00:00.000Z", ends_at: "2027-06-01T10:00:00.000Z" },
     ]);
     const now = new Date("2027-06-01T00:00:00Z");
-    const slots = await computeAllSlots({} as unknown as ReturnType<typeof serviceDb>, calendar, "UTC", now);
+    const slots = await computeDaySlots({} as unknown as ReturnType<typeof serviceDb>, calendar, "UTC", now, "2027-06-01");
     const starts = slots.map((s) => s.startsAt.toISOString());
     expect(starts).toContain("2027-06-01T10:00:00.000Z");
     expect(starts).toContain("2027-06-01T11:00:00.000Z");
@@ -64,7 +64,7 @@ describe("moveSlots / movableSlot — the day as it will be once the move commit
 
   it("offers the neighbours of the booking being moved, never its own range (mutation: drop the exclusion → 09:00 and 11:00 vanish, FAILS)", async () => {
     listBookedRangesMock.mockImplementation(async (...a: unknown[]) => asDb(...(a.slice(1) as [string, string, string, string?])));
-    const starts = (await moveSlots(db, buffered, "UTC", now, moving)).map((s) => s.startsAt.toISOString());
+    const starts = (await moveSlots(db, buffered, "UTC", now, moving, "2027-06-01")).map((s) => s.startsAt.toISOString());
     expect(starts).toEqual(["2027-06-01T09:00:00.000Z", "2027-06-01T11:00:00.000Z"]);
   });
 
@@ -91,9 +91,9 @@ describe("closures (S-47d): readSlotClosures in all four functions", () => {
     created_by: "user_1", created_at: "2027-05-20T00:00:00Z",
   }];
   const four = {
-    computeAllSlots: (cal: CalendarRow) => computeAllSlots(db, cal, "UTC", now),
+    computeDaySlots: (cal: CalendarRow) => computeDaySlots(db, cal, "UTC", now, "2027-06-01"),
     bookableSlot: (cal: CalendarRow) => bookableSlot(db, cal, "UTC", now, ten),
-    moveSlots: (cal: CalendarRow) => moveSlots(db, cal, "UTC", now, moving),
+    moveSlots: (cal: CalendarRow) => moveSlots(db, cal, "UTC", now, moving, "2027-06-01"),
     movableSlot: (cal: CalendarRow) => movableSlot(db, cal, "UTC", now, moving, ten),
   };
   beforeEach(() => { listBookedRangesMock.mockReset().mockResolvedValue([]); });
@@ -107,10 +107,10 @@ describe("closures (S-47d): readSlotClosures in all four functions", () => {
       expect(getBusinessStatusRowMock.mock.calls, name).toEqual([[db, "a1"], [db, "a2"]]);
       expect(listClosedDaysFromMock.mock.calls, name).toEqual([[db, "a1", "2027-05-31"], [db, "a2", "2027-05-31"]]);
     }
-    expect(Object.keys(four)).toEqual(["computeAllSlots", "bookableSlot", "moveSlots", "movableSlot"]);
+    expect(Object.keys(four)).toEqual(["computeDaySlots", "bookableSlot", "moveSlots", "movableSlot"]);
   });
 
-  for (const name of ["computeAllSlots", "bookableSlot", "moveSlots", "movableSlot"] as const) {
+  for (const name of ["computeDaySlots", "bookableSlot", "moveSlots", "movableSlot"] as const) {
     it(`${name} rejects when the status read throws: never a slot during an unknown closure (S17)`, async () => {
       getBusinessStatusRowMock.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
       await expect(four[name](calendar)).rejects.toThrow("getBusinessStatusRow failed: boom");
@@ -119,21 +119,21 @@ describe("closures (S-47d): readSlotClosures in all four functions", () => {
 
   it("a failed closed-days read rejects too", async () => {
     listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
-    await expect(computeAllSlots(db, calendar, "UTC", now)).rejects.toThrow("listClosedDaysFrom failed: boom");
+    await expect(computeDaySlots(db, calendar, "UTC", now, "2027-06-01")).rejects.toThrow("listClosedDaysFrom failed: boom");
   });
 
   it("a closed day reaches every result: no slots, and nothing bookable or movable (mutation: drop closures in any one function → FAILS)", async () => {
     // The control: open, the day offers slots and 10:00 can be booked and moved to.
-    expect((await computeAllSlots(db, calendar, "UTC", now)).map((r) => r.startsAt.toISOString()))
+    expect((await computeDaySlots(db, calendar, "UTC", now, "2027-06-01")).map((r) => r.startsAt.toISOString()))
       .toEqual(["2027-06-01T09:00:00.000Z", "2027-06-01T10:00:00.000Z", "2027-06-01T11:00:00.000Z"]);
     expect(await bookableSlot(db, calendar, "UTC", now, ten)).not.toBeNull();
-    expect(await moveSlots(db, calendar, "UTC", now, moving)).toHaveLength(2);
+    expect(await moveSlots(db, calendar, "UTC", now, moving, "2027-06-01")).toHaveLength(2);
     expect(await movableSlot(db, calendar, "UTC", now, moving, ten)).not.toBeNull();
 
     listClosedDaysFromMock.mockResolvedValue(closedTuesday);
-    expect(await computeAllSlots(db, calendar, "UTC", now)).toEqual([]);
+    expect(await computeDaySlots(db, calendar, "UTC", now, "2027-06-01")).toEqual([]);
     expect(await bookableSlot(db, calendar, "UTC", now, ten)).toBeNull();
-    expect(await moveSlots(db, calendar, "UTC", now, moving)).toEqual([]);
+    expect(await moveSlots(db, calendar, "UTC", now, moving, "2027-06-01")).toEqual([]);
     expect(await movableSlot(db, calendar, "UTC", now, moving, ten)).toBeNull();
   });
 
@@ -141,7 +141,7 @@ describe("closures (S-47d): readSlotClosures in all four functions", () => {
     getBusinessStatusRowMock.mockResolvedValue({
       account_id: "a1", state: "storm", late_minutes: null, until: null, set_by: "user_1", set_at: "2027-05-31T12:00:00.000Z",
     });
-    expect(await computeAllSlots(db, calendar, "UTC", now)).toEqual([]);
+    expect(await computeDaySlots(db, calendar, "UTC", now, "2027-06-01")).toEqual([]);
   });
 
   it("the closures read and the bookings read start together, not one after the other (mutation: await them in turn → FAILS)", async () => {

@@ -1,12 +1,11 @@
 # Google calendar busy times block slots (S-22, slice 1: read-only)
 
 Tier: **HIGH** (OAuth tokens, a server-only table with grants, a migration, what Sofía and the booking page
-offer). Plan only; nothing here is built yet. Source: focus-list row 9; S-22 (`docs/crm-features.md:1422`,
+offer). PR 1 (#376) and PR 2 (#377) are built. Source: focus-list row 9; S-22 (`docs/crm-features.md:1422`,
 §7.1 at `:2925-2945`); the study `docs/research/2026-09-25-crm-feature-research.md:441-575`.
-Owner decisions, 2026-11-15: slice 1 is **read-only**: times the owner is busy on their Google calendar are
-not offered, by Sofía on a call or on the public booking page. Writing bookings into Google is **slice 2**.
-The Google OAuth app stays in **Testing mode** (up to 100 named test users) in a Google Cloud project danlo
-creates; Google's verification comes later.
+Owner decisions, 2026-11-15: slice 1 is **read-only**: times the owner is busy on Google are not offered by
+Sofía or the booking page; writing bookings into Google is **slice 2**. The OAuth app stays in **Testing
+mode** (100 named test users at most) in danlo's Google Cloud project; Google's verification comes later.
 **Done when:** an event on danlo's real Google calendar removes that time from the booking page, and Sofía
 will not book it on a test call (section 6).
 
@@ -52,14 +51,14 @@ the feature stays dormant. Access tokens live in module memory only, keyed by co
 `expires_in` minus 5 min (A12). Nothing logs a token; Google's error bodies are reduced to their `error` code.
 **D6. The table is server-only** (0104's pattern). "The agency and that Owner see status only" is the
 server's job: `requireAccountAccess`, `canManage`, then `getGoogleConnectionStatus`, whose column list
-excludes the ciphertext. One accessor reads the ciphertext, called only from `lib/google/calendar-client.ts`
-(`import "server-only"`).
+excludes the ciphertext. One accessor reads the ciphertext, called only from `lib/google/calendar-client.ts`.
 **D7. OAuth: authorization-code flow, server side.** `access_type=offline` and `prompt=consent` (a fresh
 refresh token on every reconnect, V7); `state` sealed under the token key (account id, Clerk user id, nonce,
-PKCE verifier, 10-minute expiry) plus an HttpOnly `SameSite=Lax` nonce cookie. The callback re-runs
-`requireAccountAccess` and `canManage`, refuses a state minted for another user or account, exchanges the
-code, and writes nothing unless the returned `scope` contains `calendar.freebusy` (the user can untick it,
-V7). PKCE is defence in depth on a confidential client (A7).
+PKCE verifier, 10-minute expiry) plus an HttpOnly `SameSite=Lax` nonce cookie, `Secure` on https, cleared on
+every callback outcome (both tested). The callback re-runs `requireAccountAccess` and `canManage`, refuses a
+state minted for another user or account, refuses a CLIENT of a billing-paused account before the exchange
+(connecting is switching access ON; the agency is never refused), and writes nothing unless the returned
+`scope` contains `calendar.freebusy` (V7). PKCE is defence in depth on a confidential client (A7).
 **D8. Redirect URI from env** (`GOOGLE_CALENDAR_REDIRECT_URI`): Google matches it exactly, with no wildcard
 (V8), and a Preview deployment's URL changes per push. Connect is offered only when the page's origin is that
 URI's origin (the cookie is host-bound); elsewhere the card names the address. ONE Google project, two Web
@@ -70,21 +69,20 @@ their own key against bis-ci, so neither side can open the other's rows.
 times, no sync job (F-196 not needed). Window: the asked day in the account zone, plus one day each side. A
 candidate on day D meets only ranges within the buffer (240 min max) of D, so that covers every conflict and
 every re-anchor point (`bookableRange`'s anchors) across DST and UTC+14, and never nears a range limit (A4).
-The picker and `check_availability` share a per-instance memo keyed by connection, version and window, which
+The picker and `check_availability` share a per-instance memo keyed by connection, version and day, which
 also bounds what a bot on the public endpoint costs in quota (A6). The SUBMIT checks (`bookableSlot`,
 `movableSlot`) always read fresh: a time taken on Google since the picker loaded is refused, as in BIS.
-**D10. Busy blocks join `booked`, buffer and all.** `readsFor` merges them into the same `Range[]`, so
-`slots.ts` does not change: one predicate, the two-sided buffer (travel time around the owner's 9:00 too),
-D-028's re-anchor and the picker/submit invariant hold as they are; Google's `[start, end)` is the `[)` of
-`bookings_no_overlap` (V3). The answer is validated BEFORE the merge: an unparseable instant or an
-`errors[]` entry makes the whole answer `unchecked`, never an Invalid Date in the engine (which closes every
-slot). Q4.
-**D11. Fail mode (recommended; Q1): when Google cannot answer, offer slots exactly as today.** Outcomes:
-`checked` (merged); `unchecked` (timeout, network, 429, 5xx, malformed, `errors[]`); `disconnected`
-(`invalid_grant`, or 401 after a fresh token). Both failures offer what BIS alone would and log one line
-(account, outcome; never a token or a busy time). Why: failing closed switches booking OFF for the account
-during any Google slowness, and in Testing mode every connection dies every 7 days (V4); before this feature
-every booking was unchecked anyway. Never silent: `disconnected` sets `needs_reconnect` (D12).
+**D10. Busy blocks join `booked`, buffer and all.** `readsFor` merges them into the same `Range[]`: one
+predicate, the two-sided buffer (travel time around the owner's 9:00 too), D-028's re-anchor (Google events re-anchor
+the grid) and the picker/submit invariant hold; Google's `[start, end)` is the `[)` of `bookings_no_overlap` (V3).
+Validated BEFORE the merge: an unparseable instant or `errors[]` makes it `unchecked`, never an Invalid Date. Q4.
+**D11. Fail mode (Q1): Google failing never closes booking.** `unchecked` (timeout, network, 429, 5xx, malformed,
+`errors[]`, 401 on a cached token) or `disconnected` (`invalid_grant`, 401 on a fresh token) log one line; picker AND
+submit merge this instance's last answer for (connection, version, day) if any, else BIS alone. At SUBMIT, with
+no past answer and only when Google was actually asked (a connected row, an opened token, a refresh or freeBusy
+made), `anyStart` drops the on-grid rule so a start Google re-anchored is not refused (I1); BIS rules all bind and
+the start must sit on the 5-minute wall clock. Still refused: a re-anchor off that clock (an event ending 10:07).
+Why: failing closed turns booking OFF during any Google slowness and every 7 days in Testing (V4). Never silent: D12.
 **D12. `invalid_grant`.** The read marks the row `needs_reconnect` by compare-and-set on the `version` it read
 (a reconnect that landed meanwhile survives), stops calling Google for it, and opens ONE To-do (no contact,
 the account's language), its id kept on the row so a second failure opens none; reconnecting completes it.
@@ -193,12 +191,15 @@ refresh, freeBusy, revoke; `fetch` injected, never a real Google call in a test 
 A or account A is refused for B; expired state refused; nonce cookie mismatch refused; Staff and Technician
 refused at connect AND callback; a callback whose `scope` lacks freebusy writes nothing; disconnect deletes
 even when revoke fails; no response, redirect or log line contains a token (assert on captured output);
-routes 404 when dormant. Probes: skip the user-id compare, skip the expiry, allow `staff`, skip the scope
-check, delete only on revoke success: each fails its test by name.
+routes 404 when dormant; a paused client is refused at connect and at the callback, before the exchange, and
+the agency is not. Probes: skip the user-id compare, skip the expiry, allow `staff`, skip the scope check,
+delete only on revoke success, remove the pause check: each fails its test by name.
 **PR 3 (LOW): the card, copy, palette.** ~400 lines. `google-card.tsx` + `google-card-data.ts` on the
 calendar page (D16), copy in `lib/messages.ts` (both languages, pseudo-locale +35%), skeleton and error
-boundary. Tests: view builder per state (empty, connected, needs reconnecting, error, wrong origin,
-dormant), the serialised view carries no token-shaped field, `INTERNAL_MILESTONE`-style copy guard holds.
+boundary. Connect is a plain `<a href>` (never a prefetching Next `<Link>`), hidden for a paused client; the
+card explains `?google=paused` and `calendar.google.error.changed`. Tests: view builder per state (empty,
+connected, needs reconnecting, error, wrong origin, paused, dormant), the serialised view carries no
+token-shaped field, `INTERNAL_MILESTONE`-style copy guard holds.
 **PR 4 (HIGH): busy blocks slots.** ~650 lines. `lib/booking/google-busy.ts` (window, memo, validation,
 outcomes, `google_busy_ms` log); `readsFor` gains the parallel read and the merge; `computeDaySlots` and the
 day-taking `moveSlots` (D14); `invalid_grant` path (D12). Tests (fake Google): a 10:00-11:00 busy block
@@ -216,9 +217,8 @@ read the memo at submit (the fresh-submit test fails).
 
 Order: PR 1, then PR 2, then PR 3 and PR 4 in parallel lanes. Production env (step 9) after PR 4 merges.
 Each PR: one implementer; HIGH ones get one review with the probes above; one end-of-PR review.
-**Without production credentials:** tests use an injected `fetch` and bis-ci; Preview and local runs use
-the development client, their own key and bis-ci, with danlo's Google as a test user, so the real consent
-screen and a real freeBusy run before production holds anything. Agents never call Google.
+**Without production credentials:** tests inject `fetch`; Preview and local runs use the development client,
+their own key and bis-ci (danlo's Google as a test user), ahead of production. Agents never call Google.
 
 ## 6. Acceptance (danlo, on production, Bespoke's account, after PR 4 and step 9)
 
@@ -236,7 +236,10 @@ screen and a real freeBusy run before production holds anything. Agents never ca
   (bookings continue, the card and a To-do say so); removed only by Google's verification. Q3.
 - **Double booking remains possible** in the gaps: an event added after the submit check, any `unchecked`
   read (Q1), a non-primary calendar (D2), staff-made bookings (F-046's agenda does not read Google).
-- **Quota and abuse**: the public picker triggers Google reads; the 60 s memo bounds it per instance (A6).
+- **Quota and abuse**: the public picker triggers Google reads; the 60 s memo bounds it per instance (A6). The
+  memo (500 days) and token cache evict only oldest-first or on 401; stale versions linger until the instance dies.
+- **Orphan grants: fixed in PR 2.** A reconnect with another Google account revokes the replaced token after the
+  write (same account: kept, A13); disconnect deletes only the (id, version) it read, so a reconnect survives.
 - **Out:** slice 2, writing bookings to Google with Meet links (`calendar.events`; it must then drop
   BIS-written events from busy, or a move sees its own event); choosing calendars; Outlook; per-staff
   calendars (S-23); contacts sync (S-26); attendee matching; an agenda "busy on Google" warning; a "not
@@ -245,14 +248,11 @@ screen and a real freeBusy run before production holds anything. Agents never ca
 
 ## 8. Owner questions — ANSWERED 2026-11-15 (danlo, tiles): Q1 (a), Q2 yes, Q3 as recommended; Q4, Q5 yes
 
-- **Q1. Fail mode.** When Google is slow, down or the connection has expired: (a) offer slots as today, or
-  (b) withhold all slots. **Recommend (a)**: (b) stops every booking during any Google hiccup and every 7
-  days in Testing mode; (a) only returns to today's behaviour, and the card and a To-do make it visible.
-- **Q2. May the agency connect on an owner's behalf?** **Recommend yes** (D3): setup is agency-led, the
-  Google screen and the card name the Google account, and acceptance on Bespoke needs it.
-- **Q3. Testing-mode pilot.** Who pilots, knowing they reconnect weekly? **Recommend** danlo's Bespoke and at
-  most one pilot client, and submitting `calendar.freebusy` and slice 2's `calendar.events` together once
-  slice 2 works (adding a scope later triggers a new 2-4 week review, study §6.1).
+- **Q1. Fail mode: (a)**, offer slots as today when Google is slow, down or expired; (b), withholding all, would
+  stop every booking in any Google hiccup and every 7 days in Testing mode. The card and a To-do show (a).
+- **Q2. The agency may connect on an owner's behalf** (D3): setup is agency-led; Google and the card name it.
+- **Q3. Pilot:** danlo's Bespoke and at most one client; submit `calendar.freebusy` with slice 2's
+  `calendar.events` once slice 2 works (a scope added later means a new 2-4 week review, study §6.1).
 - **Q4. Buffer around Google events.** **Recommend yes** (D10): one rule, and the buffer is travel time.
 - **Q5. Primary calendar only in slice 1.** **Recommend yes** (D2); choosing calendars costs a second scope.
 
@@ -289,12 +289,12 @@ Unverified (how and when):
 - **A10** Vercel offers a stable Preview alias usable as a redirect URI: Vercel dashboard, before step 8.
 - **A11** revocation removes BIS from the account's third-party access page: acceptance step 4.
 - **A12** an access token lives about an hour: never assumed; `expires_in` is read every time.
+- **A13** revoking a refresh token may end ALL that Google account's tokens for this client, so a same-account
+  reconnect never revokes the old one. Unverified; never tested against Google.
 
 ## Needs from other agents
 
 - **bis-db-schema:** the migration review and the grants test file for the new table (PR 1).
-- **bis-voice:** in PR 4, `registry.ts:342` calls `computeDaySlots(…, date)` instead of filtering
-  `computeAllSlots`; no prompt change (the tool already says only "isn't available").
-- **bis-platform / orchestrator:** the `.env.example` block for the five names (PR 2); a runbook
-  `docs/runbooks/google-calendar.md` carrying section 4; Google on the agents' never-call list.
+- **bis-voice:** PR 4: `registry.ts:342` calls `computeDaySlots(…, date)`, not a filtered `computeAllSlots`.
+- **bis-platform:** DONE in PR 2: `.env.example`, `docs/runbooks/google-calendar.md`, Google never-call.
 - **bis-e2e-qa (optional, LOW):** a card-states spec on the per-run fixture account with a seeded row.

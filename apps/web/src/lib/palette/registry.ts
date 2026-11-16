@@ -81,7 +81,9 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
     "agenda", "schedule", "add job", "trabajo", "agregar trabajo",
     // F-095 part 1 (spec §4.2): "cita" is the glossary's word for
     // appointment/booking — the brief's own worked example.
-    "citas", "horario", "disponibilidad"],
+    "citas", "horario", "disponibilidad",
+    // S-22 slice 1: the Google Calendar card ("busy times on Google are not offered").
+    "connect google calendar", "busy times", "conectar google calendario", "horas ocupadas"],
   "nav:tasks": ["task", "tasks", "to-do", "todo"],
   "nav:branding": ["logo", "colors", "theme", "marca", "logotipo", "colores"],
   // "hours"/"prices"/"services"/"horario"/"precios" added S-47c (spec 5.7): the Business hours and

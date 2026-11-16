@@ -101,6 +101,7 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
   ...each(`${A}/calendar/agenda-actions.ts`, ["jobNoticeOptionAction"], "the Add job sheet's notice check, from the calendar (a list, owner ruling 2)"),
   ...each(`${A}/calendar/closed-days-actions.ts`, ["addClosedDayAction", "removeClosedDayAction"], CFG),
   ...each(`${A}/calendar/feed-actions.ts`, ["makeFeedLinkAction", "replaceFeedLinkAction", "turnOffFeedLinkAction", "undoFeedLinkAction"], CFG),
+  ...each(`${A}/calendar/google-actions.ts`, ["disconnectGoogleCalendarAction"], CFG),
   ...each(`${A}/checklist/actions.ts`, ["setChecklistItemAction", "setA2pRegistrationAction", "addChecklistItemAction"], AG),
   ...each(`${A}/contacts/[contactId]/actions.ts`, ["updateContactAction", "addTagAction", "removeTagAction", "addNoteAction", "addTaskAction", "completeTaskAction"], W),
   ...each(`${A}/contacts/[contactId]/forwarding-actions.ts`, ["getForwardingAddressAction"], "the record's forwarding address, on the record page that logged the customer"),

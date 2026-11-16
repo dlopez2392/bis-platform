@@ -4,7 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import {
   getGoogleConnectionStatus, readGoogleConnectionSealed, upsertGoogleConnection, markGoogleNeedsReconnect,
-  stampGoogleChecked, deleteGoogleConnection, GOOGLE_CHECKED_STAMP_MINUTES,
+  stampGoogleChecked, deleteGoogleConnection, setGoogleReconnectTask, completeGoogleReconnectTask,
+  GOOGLE_CHECKED_STAMP_MINUTES,
   type GoogleConnectionRef, type GoogleConnectionWrite,
 } from "../google-calendar";
 
@@ -43,6 +44,32 @@ describe("upsertGoogleConnection", () => {
       expect(refIn(sealed!.refresh_token_sealed)).toEqual({ accountId, id: r.id, version: 1 });
     }));
 
+  it("a first connect replaced nothing", () =>
+    withTestAccount(async (db, accountId) => {
+      expect((await upsertGoogleConnection(db, write(accountId))).replaced).toBeNull();
+    }));
+
+  it("after a retry, `replaced` is the row the write ACTUALLY overwrote, not the one first read (PR 2 re-review m1)", () =>
+    withTestAccount(async (db, accountId) => {
+      const x = await upsertGoogleConnection(db, write(accountId, { googleEmail: "x@example.com" })); // v1
+      let raced = false;
+      const a = await upsertGoogleConnection(db, write(accountId, {
+        googleEmail: "z@example.com",
+        // A has read v1 and is sealing for v2; B's reconnect lands first, so A's write misses and retries over v2.
+        seal: async (ref) => {
+          if (!raced) {
+            raced = true;
+            await upsertGoogleConnection(db, write(accountId, { googleEmail: "y@example.com" }));
+          }
+          return fakeSeal(ref);
+        },
+      }));
+      expect(a.version).toBe(3);
+      expect(a.replaced).toEqual({
+        version: 2, googleEmail: "y@example.com", sealed: fakeSeal({ accountId, id: x.id, version: 2 }).sealed, keyVersion: 7,
+      });
+    }));
+
   it("a reconnect keeps the id, bumps version, re-seals for the new version and clears the needs-reconnect state", () =>
     withTestAccount(async (db, accountId) => {
       const first = await upsertGoogleConnection(db, write(accountId));
@@ -52,7 +79,10 @@ describe("upsertGoogleConnection", () => {
       if (error) throw error;
 
       const second = await upsertGoogleConnection(db, write(accountId, { googleEmail: "other@example.com" }));
-      expect(second).toEqual({ id: first.id, version: 2, previousReconnectTaskId: task });
+      expect(second).toEqual({
+        id: first.id, version: 2, previousReconnectTaskId: task,
+        replaced: { version: 1, googleEmail: "owner@example.com", sealed: fakeSeal({ accountId, id: first.id, version: 1 }).sealed, keyVersion: 7 },
+      });
       const status = await getGoogleConnectionStatus(db, accountId);
       expect(status).toMatchObject({
         id: first.id, version: 2, google_email: "other@example.com", status: "connected",
@@ -94,7 +124,7 @@ describe("upsertGoogleConnection", () => {
         return fakeSeal(ref);
       };
       const r = await upsertGoogleConnection(db, write(accountId, { seal: racing }));
-      expect(r).toEqual({ id, version: 2, previousReconnectTaskId: task });
+      expect(r).toMatchObject({ id, version: 2, previousReconnectTaskId: task });
       expect(seen.length).toBe(2);
       expect(await getGoogleConnectionStatus(db, accountId)).toMatchObject({ status: "connected", reconnect_task_id: null });
     }));
@@ -208,6 +238,23 @@ describe("deleteGoogleConnection", () => {
       expect(await deleteGoogleConnection(db, accountId)).toBe("none");
     }));
 
+  it("given the (id, version) a disconnect read: a reconnect that landed since survives, and says 'changed' (PR 2 review m4)", () =>
+    withTestAccount(async (db, accountId) => {
+      const first = await upsertGoogleConnection(db, write(accountId));                // the disconnect reads v1 ...
+      const again = await upsertGoogleConnection(db, write(accountId, { googleEmail: "new@example.com" })); // ... a reconnect lands
+      expect(again.version).toBe(2);
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 1 })).toBe("changed");
+      expect(await getGoogleConnectionStatus(db, accountId)).toMatchObject({ version: 2, google_email: "new@example.com" });
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 2 })).toBe("deleted");
+      expect(await deleteGoogleConnection(db, accountId, { id: first.id, version: 2 })).toBe("none");
+    }));
+
+  it("the sealed read names the Google account, so a reconnect can tell whether it replaced another one", () =>
+    withTestAccount(async (db, accountId) => {
+      await upsertGoogleConnection(db, write(accountId, { googleEmail: "owner@example.com" }));
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ google_email: "owner@example.com" });
+    }));
+
   it("deletes only that account's row", () =>
     withTestAccount(async (db, accountA) => {
       await upsertGoogleConnection(db, write(accountA, { googleEmail: `a-${randomBytes(3).toString("hex")}@example.com` }));
@@ -215,6 +262,104 @@ describe("deleteGoogleConnection", () => {
         await upsertGoogleConnection(db, write(accountB));
         expect(await deleteGoogleConnection(db, accountB)).toBe("deleted");
         expect(await getGoogleConnectionStatus(db, accountA)).not.toBeNull();
+      });
+    }));
+});
+
+describe("setGoogleReconnectTask (PR 4, D12: compare-and-set, the To-do of THIS account)", () => {
+  it("keeps the To-do on the version it marked, once: a second set (a second failure) changes nothing", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      const first = await newTask(db, accountId);
+      const second = await newTask(db, accountId);
+      expect(await setGoogleReconnectTask(db, id, 1, first)).toBe(true);
+      expect(await setGoogleReconnectTask(db, id, 1, second)).toBe(false);
+      expect((await getGoogleConnectionStatus(db, accountId))!.reconnect_task_id).toBe(first);
+    }));
+
+  it("refuses a To-do of another account: the database has no composite key to stop it (probe: drop the account check -> FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      const { id } = await upsertGoogleConnection(db, write(accountA));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      await withTestAccount(async (_db, accountB) => {
+        const foreign = await newTask(db, accountB);
+        expect(await setGoogleReconnectTask(db, id, 1, foreign)).toBe(false);
+        expect((await getGoogleConnectionStatus(db, accountA))!.reconnect_task_id).toBeNull();
+      });
+    }));
+
+  it("a reconnect that landed between the read and the mark survives: nothing is marked, and no To-do is kept on it", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));          // the busy read sees v1 ...
+      await upsertGoogleConnection(db, write(accountId));                          // ... the owner reconnects
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("unchanged");
+      const task = await newTask(db, accountId);
+      expect(await setGoogleReconnectTask(db, id, 1, task)).toBe(false);
+      expect(await getGoogleConnectionStatus(db, accountId))
+        .toMatchObject({ version: 2, status: "connected", reconnect_task_id: null, needs_reconnect_since: null });
+    }));
+
+  it("an unknown To-do id is refused, never an error", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      expect(await setGoogleReconnectTask(db, id, 1, "00000000-0000-4000-8000-000000000000")).toBe(false);
+    }));
+
+  it("the sealed read carries the To-do id, so a busy read can see a mark whose To-do never opened", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await upsertGoogleConnection(db, write(accountId));
+      expect(await markGoogleNeedsReconnect(db, id, 1)).toBe("marked");
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ status: "needs_reconnect", reconnect_task_id: null });
+      const task = await newTask(db, accountId);
+      expect(await setGoogleReconnectTask(db, id, 1, task)).toBe(true);
+      expect(await readGoogleConnectionSealed(db, accountId)).toMatchObject({ reconnect_task_id: task });
+    }));
+});
+
+describe("completeGoogleReconnectTask (review minor 7: never re-completes)", () => {
+  const completedAt = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("tasks").select("completed_at").eq("id", id).single();
+    if (error) throw error;
+    return (data as { completed_at: string | null }).completed_at;
+  };
+
+  const completions = async (db: SupabaseClient, accountId: string, taskId: string) => {
+    const { data, error } = await db.from("events").select("id").eq("account_id", accountId).eq("type", "task.completed")
+      .eq("payload->>taskId", taskId);
+    if (error) throw error;
+    return (data ?? []).length;
+  };
+
+  it("completes an open To-do of this account, once, with ONE task.completed (mutation: emit always -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const task = await newTask(db, accountId);
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(true);
+      const at = await completedAt(db, task);
+      expect(at).not.toBeNull();
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
+      expect(await completedAt(db, task)).toBe(at);
+      expect(await completions(db, accountId, task)).toBe(1);
+    }));
+
+  it("a To-do the owner already ticked keeps the owner's completion time and gets no event (probe: drop the open filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const task = await newTask(db, accountId);
+      const ticked = "2026-11-10T09:00:00.000Z";
+      const { error } = await db.from("tasks").update({ completed_at: ticked }).eq("id", task);
+      if (error) throw error;
+      expect(await completeGoogleReconnectTask(db, accountId, task)).toBe(false);
+      expect(Date.parse((await completedAt(db, task))!)).toBe(Date.parse(ticked));
+      expect(await completions(db, accountId, task)).toBe(0);
+    }));
+
+  it("another account's To-do is never touched", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const foreign = await newTask(db, accountB);
+        expect(await completeGoogleReconnectTask(db, accountA, foreign)).toBe(false);
+        expect(await completedAt(db, foreign)).toBeNull();
       });
     }));
 });

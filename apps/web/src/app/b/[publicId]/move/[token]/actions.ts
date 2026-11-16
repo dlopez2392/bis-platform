@@ -1,6 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
+import { after } from "next/server";
 import {
   serviceDb, getContact, moveBooking, SlotTakenError, BookingNotMovableError,
   countRecentBookings,
@@ -16,7 +17,7 @@ import {
   stripSubjectControlChars,
 } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { moveSlots, movableSlot, dayKeyInZone } from "@/lib/booking/availability";
+import { moveSlots, movableSlot } from "@/lib/booking/availability";
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { bookingCancelUrl, bookingMoveUrl, isBookingToken } from "@/lib/booking/links";
 import { normalizeLocale } from "@/lib/forms/public-strings";
@@ -67,10 +68,8 @@ export async function getMoveSlotsAction(
     const ctx = await readMoveContext(db, token);
     if (!ctx || moveState(ctx, now) !== "live") return { error: s.genericError };
     const timezone = ctx.account.timezone ?? "UTC";
-    const all = await moveSlots(db, ctx.calendar, timezone, now, movingOf(ctx.row));
-    return {
-      slots: all.filter((r) => dayKeyInZone(r.startsAt, timezone) === dayIso).map((r) => r.startsAt.toISOString()),
-    };
+    const day = await moveSlots(db, ctx.calendar, timezone, now, movingOf(ctx.row), dayIso, { defer: after });
+    return { slots: day.map((r) => r.startsAt.toISOString()) };
   } catch (e) {
     console.error(`move slots (${dayIso}) failed: ${scrubToken(e, token)}`);
     return { error: s.genericError };
@@ -121,7 +120,7 @@ export async function confirmMoveAction(
     const timezone = ctx.account.timezone ?? "UTC";
     const wanted = new Date(slotStartsAt);
     const slot = Number.isFinite(wanted.getTime())
-      ? await movableSlot(db, ctx.calendar, timezone, now, movingOf(ctx.row), wanted)
+      ? await movableSlot(db, ctx.calendar, timezone, now, movingOf(ctx.row), wanted, { defer: after })
       : null;
     if (!slot) return { ok: false, error: s.slotTaken, slotTaken: true };
     startsAt = slot.startsAt;
