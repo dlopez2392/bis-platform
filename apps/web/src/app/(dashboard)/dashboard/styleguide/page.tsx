@@ -76,6 +76,7 @@ import { t } from "@/lib/i18n/t";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
+import { GoogleCardStates, GOOGLE_CARD_SECTION } from "./google-card-states";
 import { AgendaDemo } from "./agenda-demo";
 import { JobDemo } from "./job-demo";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
@@ -977,6 +978,12 @@ export default async function StyleguidePage({
               link, Copy link, or Make a new link; agency, not set up and error have none (error offers a ghost
               Try again). The long link scrolls inside its Input at 375px. */}
           <FeedCardStates />
+        </Section>
+
+        <Section title={GOOGLE_CARD_SECTION} file="accounts/[accountId]/calendar/google-card.tsx">
+          {/* S-22 slice 1: Google Calendar busy times, every state. Connect and Reconnect are the one primary where
+              they show; Disconnect is always ghost; status is dot + word. */}
+          <GoogleCardStates />
         </Section>
 
         {/* F-046 part 1 (plan Task 12, spec 5.2-5.6): the Agenda card, first on the Calendar page: a Day with two jobs
