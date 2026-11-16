@@ -6,7 +6,8 @@
 // opening line the server built, so the prospect hears their own business's name first.
 //
 // The length is ADVISORY (web-demo.ts): the timer below ends a well-behaved session at maxSeconds. Esc and
-// End the demo end it sooner; leaving the page ends it too.
+// End the demo end it sooner, while it is still connecting too; leaving the page ends it. The start
+// sequence itself (run-demo-start.ts) checks for a cancel after every await and releases what it holds.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,10 +20,11 @@ import { TradeFields, type TradeSetup } from "@/components/vetting/trade-fields"
 import { m } from "@/lib/messages";
 import type { ProspectDemoForm } from "@/lib/voice/prospect-demo";
 import type { ProspectDemoStart } from "./actions";
+import { runDemoStart } from "./run-demo-start";
 
 type Started = Extract<ProspectDemoStart, { ok: true }>;
 type Phase = "idle" | "starting" | "live" | "ended";
-type Call = { pc: RTCPeerConnection; mic: MediaStream; audio: HTMLAudioElement; timer: number };
+type Peer = { pc: RTCPeerConnection; audio: HTMLAudioElement };
 
 const HOURS_ROWS = [
   { key: "weekdays", label: m["prospectDemo.hours.weekdays"], open: true, from: "08:00", to: "17:00" },
@@ -50,89 +52,104 @@ function readForm(fd: FormData): ProspectDemoForm {
 }
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const stopMic = (mic: MediaStream) => mic.getTracks().forEach((t) => t.stop());
+/** Safe twice: close() on a closed peer does nothing, and the audio is simply silenced again. */
+function closePeer(p: Peer) {
+  p.pc.close();
+  p.audio.pause();
+  p.audio.srcObject = null;
+}
+
+/** The peer, its audio and the events channel; the greeting is asked for once the channel opens. */
+function openPeer(s: Started, mic: MediaStream): Peer {
+  const pc = new RTCPeerConnection();
+  const audio = new Audio();
+  audio.autoplay = true;
+  pc.ontrack = (ev) => { audio.srcObject = ev.streams[0] ?? null; };
+  for (const track of mic.getAudioTracks()) pc.addTrack(track, mic);
+  const dc = pc.createDataChannel("oai-events");
+  dc.onopen = () => dc.send(JSON.stringify({ type: "response.create", response: { instructions: s.greeting } }));
+  return { pc, audio };
+}
+
+async function negotiate({ pc }: Peer, s: Started) {
+  await pc.setLocalDescription(await pc.createOffer());
+  const answer = await fetch("https://api.openai.com/v1/realtime/calls", {
+    method: "POST", body: pc.localDescription?.sdp,
+    headers: { Authorization: `Bearer ${s.secret}`, "Content-Type": "application/sdp" },
+  });
+  if (!answer.ok) throw new Error(`answer ${answer.status}`);
+  await pc.setRemoteDescription({ type: "answer", sdp: await answer.text() });
+}
 
 export function ProspectDemo({ trade, start }: { trade: TradeSetup; start: (raw: unknown) => Promise<ProspectDemoStart> }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<{ business: string; remaining: number } | null>(null);
-  const call = useRef<Call | null>(null);
+  /** Bumped by every start and every end: an attempt whose number is no longer current is cancelled. */
+  const attempt = useRef(0);
+  /** What the current attempt holds, so a cancel releases it AT ONCE, not only at the sequence's next await. */
+  const held = useRef<{ mic?: MediaStream; peer?: Peer; timer?: number }>({});
 
   const end = useCallback(() => {
-    const c = call.current;
-    call.current = null;
-    if (c) {
-      window.clearInterval(c.timer);
-      c.pc.close();
-      c.mic.getTracks().forEach((t) => t.stop());
-      c.audio.srcObject = null;
-    }
+    attempt.current += 1;
+    const h = held.current;
+    held.current = {};
+    if (h.timer !== undefined) window.clearInterval(h.timer);
+    if (h.peer) closePeer(h.peer);
+    if (h.mic) stopMic(h.mic);
     setLive(null);
-    setPhase((p) => (p === "live" ? "ended" : p));
+    setPhase((p) => (p === "live" ? "ended" : "idle"));
   }, []);
 
-  // Leaving the page ends the call: nothing keeps talking to OpenAI from a tab nobody is looking at.
+  // Leaving the page ends the call, or the attempt to start one: no microphone or session stays open
+  // behind a page nobody can see.
   useEffect(() => end, [end]);
   useEffect(() => {
-    if (phase !== "live") return;
+    if (phase !== "live" && phase !== "starting") return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") end(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [phase, end]);
 
-  async function connect(s: Started, mic: MediaStream) {
-    const pc = new RTCPeerConnection();
-    const audio = new Audio();
-    audio.autoplay = true;
-    call.current = { pc, mic, audio, timer: 0 };
-    pc.ontrack = (ev) => { audio.srcObject = ev.streams[0] ?? null; };
-    for (const track of mic.getAudioTracks()) pc.addTrack(track, mic);
-    const dc = pc.createDataChannel("oai-events");
-    dc.onopen = () => dc.send(JSON.stringify({ type: "response.create", response: { instructions: s.greeting } }));
-    await pc.setLocalDescription(await pc.createOffer());
-    const answer = await fetch("https://api.openai.com/v1/realtime/calls", {
-      method: "POST", body: pc.localDescription?.sdp,
-      headers: { Authorization: `Bearer ${s.secret}`, "Content-Type": "application/sdp" },
-    });
-    if (!answer.ok) throw new Error(`answer ${answer.status}`);
-    await pc.setRemoteDescription({ type: "answer", sdp: await answer.text() });
-    const startedAt = Date.now();
-    setLive({ business: s.businessName, remaining: s.maxSeconds });
-    setPhase("live");
-    call.current.timer = window.setInterval(() => {
-      const left = s.maxSeconds - Math.floor((Date.now() - startedAt) / 1000);
-      if (left <= 0) end();
-      else setLive((l) => (l ? { ...l, remaining: left } : l));
-    }, 1000);
-  }
-
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (phase === "starting" || phase === "live") return;
     const raw = readForm(new FormData(e.currentTarget));
+    const mine = ++attempt.current;
+    const cancelled = () => attempt.current !== mine;
     setError(null);
     setPhase("starting");
-    let mic: MediaStream;
-    try {
-      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setError(m["prospectDemo.error.microphone"]);
+    const r = await runDemoStart<MediaStream, Peer>({
+      cancelled,
+      getMic: async () => {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (!cancelled()) held.current.mic = mic;
+        return mic;
+      },
+      stopMic,
+      start: () => start(raw),
+      openPeer: (s, mic) => (held.current.peer = openPeer(s, mic)),
+      negotiate,
+      closePeer,
+    });
+    // A cancelled attempt has already been released and its phase set by whoever cancelled it.
+    if (r.kind === "cancelled") return;
+    if (r.kind === "error") {
+      held.current = {};
+      setError(r.error);
       setPhase("idle");
       return;
     }
-    const res = await start(raw).catch((): ProspectDemoStart => ({ ok: false, error: m["prospectDemo.error.unavailable"] }));
-    if (!res.ok) {
-      mic.getTracks().forEach((t) => t.stop());
-      setError(res.error);
-      setPhase("idle");
-      return;
-    }
-    try {
-      await connect(res, mic);
-    } catch {
-      end();
-      setError(m["prospectDemo.error.connect"]);
-      setPhase("idle");
-    }
+    const startedAt = Date.now();
+    const { maxSeconds, businessName } = r.started;
+    setLive({ business: businessName, remaining: maxSeconds });
+    setPhase("live");
+    held.current.timer = window.setInterval(() => {
+      const left = maxSeconds - Math.floor((Date.now() - startedAt) / 1000);
+      if (left <= 0) end();
+      else setLive((l) => (l ? { ...l, remaining: left } : l));
+    }, 1000);
   }
 
   const busy = phase === "starting" || phase === "live";
@@ -184,8 +201,10 @@ export function ProspectDemo({ trade, start }: { trade: TradeSetup; start: (raw:
           {error ? <Notice tone="crit" className="text-foreground">{error}</Notice> : null}
           {phase === "ended" && !error ? <p className="text-sm text-muted-foreground">{m["prospectDemo.ended"]}</p> : null}
           {live ? (
-            <div className="flex flex-wrap items-center gap-4" aria-live="polite">
-              <p className="text-sm font-medium">
+            <div className="flex flex-wrap items-center gap-4">
+              {/* The live region is the status line alone: a per-second countdown inside it would be read
+                  out every second. */}
+              <p className="text-sm font-medium" aria-live="polite">
                 <span aria-hidden className="mr-2 inline-block size-2 animate-pulse rounded-full bg-[var(--good)] motion-reduce:animate-none" />
                 {m["prospectDemo.live"].replace("{business}", live.business)}
               </p>
@@ -195,9 +214,15 @@ export function ProspectDemo({ trade, start }: { trade: TradeSetup; start: (raw:
               <p className="w-full text-xs text-muted-foreground">{m["prospectDemo.endHint"]}</p>
             </div>
           ) : (
-            <Button type="submit" disabled={phase === "starting"}>
-              {phase === "starting" ? m["prospectDemo.starting"] : m["prospectDemo.start"]}
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={phase === "starting"}>
+                {phase === "starting" ? m["prospectDemo.starting"] : m["prospectDemo.start"]}
+              </Button>
+              {/* While connecting, a way out that is not only Esc (a phone has no Esc key). */}
+              {phase === "starting" ? (
+                <Button type="button" variant="ghost" onClick={end}>{m["prospectDemo.end"]}</Button>
+              ) : null}
+            </div>
           )}
         </form>
       </CardContent>

@@ -84,6 +84,30 @@ describe("parseProspectDemo: the rest of the form", () => {
     expect(r.ok && r.profile.services).toHaveLength(1);
   });
 
+  it("folds a newline or tab in a typed name into one space, so she is told one line (mutation: drop the whitespace fold -> FAILS)", () => {
+    const r = parseProspectDemo(form({
+      businessName: "Garza\tLawn\n& Garden",
+      services: [{ name: "Lawn\nmowing\t", price: "", minutes: "" }],
+    }));
+    expect(r.ok && r.profile.businessName).toBe("Garza Lawn & Garden");
+    expect(r.ok && r.profile.services[0]!.name).toBe("Lawn mowing");
+  });
+
+  it("refuses a control character that is not whitespace (mutation: drop the control check -> FAILS)", () => {
+    expect(parseProspectDemo(form({ businessName: "Garza\u0007Lawn" })).ok).toBe(false);
+    expect(parseProspectDemo(form({ services: [{ name: "Mow\u0000ing", price: "", minutes: "" }] })).ok).toBe(false);
+  });
+
+  it("takes an 80-character business name and refuses an 81-character one (mutation: drop the length check -> FAILS)", () => {
+    expect(parseProspectDemo(form({ businessName: "a".repeat(80) })).ok).toBe(true);
+    expect(parseProspectDemo(form({ businessName: "a".repeat(81) })).ok).toBe(false);
+  });
+
+  it("takes a 60-character service name and refuses a 61-character one", () => {
+    expect(parseProspectDemo(form({ services: [{ name: "s".repeat(60), price: "", minutes: "" }] })).ok).toBe(true);
+    expect(parseProspectDemo(form({ services: [{ name: "s".repeat(61), price: "", minutes: "" }] })).ok).toBe(false);
+  });
+
   it("refuses a value that did not come from the form at all", () => {
     expect(parseProspectDemo(null).ok).toBe(false);
     expect(parseProspectDemo({ ...form(), languages: "fr" }).ok).toBe(false);
