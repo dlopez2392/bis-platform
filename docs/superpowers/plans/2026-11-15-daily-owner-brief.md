@@ -101,7 +101,7 @@ PR 1 adds a migration, so its `e2e` gate waits on danlo's click for `migrations-
  - A bounced address fails the same way every morning; counted `failed`, retried within the band, and it will trip `opsWatch` after two consecutive failing ticks only if the pass itself throws, not per address. Not solved here; noted.
  - F-100 may later change what the brief says. All shaping is in `brief-content.ts` behind a typed seam, so that change touches one module.
 
-## 8. OWNER QUESTIONS (each with a recommendation)
+## 8. OWNER QUESTIONS — ANSWERED 2026-11-15 (danlo, tiles): Q1 Owner and Staff; Q2 only due/overdue/new To-dos trigger; Q3 7:00-8:59 else skip; Q4 first brief next morning; Q5 List-Unsubscribe yes for this kind; Q6 doc edits as proposed
 
  - **Q1. Owner only, or Staff too?** Recommend Owner and Staff, each by their own opt-in. Staff already see the same calendar, calls and To do on the dashboard and on the owner line, nothing is sent unless the person chooses it, and a shop's front-desk person is often who needs the morning list. If you want it Owner-only, `DAILY_BRIEF_ROLES = ["owner"]` is the one-line change.
  - **Q2. Is a To-do alone enough to send on?** Recommend: only a To-do due today or overdue, or one that arrived since yesterday, triggers a send; an old undated backlog rides along but never triggers. The alternative (any open To-do sends) means a client with a stale backlog is emailed every day.
