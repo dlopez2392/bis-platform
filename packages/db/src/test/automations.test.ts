@@ -14,7 +14,7 @@ import {
 import {
   parseReviewRequestConfig, getAutomation, upsertAutomation,
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
-  REVIEW_REQUEST_MAX_AGE_MS,
+  REVIEW_REQUEST_MAX_AGE_MS, recentReviewAsks,
   parseNoShowNudgeConfig, listDueNoShowNudges, stampNoShowNudged, stampNoShowNudgeSmsFailed,
   countNoShowNudgesSince, NO_SHOW_NUDGE_MAX_AGE_MS,
   listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
@@ -87,6 +87,105 @@ describe("parseReviewRequestConfig — jsonb is untrusted on read AND write", ()
     ]) {
       expect(parseReviewRequestConfig(bad), JSON.stringify(bad)).toBeNull();
     }
+  });
+
+  // F-072 PR 1 (plan D5): the check-in flag. Absent means off, and the parsed config then carries NO checkin key, so
+  // every config stored before the flag (one live account holds one) reads back exactly as it did.
+  it("reads checkin: true as on, and anything else as off with no key at all (probe: emit checkin: false -> FAILS)", () => {
+    expect(parseReviewRequestConfig({ channel: "email", reviewUrl: "https://g.page/r/abc/review", checkin: true }))
+      .toEqual({ channel: "email", reviewUrl: "https://g.page/r/abc/review", checkin: true });
+    for (const off of [undefined, false, "true", 1, null, {}]) {
+      expect(parseReviewRequestConfig({ channel: "sms", reviewUrl: "https://g.page/r/abc/review", checkin: off }), String(off))
+        .toEqual({ channel: "sms", reviewUrl: "https://g.page/r/abc/review" });
+    }
+  });
+
+  it("refuses an http: link while the check-in is on, and keeps accepting it while it is off (plan D5)", () => {
+    expect(parseReviewRequestConfig({ channel: "email", reviewUrl: "http://example.com/review", checkin: true })).toBeNull();
+    expect(parseReviewRequestConfig({ channel: "email", reviewUrl: "http://example.com/review", checkin: false }))
+      .toEqual({ channel: "email", reviewUrl: "http://example.com/review" });
+  });
+});
+
+/**
+ * F-072 PR 1 (plan D4): at most one review ask per customer per 90 days, keyed on the contact AND on the address
+ * (email_key, the stored lower-cased, trimmed, plus-folded key), inside one account. Stamps are written directly:
+ * the rule reads `review_requested_at`, whoever wrote it (the old flow's stamps count, so there is no cliff on deploy).
+ */
+describe("recentReviewAsks — 90 days per customer, by contact or by address", () => {
+  const DAY = 24 * HOUR;
+  const NOW = Date.parse("2027-06-01T12:00:00.000Z");
+  const SINCE = new Date(NOW - 90 * DAY).toISOString();
+
+  async function askedJob(
+    db: Parameters<typeof createContact>[0], accountId: string, contactId: string, stampedAt: string | null, hour: number,
+  ): Promise<string> {
+    const cal = await getOrCreateCalendar(db, accountId, "user_test");
+    const b = await createBooking(db, accountId, {
+      calendarId: cal.id, contactId,
+      startsAt: new Date(Date.UTC(2027, 1, 1, hour)), endsAt: new Date(Date.UTC(2027, 1, 1, hour, 30)),
+    }, "user_test");
+    if (stampedAt) {
+      const { error } = await db.from("bookings").update({ review_requested_at: stampedAt }).eq("id", b.id);
+      if (error) throw new Error(`askedJob stamp: ${error.message}`);
+    }
+    return b.id;
+  }
+
+  it("the same contact: asked 89 days ago counts, 91 days ago does not, and an unstamped booking never counts", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: recent } = await createContact(db, accountId, { firstName: "Recent" }, "user_test");
+      const { id: old } = await createContact(db, accountId, { firstName: "Old" }, "user_test");
+      await askedJob(db, accountId, recent, new Date(NOW - 89 * DAY).toISOString(), 8);
+      await askedJob(db, accountId, old, new Date(NOW - 91 * DAY).toISOString(), 9);
+      await askedJob(db, accountId, old, null, 10);
+      expect(await recentReviewAsks(db, accountId, { contactId: recent, email: null }, SINCE)).toBe(true);
+      expect(await recentReviewAsks(db, accountId, { contactId: old, email: null }, SINCE)).toBe(false);
+    });
+  });
+
+  it("the edge is strict: a stamp AT the floor does not count, a millisecond after it does (probe: gt -> gte FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: atFloor } = await createContact(db, accountId, { firstName: "Floor" }, "user_test");
+      const { id: after } = await createContact(db, accountId, { firstName: "After" }, "user_test");
+      await askedJob(db, accountId, atFloor, SINCE, 8);
+      await askedJob(db, accountId, after, new Date(Date.parse(SINCE) + 1).toISOString(), 9);
+      expect(await recentReviewAsks(db, accountId, { contactId: atFloor, email: null }, SINCE)).toBe(false);
+      expect(await recentReviewAsks(db, accountId, { contactId: after, email: null }, SINCE)).toBe(true);
+    });
+  });
+
+  it("another contact with the same address, in another case, with padding or a +tag, counts (probe: contact-only -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      // Two records for one person, the shape a merge exists for. Inserted directly: createContact would find the
+      // first by its address and hand it back instead of making the second.
+      const raw = async (firstName: string, email: string) => {
+        const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: firstName, email }), SEED_AUTHOR, SEED_VIA)
+          .select("id").single();
+        if (error) throw new Error(`raw contact: ${error.message}`);
+        return (data as { id: string }).id;
+      };
+      const first = await raw("Ana", "Ana.Lopez+jobs@Example.com");
+      const second = await raw("Ana L", "ana.lopez@example.com");
+      const { id: stranger } = await createContact(db, accountId, { firstName: "Bea", email: "bea@example.com" }, "user_test");
+      await askedJob(db, accountId, first, new Date(NOW - 10 * DAY).toISOString(), 8);
+      expect(await recentReviewAsks(db, accountId, { contactId: second, email: "  ana.lopez@example.com\t" }, SINCE)).toBe(true);
+      expect(await recentReviewAsks(db, accountId, { contactId: stranger, email: "bea@example.com" }, SINCE)).toBe(false);
+    });
+  });
+
+  it("another account's ask of the same address and the same person does not count (separate tenants)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db, otherAccountId) => {
+        const { id: there } = await createContact(db, otherAccountId, { firstName: "Ana", email: "ana@example.com" }, "user_test");
+        await askedJob(db, otherAccountId, there, new Date(NOW - 10 * DAY).toISOString(), 8);
+        const { id: here } = await createContact(db, accountId, { firstName: "Ana", email: "ana@example.com" }, "user_test");
+        expect(await recentReviewAsks(db, accountId, { contactId: here, email: "ana@example.com" }, SINCE)).toBe(false);
+        // Not vacuous: the same read in the other account sees it, by contact and by address.
+        expect(await recentReviewAsks(db, otherAccountId, { contactId: there, email: null }, SINCE)).toBe(true);
+        expect(await recentReviewAsks(db, otherAccountId, { contactId: randomUUID(), email: "ANA@example.com" }, SINCE)).toBe(true);
+      });
+    });
   });
 });
 

@@ -3,6 +3,7 @@ import { emit, type ActorType } from "./events";
 import { brandDisplayName, type Branding } from "./branding";
 import { loadSendableRows, ownAccountEmbedsOnly, type AccountBrandInfo, type DueLookup } from "./booking";
 import { emailLedgerAddress } from "./email-address";
+import { emailKey } from "./contacts";
 import { readBlockedAddresses, readConsentState } from "./consent";
 import { recipientLanguage, type RecipientLanguage } from "./messaging";
 
@@ -123,7 +124,12 @@ function eitherAnchorSince(clockColumn: string, sinceIso: string): string {
 // ---------------------------------------------------------------------------
 
 export type ReviewRequestChannel = "email" | "sms";
-export type ReviewRequestConfig = { channel: ReviewRequestChannel; reviewUrl: string };
+/**
+ * `checkin` (F-072, docs/superpowers/plans/2026-11-17-review-requests.md D5): ask "How did we do?" first, then offer
+ * the link to everyone. ABSENT MEANS OFF, and the parser emits the key only when it is on, so a config stored before
+ * the flag existed parses to exactly what it parsed to before.
+ */
+export type ReviewRequestConfig = { channel: ReviewRequestChannel; reviewUrl: string; checkin?: true };
 
 const MAX_REVIEW_URL_LENGTH = 2048;
 
@@ -136,7 +142,7 @@ const MAX_REVIEW_URL_LENGTH = 2048;
  */
 export function parseReviewRequestConfig(raw: unknown): ReviewRequestConfig | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { channel, reviewUrl } = raw as Record<string, unknown>;
+  const { channel, reviewUrl, checkin } = raw as Record<string, unknown>;
   if (channel !== "email" && channel !== "sms") return null;
   if (typeof reviewUrl !== "string") return null;
   const url = reviewUrl.trim();
@@ -149,7 +155,40 @@ export function parseReviewRequestConfig(raw: unknown): ReviewRequestConfig | nu
   // `href` percent-encodes it (and adds the trailing slash a bare origin
   // needs). The settings action stores THIS value too, so what is stored,
   // previewed and sent is one clickable string.
-  return { channel, reviewUrl: parsed.href };
+  // Only the boolean `true` turns the check-in on; anything else (absent, false, "true", 1) is today's flow.
+  if (checkin !== true) return { channel, reviewUrl: parsed.href };
+  // Plan D5: the check-in's link is shown on our own https page, so it must be https too. Stored http links stay
+  // valid while the check-in is off (some accounts may hold one); with it on, the config is refused on read AND
+  // write, as every other invalid shape is.
+  if (parsed.protocol !== "https:") return null;
+  return { channel, reviewUrl: parsed.href, checkin: true };
+}
+
+/**
+ * F-072 (plan D4): has this customer been asked for a review inside the window? True when ANY booking of THIS
+ * account has `review_requested_at` strictly after `sinceIso` and belongs to the same contact OR to a contact whose
+ * address has the same `email_key` (0034: lower-cased, trimmed, `+tag` folded; `emailKey` is its TypeScript twin).
+ * Keyed on the address too because the address is what receives the mail: two records for one person, or a
+ * household sharing an inbox, are one recipient. Never across accounts (separate tenants). Stamps made by the
+ * pre-check-in flow count, so the rule has no cliff on deploy. The caller passes the floor (now minus 90 days).
+ * Service client. THROWS on a read error rather than answering "not asked", which would send.
+ */
+export async function recentReviewAsks(
+  db: SupabaseClient, accountId: string, who: { contactId: string; email: string | null }, sinceIso: string,
+): Promise<boolean> {
+  const { data: byContact, error } = await db.from("bookings").select("id")
+    .eq("account_id", accountId).eq("contact_id", who.contactId).gt("review_requested_at", sinceIso).limit(1);
+  if (error) throw new Error(`recentReviewAsks failed: ${error.message}`);
+  if ((byContact ?? []).length > 0) return true;
+  const key = who.email ? emailKey(who.email) : "";
+  if (key === "") return false;
+  // contacts!inner: the embed filter must exclude the booking row, not just empty its nested object (see
+  // REVIEW_REQUEST_SELECT's note). The embed names bookings_contact_id_fkey, the composite (account_id, contact_id)
+  // key, so the contact is this account's, and a later second key from bookings into contacts cannot make it ambiguous.
+  const { data: byAddress, error: addressErr } = await db.from("bookings").select("id, contacts!bookings_contact_id_fkey!inner(email_key)")
+    .eq("account_id", accountId).eq("contacts.email_key", key).gt("review_requested_at", sinceIso).limit(1);
+  if (addressErr) throw new Error(`recentReviewAsks failed: ${addressErr.message}`);
+  return (byAddress ?? []).length > 0;
 }
 
 /**

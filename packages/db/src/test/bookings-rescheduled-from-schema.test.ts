@@ -86,8 +86,10 @@ describe("0061 catalogue", () => {
         `select conname, pg_get_constraintdef(oid) as def from pg_constraint
           where conrelid = 'public.bookings'::regclass and contype = 'u' order by conname`);
       // The whole unique-key surface, so 0016's cancel_token key is pinned
-      // as unmoved beside the new one.
+      // as unmoved beside the new one. job_checkins (F-072) adds the third:
+      // the check-in's booking key names the booking's customer too.
       expect(rows).toEqual([
+        { conname: "bookings_account_id_id_contact_id_key", def: "UNIQUE (account_id, id, contact_id)" },
         { conname: "bookings_account_id_id_key", def: "UNIQUE (account_id, id)" },
         { conname: "bookings_cancel_token_key", def: "UNIQUE (cancel_token)" },
       ]);

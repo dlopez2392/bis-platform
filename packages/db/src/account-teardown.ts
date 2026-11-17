@@ -45,6 +45,10 @@ export const ACCOUNT_OWNED_TABLES = [
   "proposals",
   // Item 8c (0091): Sofia's live acts, before calls, concierge_conversations and contacts (all three cascade too).
   "ai_acts",
+  // F-072 (job_checkins): a customer's answer after the job, before bookings. Customer-given, not derived, so listed
+  // like the opt-ins above although it cascades with its booking and account too; deleting it also takes its "not
+  // great" To-do (tasks.review_checkin_id cascades), which the tasks line below would have taken anyway.
+  "job_checkins",
   "calls", "bookings", "calendars", "events",
   "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",

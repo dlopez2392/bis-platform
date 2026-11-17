@@ -26,8 +26,11 @@ import path from "node:path";
  */
 const SRC = path.join(__dirname, "..");
 
-/** Files holding a read the cron reaches. Adding a pass usually adds one. */
-const FILES = ["booking.ts", "automations.ts", "weekly-report.ts", "sites.ts", "owner-brief.ts"] as const;
+/** Files holding a read the cron reaches. Adding a pass usually adds one.
+ *  `job-checkins.ts` (F-072, plan 2026-11-17-review-requests.md PR 1) holds no due-list yet: the check-in rides the
+ *  review request's own (`listDueReviewRequests`, above, through loadSendableRows). It is walked from the day it
+ *  exists so that a `listDue*` or `getDue*` the check-in send adds there later is inside this guard, not beside it. */
+const FILES = ["booking.ts", "automations.ts", "weekly-report.ts", "sites.ts", "owner-brief.ts", "job-checkins.ts"] as const;
 
 /** Reads gated by a server-side predicate rather than by loadSendableRows. */
 const PREDICATE_GATED: Record<string, readonly string[]> = {
