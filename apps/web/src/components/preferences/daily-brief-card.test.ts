@@ -37,8 +37,8 @@ describe("DailyBriefCard states", () => {
   });
 
   it("states the overdue-to-do consequence plainly in both languages", () => {
-    expect(html([])).toContain("an overdue to-do that is never closed means one every morning");
-    expect(html([], "es")).toContain("una tarea vencida que nunca se cierra significa uno cada mañana");
+    expect(html([])).toContain("A to-do you leave overdue keeps it coming every morning until you close it");
+    expect(html([], "es")).toContain("seguirá haciéndolo llegar cada mañana hasta que la cierre");
   });
 
   it("no eligible business: the empty state, no switch", () => {

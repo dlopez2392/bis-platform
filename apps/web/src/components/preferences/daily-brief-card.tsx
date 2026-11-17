@@ -29,15 +29,21 @@ export function DailyBriefCard(props: {
   const tr = makeTr(props.locale, props.pseudo);
   const router = useRouter();
   const [, start] = useTransition();
-  const [mine, setMine] = useState<Record<string, boolean>>({});
-  const isOn = (r: DailyBriefRowView) => mine[r.accountId] ?? r.on;
+  // An optimistic answer is remembered with the server value it was made against (`base`): once the refresh brings a
+  // different server value the entry is stale and ignored, so a change made elsewhere (another tab, the email's
+  // one-click link) shows after a refresh instead of being masked by an old click.
+  const [mine, setMine] = useState<Record<string, { on: boolean; base: boolean }>>({});
+  const isOn = (r: DailyBriefRowView) => {
+    const e = mine[r.accountId];
+    return e && e.base === r.on ? e.on : r.on;
+  };
 
   function change(r: DailyBriefRowView, on: boolean, isUndo = false) {
-    setMine((s) => ({ ...s, [r.accountId]: on }));
+    setMine((s) => ({ ...s, [r.accountId]: { on, base: r.on } }));
     start(async () => {
       const res = await props.setBrief(r.accountId, on, props.locale);
       if (!res.ok) {
-        setMine((s) => ({ ...s, [r.accountId]: !on }));
+        setMine((s) => ({ ...s, [r.accountId]: { on: !on, base: r.on } }));
         toast.error(res.error);
         return;
       }
@@ -68,7 +74,7 @@ export function DailyBriefCard(props: {
                 <li key={r.accountId} data-daily-brief-row={r.accountId} data-on={on ? "true" : "false"}
                   className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-[var(--text-1)]">{r.businessName}</p>
+                    <p className="min-w-0 text-sm font-medium break-words [overflow-wrap:anywhere] text-[var(--text-1)]">{r.businessName}</p>
                     <p className="flex items-center gap-2 text-sm text-[var(--text-2)]">
                       <span aria-hidden="true"
                         className={`size-1.5 shrink-0 rounded-full ${on ? "bg-[var(--good)]" : "bg-[var(--text-3)]"}`} />
@@ -86,9 +92,9 @@ export function DailyBriefCard(props: {
                   <button type="button" role="switch" aria-checked={on}
                     aria-label={tr.text("dailyBrief.row.switch", { business: r.businessName })}
                     onClick={() => change(r, !on)}
-                    className={`relative h-6 w-11 shrink-0 rounded-full border border-[var(--line-strong)] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${on ? "bg-[var(--accent)]" : "bg-[var(--surface-2)]"}`}>
+                    className={`relative h-6 w-11 shrink-0 rounded-full border border-[var(--line-strong)] transition-colors duration-150 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 ${on ? "bg-[var(--accent)]" : "bg-[var(--surface-2)]"}`}>
                     <span aria-hidden="true"
-                      className={`absolute top-0.5 left-0.5 size-4.5 rounded-full bg-[var(--text-1)] transition-transform duration-150 motion-reduce:transition-none ${on ? "translate-x-5" : "translate-x-0"}`} />
+                      className={`absolute top-0.5 left-0.5 size-4.5 rounded-full ${on ? "bg-[var(--primary-foreground)]" : "bg-[var(--text-1)]"} transition-transform duration-150 motion-reduce:transition-none ${on ? "translate-x-5" : "translate-x-0"}`} />
                   </button>
                 </li>
               );
