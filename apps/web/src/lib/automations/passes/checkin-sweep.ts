@@ -1,4 +1,5 @@
 import { ensureCheckinTask, listCheckinsMissingTask } from "@bis/db";
+import { alertOwnerOfNotGreat, type CheckinAlertOutcome } from "@/lib/checkin/alert";
 import { taskTitle } from "@/lib/checkin/flow";
 import { loggableError } from "@/lib/loggable-error";
 import type { Pass, PassContext, PassCounters } from "../context";
@@ -15,6 +16,11 @@ import { reviewRequestPass } from "./review-request";
  * The window is short on purpose: a To-do the owner deliberately removed is not remade for ever. It is long enough
  * for any outage the 15-minute tick survives.
  *
+ * A To-do the sweep itself creates also emails the booking calendar's alert list (checkin/alert.ts, owner decision
+ * 2026-11-17), exactly as the answer page does for one it creates, and for the same reason: `created` is true once.
+ * Counted `checkinAlertsSent`, `checkinAlertsNoRecipients` and `checkinAlertsFailed` (none of them reddens the
+ * heartbeat: the To-do is the record, the email is the nudge).
+ *
  * It runs INSIDE the `reviewRequests` key (not as a pass of its own: a new key would change the cron's JSON for
  * every account and add a node to the fan-out) and reports through that key, only when it did something, so an
  * account without the feature sees byte-identical counters. It never throws: a sweep that fails is counted, and the
@@ -24,7 +30,10 @@ export const CHECKIN_SWEEP_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const CHECKIN_SWEEP_LIMIT = 25;
 
 export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters> {
-  const out = { checkinTasksOpened: 0, checkinTasksFailed: 0, checkinSweepPageFull: 0 };
+  const out = {
+    checkinTasksOpened: 0, checkinTasksFailed: 0, checkinSweepPageFull: 0,
+    checkinAlertsSent: 0, checkinAlertsNoRecipients: 0, checkinAlertsFailed: 0,
+  };
   let missing;
   try {
     missing = await listCheckinsMissingTask(ctx.db, new Date(ctx.now.getTime() - CHECKIN_SWEEP_WINDOW_MS).toISOString(), CHECKIN_SWEEP_LIMIT);
@@ -39,7 +48,21 @@ export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters>
       const title = await taskTitle(ctx.db, checkin.accountId, checkin.contactId);
       const { created } = await ensureCheckinTask(
         ctx.db, checkin.accountId, checkin, { title, dueAt: ctx.now.toISOString() }, "checkin-sweep", "system");
-      if (created) out.checkinTasksOpened++;
+      if (created) {
+        out.checkinTasksOpened++;
+        // The owner's email, ONLY for a To-do THIS call made (a To-do the page already made was mailed then). It goes
+        // through the tick's own gate; it never throws, and a failure never undoes the To-do.
+        let outcome: CheckinAlertOutcome;
+        try {
+          outcome = await alertOwnerOfNotGreat(ctx.db, checkin, { send: (req) => ctx.email.send(req), now: ctx.now });
+        } catch (e) {
+          console.error(`check-in sweep: the owner alert for check-in ${checkin.id} (account ${checkin.accountId}) threw (the To-do exists): ${loggableError(e)}`);
+          outcome = { sent: 0, failed: 1 };
+        }
+        if (outcome.skipped === "no_recipients") out.checkinAlertsNoRecipients++;
+        else if (outcome.sent > 0) out.checkinAlertsSent++;
+        else out.checkinAlertsFailed++;
+      }
     } catch (e) {
       out.checkinTasksFailed++;
       console.error(`check-in sweep: the To-do for check-in ${checkin.id} (account ${checkin.accountId}) was not made, the next tick retries: ${loggableError(e)}`);
