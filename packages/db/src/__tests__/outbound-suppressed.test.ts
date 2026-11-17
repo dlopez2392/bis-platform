@@ -27,12 +27,15 @@ import path from "node:path";
 const SRC = path.join(__dirname, "..");
 
 /** Files holding a read the cron reaches. Adding a pass usually adds one. */
-const FILES = ["booking.ts", "automations.ts", "weekly-report.ts", "sites.ts"] as const;
+const FILES = ["booking.ts", "automations.ts", "weekly-report.ts", "sites.ts", "owner-brief.ts"] as const;
 
 /** Reads gated by a server-side predicate rather than by loadSendableRows. */
 const PREDICATE_GATED: Record<string, readonly string[]> = {
   "weekly-report.ts": ["listAccountsDueWeeklyReport", "listAccountsForWeeklyRollup"],
   "sites.ts": ["listSitesToSync"],
+  // The daily owner brief (plan 2026-11-15-daily-owner-brief.md, D1): a real send to a team member's inbox every
+  // morning, so a suppressed account's subscriptions never leave Postgres. Account-shaped like the weekly report's.
+  "owner-brief.ts": ["listDueBriefSubscriptions"],
 };
 
 /**

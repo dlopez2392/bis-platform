@@ -37,6 +37,9 @@ export const ACCOUNT_OWNED_TABLES = [
   "google_calendar_connections",
   // F-032 (0115): owner-line enrollments (cascade with their membership too).
   "owner_line_enrollments",
+  // The daily owner brief (owner_brief_subscriptions): a person's opt-in, not derived state, so listed like the
+  // enrollments above (cascades with its account, user and membership too).
+  "owner_brief_subscriptions",
   "site_traffic_breakdown", "site_traffic_daily", "sites",
   // Item 8b-1 (0088): AI suggestions, before calls (call_id and contact_id cascade too; spec 4.1 lists it).
   "proposals",

@@ -3841,6 +3841,61 @@ export type Database = {
         }
         Relationships: []
       }
+      owner_brief_subscriptions: {
+        Row: {
+          account_id: string
+          created_at: string
+          enabled_at: string
+          id: string
+          last_handled_day: string | null
+          last_outcome: string | null
+          last_sent_day: string | null
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          enabled_at?: string
+          id?: string
+          last_handled_day?: string | null
+          last_outcome?: string | null
+          last_sent_day?: string | null
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          enabled_at?: string
+          id?: string
+          last_handled_day?: string | null
+          last_outcome?: string | null
+          last_sent_day?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "owner_brief_subscriptions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "owner_brief_subscriptions_member_fkey"
+            columns: ["account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["account_id", "user_id"]
+          },
+          {
+            foreignKeyName: "owner_brief_subscriptions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       owner_line_enrollments: {
         Row: {
           account_id: string
