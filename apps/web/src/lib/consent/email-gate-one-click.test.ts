@@ -13,7 +13,8 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...factory }));
 
-// The registry plus ONE probe kind that opts in, standing in for `operator.daily_brief` (PR 3 registers that).
+// The REAL registry (which now holds `operator.daily_brief`, the one real kind that opts in) plus probe kinds that
+// opt in wrongly or on their own.
 vi.mock("./classes", async (importOriginal) => {
   const real = await importOriginal<typeof import("./classes")>();
   const kinds = { ...real.EMAIL_KINDS, "operator.probe_one_click": { class: "operator", hours: "any", footer: "none", oneClickUnsubscribe: true },
@@ -83,9 +84,10 @@ describe("oneClickHeaders", () => {
 });
 
 describe("the registry: who may carry the one-click link", () => {
-  it("only the probe kinds here; no real kind opts in until the brief's own kind is registered (PR 3 makes the real list ['operator.daily_brief'])", () => {
+  it("the real registry's opted-in list is exactly the daily brief; the probes below are the only others", () => {
     const optedIn = Object.entries(MOCKED_KINDS as Record<string, EmailKindSpec>).filter(([, s]) => s.oneClickUnsubscribe === true).map(([k]) => k);
-    expect(optedIn).toEqual(["operator.probe_one_click", "operator.probe_footer_flagged", "staff.probe_class_flagged"]);
+    expect(optedIn.filter((k) => !k.includes(".probe_"))).toEqual(["operator.daily_brief"]);
+    expect(optedIn.filter((k) => k.includes(".probe_"))).toEqual(["operator.probe_one_click", "operator.probe_footer_flagged", "staff.probe_class_flagged"]);
   });
 });
 
@@ -111,9 +113,14 @@ describe("sendEmail: the headers reach the provider for the kind that opted in, 
     expect(headersSent()).toBeUndefined();
   });
 
+  it("the REAL daily brief kind carries both headers for the signed link it was handed (mutation: drop oneClickUnsubscribe from its registry row -> FAILS)", async () => {
+    await sendEmail(req("operator.daily_brief"), { db: {} as never, env: ENV });
+    expect(headersSent()).toEqual({ "List-Unsubscribe": `<${ONE_CLICK}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" });
+  });
+
   it("every other OPERATOR kind ignores a link it was handed: no headers", async () => {
     const others = Object.entries(MOCKED_KINDS as Record<string, EmailKindSpec>)
-      .filter(([k, s]) => s.class === "operator" && !k.startsWith("operator.probe_")).map(([k]) => k);
+      .filter(([k, s]) => s.class === "operator" && !k.startsWith("operator.probe_") && k !== "operator.daily_brief").map(([k]) => k);
     expect(others.length).toBeGreaterThan(5);
     for (const kind of others) {
       send.mockClear();

@@ -134,6 +134,9 @@ export const EMAIL_KINDS = {
   "operator.owner_line_lockout": { class: "operator", hours: "any", footer: "none" },
   "operator.phone_change_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.weekly_report": { class: "operator", hours: "any", footer: "none" },
+  // F-082: the owner's 7 AM brief, opt-in per person per business. Operator mail like the weekly report, and the
+  // ONE kind that carries a one-click List-Unsubscribe (owner answer Q5), for a signed link its pass supplies.
+  "operator.daily_brief": { class: "operator", hours: "any", footer: "none", oneClickUnsubscribe: true },
   "operator.agency_report": { class: "operator", hours: "any", footer: "none" },
   "operator.billing_link": { class: "operator", hours: "any", footer: "none" },
   "operator.sender_check": { class: "operator", hours: "any", footer: "none" },

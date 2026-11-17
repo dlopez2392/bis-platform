@@ -16,6 +16,7 @@ import { siteTrafficPass } from "./passes/site-traffic";
 import { documentsSweepPass } from "./passes/documents-sweep";
 import { documentsScanPass } from "./passes/documents-scan";
 import { documentsExpiryPass } from "./passes/documents-expiry";
+import { dailyOwnerBriefPass } from "./passes/daily-owner-brief";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 import { usageReportPass } from "./passes/usage-report";
@@ -60,7 +61,9 @@ import { recordChangesAuditPass } from "./passes/record-changes-audit";
  * and writes only the vault and the documents.scanner heartbeat, which opsWatch
  * (last) reads in the same tick. The expiry To-dos (S-07 3a) follow the scan,
  * so a version the scan just cleared opens its To-do this same tick; they read
- * the vault and write only To-dos. The weekly
+ * the vault and write only To-dos. The owner brief (F-082) follows them: it reads the owner line's own reads
+ * and writes only its subscription row's day stamps, so nothing above depends on it and it depends on nothing
+ * but the billing pause. The weekly
  * reports run last of all: the client pass first (spec, "Recorded
  * consequence" — the roll-up fires on its own gate, not after all client
  * emails, so this order is a reading convenience, not a dependency), then
@@ -80,4 +83,4 @@ import { recordChangesAuditPass } from "./passes/record-changes-audit";
  * tick (opsWatch reads every pass above it, usageReport included).
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, recordChangesAuditPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, dailyOwnerBriefPass, weeklyClientReportPass, weeklyAgencyReportPass, recordChangesAuditPass, usageReportPass, opsWatchPass];
