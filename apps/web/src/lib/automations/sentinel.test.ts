@@ -42,6 +42,8 @@ const dbMocks = vi.hoisted(() => ({
   // ...then its self-heal, every tick: nothing to remove.
   deleteExpiryTasksOfHiddenDocuments: vi.fn(async () => 0),
   listAccountsDueWeeklyReport: vi.fn(),
+  // F-082: the daily owner brief reads its due list every tick; nothing is due in this fixture.
+  listDueBriefSubscriptions: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
   // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
@@ -249,6 +251,7 @@ beforeEach(() => {
   // never be in the Monday band here regardless of account timezone. Empty
   // due-list — it still runs to real counters, not `errored`.
   dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([]);
+  dbMocks.listDueBriefSubscriptions.mockResolvedValue([]);
   // And the agency roll-up: no agency row configured in this fixture, so it
   // takes the visible-skip path (skippedNoRecipient) before it would ever
   // reach the same Wednesday-is-never-Monday gate the client pass above
@@ -286,6 +289,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     // S-07 2a: the suite sets no SCANNER_URL, so the pass reports its own not-configured counter.
     expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1, requestTasks: 0 });
     expect(results.documentsExpiry).toEqual({ opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0, healed: 0 });
+    // F-082: the owner brief ran to real counters (nothing due), not to `errored`.
+    expect(results.dailyOwnerBrief).toEqual({ sent: 0, failed: 0, skippedQuiet: 0, skippedAlreadyHandled: 0, skippedNotInBand: 0, skippedNotYet: 0, skippedCap: 0, skippedBudget: 0, skippedNoOrigin: 0, skippedNoWayOut: 0, unresolvableTimezone: 0, released: 0, unstamped: 0, skippedRole: 0 });
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
@@ -305,8 +310,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then the cancel-notice sweep (F-048), then the job-hold backstop (F-046), then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "cancelNotices", "jobHolds", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "recordChangesAudit", "usageReport", "opsWatch"]);
+  it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then the cancel-notice sweep (F-048), then the job-hold backstop (F-046), then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the owner brief, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "cancelNotices", "jobHolds", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "dailyOwnerBrief", "weeklyClientReport", "weeklyAgencyReport", "recordChangesAudit", "usageReport", "opsWatch"]);
   });
 
   /**

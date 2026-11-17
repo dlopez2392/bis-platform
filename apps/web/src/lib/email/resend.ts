@@ -25,7 +25,9 @@ class ResendEmailProvider implements EmailProvider {
    */
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     const req = this.#request(input);
-    const idempotencyKey = crypto.randomUUID();
+    // A caller that must never duplicate (the daily brief: one per person per local day) names its own key, so a
+    // retry after an ambiguous failure is deduplicated by Resend; every other send mints a fresh one.
+    const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
     let result = await this.#attempt(req, idempotencyKey);
     if (result.error?.name === "rate_limit_exceeded") {
       const ms = rateLimitWaitMs(result.headers?.["retry-after"] ?? null, Date.now());

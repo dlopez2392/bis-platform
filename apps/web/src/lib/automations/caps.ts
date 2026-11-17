@@ -237,3 +237,23 @@ export const REPORT_EMAIL_WORST_CASE_MS = 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_W
 export const WEEKLY_REPORT_ACCOUNT_MARGIN_MS = 10_000;
 export const WEEKLY_REPORT_ACCOUNT_END_MS = PASS_ROUTE_MAX_S * 1000;
 export const WEEKLY_REPORT_MAX_RECIPIENTS = 3;
+
+/**
+ * THE DAILY OWNER BRIEF's limits (F-082, plan D4). One email per SUBSCRIPTION (a person on a business), sent in the
+ * 07:00-08:59 local band, eight ticks wide; the claim on the day is the cursor, so a subscription this tick does
+ * not reach is first in line on the next, never lost until the band shuts.
+ *
+ *   DAILY_BRIEF_TICK_CAP  subscriptions ATTEMPTED per tick, counted before the work, win or lose: 40 a tick is 320
+ *     over the band for one zone, far past the dozens of owners this has, and still a cap, so a bug in the due list
+ *     is bounded to one tick's worth of mail.
+ *   DAILY_BRIEF_BUDGET_MS  the pass's wall clock for STARTING a subscription. Checked before the row, so the row in
+ *     flight runs past it by one subscription's work: its reads, then ONE send at its worst
+ *     (REPORT_EMAIL_WORST_CASE_MS, 23 s), then the stamp.
+ *   DAILY_BRIEF_ROW_MARGIN_MS  that row's own work around its send: five reads, the claim and the stamp with
+ *     stampWithRetry's 0.9 s of backoff. 15 s, not measured: a margin, like the weekly report's 10 s.
+ * cron-coupling.test.ts pins budget + worst case + margin inside the pass route's 90 s, and (this is the eighth
+ * wall-clock budget) the in-process ceiling rose to 340 s so the sum still leaves its 50 s of headroom.
+ */
+export const DAILY_BRIEF_TICK_CAP = 40;
+export const DAILY_BRIEF_BUDGET_MS = 30_000;
+export const DAILY_BRIEF_ROW_MARGIN_MS = 15_000;

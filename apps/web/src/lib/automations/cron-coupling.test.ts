@@ -15,8 +15,10 @@ import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
 import {
   SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS,
   WEEKLY_REPORT_MAX_RECIPIENTS, WEEKLY_REPORT_ACCOUNT_MARGIN_MS, WEEKLY_REPORT_ACCOUNT_END_MS, REPORT_EMAIL_WORST_CASE_MS,
+  DAILY_BRIEF_BUDGET_MS, DAILY_BRIEF_ROW_MARGIN_MS,
 } from "./caps";
 import { TICK_NOW_MAX_AGE_MS } from "./pass-route";
+import { BRIEF_BAND_START_HOUR, BRIEF_BAND_END_HOUR } from "@/lib/brief/window";
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
 import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 import { EXPIRY_BUDGET_MS } from "./passes/documents-expiry";
@@ -358,7 +360,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).
    */
-  it("the seven wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside the in-process tick's ceiling", () => {
+  it("the eight wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside the in-process tick's ceiling", () => {
     // Since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s)
     // joined the other three; since S-07 3a, the documents expiry pass
     // (EXPIRY_BUDGET_MS, 15 s) is the fifth: 60 + 60 + 60 + 45 + 15 = 240 s,
@@ -377,9 +379,12 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // 310 still fits it with room.
     // F-196: retargeted to LEGACY_TICK_CEILING_S, the in-process tick's
     // budget (the route itself now declares the dispatcher's 800 s).
+    // F-082: the owner brief (DAILY_BRIEF_BUDGET_MS, 30 s) is the eighth, and
+    // took the second route again: LEGACY_TICK_CEILING_S 310 → 340.
+    // 260 + 30 = 290, + the 50 s headroom = 340 = the in-process ceiling.
     const MIN_HEADROOM_MS = 50_000;
     const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS + EXPIRY_BUDGET_MS
-      + CANCEL_NOTICE_BUDGET_MS + JOB_HOLD_BUDGET_MS;
+      + CANCEL_NOTICE_BUDGET_MS + JOB_HOLD_BUDGET_MS + DAILY_BRIEF_BUDGET_MS;
     expect(LEGACY_TICK_CEILING_S * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
   });
 });
@@ -401,12 +406,12 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
 describe("fan-out: each pass in its own function, the plan inside the dispatcher's ceiling", () => {
   const BUDGETS_MS = {
     RELEASE_BUDGET_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS,
-    DOCUMENT_SCAN_BUDGET_MS, EXPIRY_BUDGET_MS, CANCEL_NOTICE_BUDGET_MS, JOB_HOLD_BUDGET_MS,
+    DOCUMENT_SCAN_BUDGET_MS, EXPIRY_BUDGET_MS, CANCEL_NOTICE_BUDGET_MS, JOB_HOLD_BUDGET_MS, DAILY_BRIEF_BUDGET_MS,
   };
 
-  it("1. the pass route declares a LIVE maxDuration of PASS_ROUTE_MAX_S, and each of the seven budgets plus 30 s fits it (mutation: route literal 60, RELEASE_BUDGET_MS 61_000, or the export commented out → FAILS)", () => {
+  it("1. the pass route declares a LIVE maxDuration of PASS_ROUTE_MAX_S, and each of the eight budgets plus 30 s fits it (mutation: route literal 60, RELEASE_BUDGET_MS 61_000, or the export commented out → FAILS)", () => {
     expect(declaredMaxDuration(passRouteSource)).toBe(PASS_ROUTE_MAX_S);
-    expect(Object.keys(BUDGETS_MS)).toHaveLength(7);
+    expect(Object.keys(BUDGETS_MS)).toHaveLength(8);
     for (const [name, ms] of Object.entries(BUDGETS_MS)) {
       expect(ms + 30_000, name).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
     }
@@ -444,7 +449,7 @@ describe("fan-out: each pass in its own function, the plan inside the dispatcher
     const sendWorstMs = 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS;
     const SENDS_PER_ROW = {
       RELEASE_BUDGET_MS: 1, USAGE_REPORT_BUDGET_MS: 1, DOCUMENT_SCAN_BUDGET_MS: 1,
-      EXPIRY_BUDGET_MS: 1, CANCEL_NOTICE_BUDGET_MS: 1, JOB_HOLD_BUDGET_MS: 1,
+      EXPIRY_BUDGET_MS: 1, CANCEL_NOTICE_BUDGET_MS: 1, JOB_HOLD_BUDGET_MS: 1, DAILY_BRIEF_BUDGET_MS: 1,
     } as const;
     for (const [name, sends] of Object.entries(SENDS_PER_ROW)) {
       const budget = BUDGETS_MS[name as keyof typeof BUDGETS_MS];
@@ -462,6 +467,15 @@ describe("fan-out: each pass in its own function, the plan inside the dispatcher
     expect(REPORT_EMAIL_WORST_CASE_MS).toBe(sendWorstMs);
     expect(WEEKLY_REPORT_ACCOUNT_END_MS).toBe(PASS_ROUTE_MAX_S * 1000);
     expect(WEEKLY_REPORT_MAX_RECIPIENTS * sendWorstMs + WEEKLY_REPORT_ACCOUNT_MARGIN_MS).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+    // The owner brief (F-082) is the eighth: ONE send per subscription, but five reads before it, so its row carries
+    // its own margin on top of the generic 5 s above: budget + the send's worst case + the row's work fits the route.
+    expect(DAILY_BRIEF_BUDGET_MS + sendWorstMs + DAILY_BRIEF_ROW_MARGIN_MS).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+  });
+
+  it("the owner brief's 07:00-08:59 band is at least four ticks wide, so a skipped tick or two never costs a day; the band is local wall-clock time, so it is not one of the schedule's pinned windows (mutation: BRIEF_BAND_END_HOUR 7 -> FAILS)", () => {
+    const entry = vercel.crons.find((c) => c.path === "/api/cron/reminders");
+    expect(entry).toBeDefined();
+    expect(((BRIEF_BAND_END_HOUR - BRIEF_BAND_START_HOUR) * 60 * MINUTE) / tickIntervalMs(entry!.schedule)).toBeGreaterThanOrEqual(4);
   });
 
   it("6. the dispatcher's ceiling is inside the age a pass route accepts for the tick's now, so no pass the plan starts is refused as stale (mutation: TICK_NOW_MAX_AGE_MS 600_000 → FAILS)", () => {

@@ -33,6 +33,11 @@ export type SendEmailInput = {
    *  (resend.com/docs/dashboard/emails/tags: "After the email is sent, the
    *  tag is included in the webhook event"). */
   tags?: { name: string; value: string }[];
+  /** Resend's Idempotency-Key for THIS send. Optional and absent for every caller but the daily brief: absent means
+   *  the provider mints a random UUID per send, as it always has. The brief passes a FIXED key per person, business
+   *  and local day, so a retry after a failure that may have landed (a reset connection, a non-JSON 5xx) is
+   *  deduplicated by Resend within its 24 h window instead of becoming a second email. */
+  idempotencyKey?: string;
 };
 
 export type SendEmailResult = { providerMessageId: string };

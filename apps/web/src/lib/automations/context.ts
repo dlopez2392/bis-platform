@@ -70,4 +70,7 @@ export type PassCounters = Record<string, number>;
 export type Pass = {
   readonly key: string;
   run(ctx: PassContext): Promise<PassCounters>;
+  /** Optional: a message when these counters mean the pass FAILED although it returned (its heartbeat reads it, so
+   *  opsWatch can alert). The counters are reported unchanged. Only the daily brief sets it. */
+  beatFailure?(counters: PassCounters): string | null;
 };

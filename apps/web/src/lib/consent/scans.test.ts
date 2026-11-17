@@ -266,10 +266,10 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — all fifteen SMS kinds and all thirty-two email kinds, 43 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
+  it("the scan reaches every send path's kind — all fifteen SMS kinds and all thirty-three email kinds, 44 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
-    expect(all).toHaveLength(43);
+    expect(all).toHaveLength(44);
     expect([...seen].sort()).toEqual(all);
   });
 });
@@ -786,6 +786,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "operator.call_alert": ["apps/web/src/lib/voice/finish-call.ts"],
     "operator.phone_change_alert": ["apps/web/src/lib/voice/tools/registry.ts"],
     "operator.weekly_report": [`${PASSES}/weekly-report.ts`],
+    "operator.daily_brief": [`${PASSES}/daily-owner-brief.ts`],
     "operator.agency_report": [`${PASSES}/weekly-agency-report.ts`],
     "operator.billing_link": [`${DASH}/settings/billing-actions.ts`],
     "operator.sender_check": [`${DASH}/settings/actions.ts`],
