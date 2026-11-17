@@ -482,10 +482,10 @@ describe("app.keep_task_links re-emitted: every link the server sets, a signed-i
 // ---------------------------------------------------------------------------------------------------------------
 
 /** A completed job for a new customer of this account, through the app's own writers. */
-async function completedJob(db: SupabaseClient, accountId: string, hour: number, email?: string): Promise<{ bookingId: string; contactId: string }> {
+async function completedJob(db: SupabaseClient, accountId: string, hour: number, email?: string, day = 10): Promise<{ bookingId: string; contactId: string }> {
   const cal = await getOrCreateCalendar(db, accountId, "user_test");
   const { id: contactId } = await createContact(db, accountId, { firstName: `Jc${hour}`, ...(email ? { email } : {}) }, "user_test");
-  const at = (m: number) => new Date(Date.UTC(2027, 2, 10, hour, m));
+  const at = (m: number) => new Date(Date.UTC(2027, 2, day, hour, m));
   const b = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at(0), endsAt: at(30) }, "user_test");
   await setBookingStatus(db, accountId, b.id, "completed", "user_test");
   return { bookingId: b.id, contactId };
@@ -632,10 +632,31 @@ describe("the check-in's PR 3 reads, live", () => {
       const [a, b] = answers.map((r) => (r.status === "recorded" ? r.checkin : null));
       await ensureCheckinTask(db, accountId, a!, { title: "Call", dueAt: NOW_ISO }, "checkin");
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      expect((await listCheckinsMissingTask(db, since, 50)).map((c) => c.id)).toEqual([b!.id]);
+      // A platform-wide read other runs share: this account's rows are contained or not, never an exact list.
+      const missing = (await listCheckinsMissingTask(db, since, 500)).map((c) => c.id);
+      expect(missing).toContain(b!.id);
+      expect(missing).not.toContain(a!.id);
       expect(await listCheckinsMissingTask(db, new Date(Date.now() + 60_000).toISOString(), 50)).toEqual([]);
     });
   });
+
+  it("26 answered-with-To-do rows NEWER than one missing one: the missing one is still returned, because the filter is in the query and the limit bounds only task-missing rows (probe: take the newest 25 then subtract -> FAILS). CI must prove the embed filter.", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const first = await completedJob(db, accountId, 8, undefined, 12);
+      const missingAnswer = await recordCheckinAnswer(db, accountId, first.bookingId, "not_great");
+      if (missingAnswer.status !== "recorded") throw new Error("seed: not recorded");
+      for (let i = 0; i < 26; i++) {
+        const j = await completedJob(db, accountId, i % 20, undefined, 13 + Math.floor(i / 20));
+        const r = await recordCheckinAnswer(db, accountId, j.bookingId, "not_great");
+        if (r.status !== "recorded") throw new Error("seed: not recorded");
+        await ensureCheckinTask(db, accountId, r.checkin, { title: `Call ${i}`, dueAt: "2027-03-10T15:00:00.000Z" }, "checkin");
+      }
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const page = await listCheckinsMissingTask(db, since, 25);
+      expect(page.map((c) => c.id)).toContain(missingAnswer.checkin.id);
+      expect(page.filter((c) => c.accountId === accountId)).toHaveLength(1);
+    });
+  }, 120_000);
 
   it("notGreatBookingIds and hasNotGreatCheckin see not_great ONLY, and only this account's booking", async () => {
     await withTestAccount(async (db, accountId) => {
@@ -644,7 +665,9 @@ describe("the check-in's PR 3 reads, live", () => {
       await recordCheckinAnswer(db, accountId, bad.bookingId, "not_great");
       await recordCheckinAnswer(db, accountId, fine.bookingId, "okay");
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      expect([...(await notGreatBookingIds(db, since))]).toEqual([bad.bookingId]);
+      const ids = await notGreatBookingIds(db, [accountId], since);
+      expect(ids.has(bad.bookingId)).toBe(true);
+      expect(ids.has(fine.bookingId)).toBe(false);
       expect(await hasNotGreatCheckin(db, accountId, bad.bookingId)).toBe(true);
       expect(await hasNotGreatCheckin(db, accountId, fine.bookingId)).toBe(false);
       await withTestAccount(async (_db, otherAccountId) => {

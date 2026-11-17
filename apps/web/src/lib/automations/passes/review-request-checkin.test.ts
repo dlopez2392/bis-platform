@@ -106,6 +106,7 @@ beforeEach(() => {
   smsSend.mockReset().mockResolvedValue({ providerMessageId: "s1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv("CONSENT_TOKEN_SECRET", SECRET);
+  vi.stubEnv("APP_ORIGIN", "https://app.example.com");
 });
 afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -121,12 +122,27 @@ describe("the check-in sends two hours after the anchor, once", () => {
     expect(mail.fromName).toBe("Rio Roofing");
     expect(mail.fromAddress).toBe("hello@rioroofing.com");
     expect(mail.replyTo).toBe("owner@rioroofing.com");
-    expect(mail.subject).toBe("How did we do, Rio Roofing?");
+    expect(mail.subject).toBe("Rio Roofing: how did we do?");
     expect(mail.language).toBe("en");
     expect(mail.body).toMatch(/^Thanks for choosing Rio Roofing\. One quick question: how did we do\?\n\nhttps:\/\/app\.example\.com\/r\/1\./);
     expect(mail.html).toContain('href="https://app.example.com/r/1.');
     expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), BK1);
     expect(emailSend.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.stampReviewRequested.mock.invocationCallOrder[0]!);
+  });
+
+  it("carries the provider's idempotency key review-checkin/<booking>, because it stays due ~34 h (mutation: drop the key -> FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
+    await reviewRequestPass.run(ctx());
+    expect(sentMail().idempotencyKey).toBe(`review-checkin/${BK1}`);
+  });
+
+  it("an unstamped check-in's log line names the key and the 36 h, not the morning band's '11 more copies'", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
+    dbMocks.stampReviewRequested.mockRejectedValue(new Error("db unavailable"));
+    await reviewRequestPass.run(ctx());
+    const text = vi.mocked(console.error).mock.calls.flat().join(" ");
+    expect(text).toContain("review-checkin/<booking>");
+    expect(text).not.toContain("11 more copies");
   });
 
   it("ignores the operator-typed body entirely: no review wording, the words are ours (plan D5)", async () => {
@@ -143,6 +159,11 @@ describe("the check-in sends two hours after the anchor, once", () => {
     expect(sentMail().html).toContain("Cuéntenos cómo nos fue");
   });
 
+  it("a check-in not yet two hours old is waitingForCheckin; one past 36 h is expiredCheckin, counted apart so it cannot hide in 'waiting'", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row(), second({ completedAt: at(COMPLETED, -40 * HOUR).toISOString(), endsAt: at(COMPLETED, -41 * HOUR).toISOString() })]);
+    expect(await reviewRequestPass.run(ctx(at(COMPLETED, HOUR)))).toEqual({ ...EMPTY, waitingForCheckin: 1, expiredCheckin: 1 });
+  });
+
   it("1 h 59 m after the anchor sends nothing and asks nothing (mutation: 2 h -> 0 -> FAILS)", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
     expect(await reviewRequestPass.run(ctx(at(COMPLETED, 2 * HOUR - 60_000)))).toEqual({ ...EMPTY, waitingForCheckin: 1 });
@@ -153,7 +174,7 @@ describe("the check-in sends two hours after the anchor, once", () => {
 
   it("past 36 h it is never sent: an outage of days cannot come back up and mail a forgotten job", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
-    expect(await reviewRequestPass.run(ctx(at(COMPLETED, CHECKIN_MAX_AGE_MS + 60_000)))).toEqual({ ...EMPTY, waitingForCheckin: 1 });
+    expect(await reviewRequestPass.run(ctx(at(COMPLETED, CHECKIN_MAX_AGE_MS + 60_000)))).toEqual({ ...EMPTY, expiredCheckin: 1 });
     expect(emailSend).not.toHaveBeenCalled();
   });
 
@@ -198,6 +219,18 @@ describe("the sending hours are the consent chain's: a job completed at 20:30 Ch
     // ...and the cron's own pass finds nothing to do afterwards.
     expect(await reviewRequestPass.run(release)).toEqual(EMPTY);
     expect(emailSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("a check-in held for a reason other than the hours is RELEASED on the anchor's OWN local day and SENDS (mutation: gate releases through the review request's band and later-day rules -> FAILS)", async () => {
+    // Completed 11:00 CDT, due 13:00, held by a billing pause or a ledger outage, released at 15:00 CDT the SAME day.
+    // The review request's gate would refuse it (same local day as the anchor); the check-in has no such rule.
+    const done = new Date("2026-09-09T16:00:00Z");      // Wed 11:00 CDT
+    const sameDay = row({ completedAt: done.toISOString(), endsAt: "2026-09-09T15:00:00.000Z", startsAt: "2026-09-09T14:00:00.000Z" });
+    const stamped = liveList([sameDay]);
+    const releasedAt = ctx(new Date("2026-09-09T20:00:00Z"));   // Wed 15:00 CDT
+    expect(await releaseReviewRequest(releasedAt, HELD_ROW())).toBe("sent");
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(stamped.has(BK1)).toBe(true);
   });
 
   it("a held check-in is RE-GATED on release, not re-banded: released past 36 h it is skipped, never sent, and leaves the queue", async () => {
@@ -275,6 +308,13 @@ describe("at most one request per customer per 90 days", () => {
     expect(await reviewRequestPass.run(ctx(new Date("2026-09-10T03:30:00Z")))).toEqual({ ...EMPTY, held: 1, skippedRecentlyAsked: 1 });
   });
 
+  it("the memory is scoped to the ACCOUNT: one address that is a customer of two businesses is asked by each (mutation: drop the account prefix -> FAILS)", async () => {
+    const OTHER = "9c2d7e1f-4d2b-4f3c-8b66-1a8b2d3e4f50";
+    dbMocks.listDueReviewRequests.mockResolvedValue([row(), row({ accountId: OTHER, bookingId: BK2, contactId: "ct_9", contactEmail: "ana@example.com" })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 2 });
+    expect(emailSend).toHaveBeenCalledTimes(2);
+  });
+
   it("different customers are all asked", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([row(), second()]);
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 2 });
@@ -326,9 +366,20 @@ describe("every refusal is counted under its own name, sends nothing and stamps 
     expect(await refused(row({ config: null }))).toEqual({ ...EMPTY, skippedInvalidConfig: 1 });
   });
 
-  it("no usable origin, never a link that cannot work: skippedNoLink (the cron's own vercel.app origin is not a substitute)", async () => {
+  it("APP_ORIGIN not configured, whatever ctx.origin says: skippedNoLink. The cron's own vercel.app origin is NOT a substitute, Gmail discards mail over it (mutation: build from ctx.origin again -> FAILS)", async () => {
+    vi.stubEnv("APP_ORIGIN", "");
+    expect(await refused(row(), ctx(TICK, "https://bis-platform-abc123.vercel.app"))).toEqual({ ...EMPTY, skippedNoLink: 1 });
     expect(await refused(row(), ctx(TICK, ""))).toEqual({ ...EMPTY, skippedNoLink: 1 });
-    expect(await refused(row(), ctx(TICK, "not a url"))).toEqual({ ...EMPTY, skippedNoLink: 1 });
+    vi.stubEnv("APP_ORIGIN", "not a url");
+    expect(await refused(row(), ctx(TICK, "https://app.example.com"))).toEqual({ ...EMPTY, skippedNoLink: 1 });
+  });
+
+  it("with APP_ORIGIN configured the link is built on IT, not on ctx.origin", async () => {
+    vi.stubEnv("APP_ORIGIN", "https://app.bis-rgv.com/");
+    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
+    await reviewRequestPass.run(ctx(TICK, "https://bis-platform-abc123.vercel.app"));
+    expect(sentMail().body).toContain("https://app.bis-rgv.com/r/1.");
+    expect(sentMail().body).not.toContain("vercel.app");
   });
 
   it("a link that cannot be sealed (no secret): skippedNoLink", async () => {

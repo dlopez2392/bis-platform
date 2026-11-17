@@ -13,7 +13,7 @@ const hrefsOf = (html: string) => [...html.matchAll(/href="([^"]+)"/g)].map((m) 
 describe("reviewCheckinEmail (F-072, plan D6)", () => {
   it("English: the subject, the one question and the one button, exactly as decided", () => {
     const { subject, html, text } = reviewCheckinEmail({ brand, checkinUrl: LINK });
-    expect(subject).toBe("How did we do, Rio Roofing?");
+    expect(subject).toBe("Rio Roofing: how did we do?");
     expect(html).toContain('<p style="margin:0 0 12px;">Thanks for choosing Rio Roofing. One quick question: how did we do?</p>');
     expect(html).toContain(">Tell us how we did</a>");
     expect(text).toBe(`Thanks for choosing Rio Roofing. One quick question: how did we do?\n\n${LINK}`);

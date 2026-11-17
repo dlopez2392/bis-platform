@@ -2047,7 +2047,15 @@ async function withoutCheckedInBookings<T extends { account_id: string; review_r
 ): Promise<T[]> {
   const asked = rows.filter((r) => r.review_requested_at);
   if (asked.length === 0) return rows;
-  const on = await accountsWithCheckin(db, [...new Set(asked.map((r) => r.account_id))]);
+  let on: Set<string>;
+  try {
+    on = await accountsWithCheckin(db, [...new Set(asked.map((r) => r.account_id))]);
+  } catch (e) {
+    // Degrade safely: the asked bookings stand down for this tick (a second "how did it go" is the harm), the rest
+    // go on, and the pass is not taken down by a read it only makes for a handful of rows.
+    console.error(`withoutCheckedInBookings: the check-in recipes could not be read, ${asked.length} asked booking(s) stand down this tick: ${String(e)}`);
+    return rows.filter((r) => !r.review_requested_at);
+  }
   return on.size === 0 ? rows : rows.filter((r) => !(r.review_requested_at && on.has(r.account_id)));
 }
 

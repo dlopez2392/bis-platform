@@ -1238,7 +1238,16 @@ export async function listDueReferralAsks(
   if (owned.length === 0) return [];
   // F-072 (plan D7b, owner answer Q5): a customer who said the job was "not great" is not asked whether they know
   // anyone. ONLY not-great; the rest of the ladder is untouched. The read is skipped when nothing is due.
-  const notGreat = await notGreatBookingIds(db, windowStart);
+  // Scoped to the accounts in play and bounded. A read that fails FAILS CLOSED FOR THIS TICK (nothing is asked, the
+  // rows are due again next tick, the error is logged), never open: asking a customer who said "not great" whether
+  // they know anyone is the one thing this guard exists to stop, and a thrown error would take the whole pass down.
+  let notGreat: Set<string>;
+  try {
+    notGreat = await notGreatBookingIds(db, [...new Set(owned.map((r) => r.account_id as string))], windowStart);
+  } catch (e) {
+    console.error(`listDueReferralAsks: the not-great answers could not be read, no referral ask is due this tick: ${String(e)}`);
+    return [];
+  }
   const rows = owned.filter((r) => !notGreat.has(r.id));
   if (rows.length === 0) return [];
 

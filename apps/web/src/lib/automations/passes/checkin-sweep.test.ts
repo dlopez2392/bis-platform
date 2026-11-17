@@ -54,6 +54,24 @@ describe("sweepCheckinTasks", () => {
     expect(CHECKIN_SWEEP_LIMIT).toBeLessThanOrEqual(50);
   });
 
+  it("a full page is counted checkinSweepPageFull (there may be more task-missing rows than this tick looked at)", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue(Array.from({ length: CHECKIN_SWEEP_LIMIT }, (_, i) => checkin(`a${i}`, "ct-a")));
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: CHECKIN_SWEEP_LIMIT, checkinSweepPageFull: 1 });
+  });
+
+  it("the To-do's title reads the contact in the CHECK-IN's account, never another's (mutation: drop taskTitle's account filter -> FAILS)", async () => {
+    const world = fakeDb({
+      contacts: [
+        { id: "ct-a", account_id: "other-account", first_name: "Wrong", last_name: "Person" },
+        { id: "ct-a", account_id: ACCT, first_name: "Ana", last_name: "García" },
+      ],
+      accounts: [{ id: ACCT, language: "en" }],
+    });
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
+    await sweepCheckinTasks({ ...ctx(), db: world.db });
+    expect(dbm.ensureCheckinTask.mock.calls[0]![3].title).toBe("Call Ana García: they said the job was not great");
+  });
+
   it("says nothing on a quiet tick: no counters at all", async () => {
     expect(await sweepCheckinTasks(ctx())).toEqual({});
     expect(dbm.ensureCheckinTask).not.toHaveBeenCalled();
@@ -103,6 +121,14 @@ describe("the reviewRequests key: the check-in pass, then the sweep", () => {
 
   it("is the review request's own key, so the cron's JSON keeps its shape", () => {
     expect(reviewRequestsPass.key).toBe("reviewRequests");
+  });
+
+  it("its heartbeat goes red for a check-in with no link and for a To-do that cannot be made, and only then", () => {
+    const beat = reviewRequestsPass.beatFailure!;
+    expect(beat({ sent: 3, skippedNoLink: 1 })).toMatch(/no link can be made/);
+    expect(beat({ checkinTasksFailed: 2 })).toMatch(/2 To-do/);
+    expect(beat({ sent: 1, skippedRecentlyAsked: 4, waitingForCheckin: 2, expiredCheckin: 1, checkinSweepPageFull: 1 })).toBeNull();
+    expect(beat({})).toBeNull();
   });
 
   it("returns the pass's counters UNCHANGED on a quiet tick (byte-identical for every account without the feature)", async () => {

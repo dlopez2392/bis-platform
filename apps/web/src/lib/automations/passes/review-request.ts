@@ -8,13 +8,14 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { reviewRequestEmail } from "@/lib/email/templates/review-request";
 import { reviewCheckinEmail } from "@/lib/email/templates/review-checkin";
 import { checkinLink } from "@/lib/checkin/token";
+import { configuredOrigin } from "@/lib/email/origin";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { normalisePhone } from "@bis/db/phone";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { laterOf } from "../anchor";
 import { shouldSendReviewRequestNow } from "../review-request-gate";
-import { shouldSendCheckinNow, CHECKIN_MAX_AGE_MS } from "../review-checkin-gate";
+import { checkinTiming, CHECKIN_MAX_AGE_MS } from "../review-checkin-gate";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "../review-request-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
@@ -47,7 +48,7 @@ type Target =
  * link must be sealable; and a customer is asked at most once per 90 days, by contact AND by address (the
  * database read plus a memory of this tick, which the stamp cannot cover until it lands). The held/released path
  * is the same loop, so a held check-in is re-gated on release. An account WITHOUT the flag runs none of this.
- * The check-in's own counters (`waitingForCheckin`, `skippedRecentlyAsked`, `skippedNoMailingAddress`,
+ * The check-in's own counters (`waitingForCheckin` (not yet two hours), `expiredCheckin` (past 36 h), `skippedRecentlyAsked`, `skippedNoMailingAddress`,
  * `skippedNoLink`) appear in the result only when nonzero, so the cron's JSON for every account without it is
  * byte-identical to before (route.test.ts is the proof).
  *
@@ -93,7 +94,7 @@ export async function processReviewRequests(
     waitingForMorning: 0, unresolvableTimezone: 0,
   };
   // F-072's own counters: merged into the result only when nonzero (see the pass's comment).
-  const k = { waitingForCheckin: 0, skippedRecentlyAsked: 0, skippedNoMailingAddress: 0, skippedNoLink: 0 };
+  const k = { waitingForCheckin: 0, expiredCheckin: 0, skippedRecentlyAsked: 0, skippedNoMailingAddress: 0, skippedNoLink: 0 };
 
   // Per-account memos for one tick: the sender gate and the daily count
   // are answered once per account, not once per row.
@@ -154,8 +155,9 @@ export async function processReviewRequests(
       // review request's does: there is no band to skip on a release, so a held check-in is re-gated, not re-banded.
       // Silent on a normal tick (the row is simply examined again next tick); on a release a real skip, or the row
       // keeps its past `held_until` and parks the head of the queue.
-      if (!shouldSendCheckinNow(ctx.now, anchor, row.accountTimezone)) {
-        k.waitingForCheckin++;
+      const timing = checkinTiming(ctx.now, anchor, row.accountTimezone);
+      if (timing !== "due") {
+        if (timing === "late") k.expiredCheckin++; else k.waitingForCheckin++;
         if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
         continue;
       }
@@ -256,11 +258,14 @@ export async function processReviewRequests(
           await logSkipped(ctx, subject, REASONS.noMailingAddress);
           continue;
         }
-        // The page link, sealed now. No link that works (no APP_ORIGIN, no secret, a production secret under 32
-        // characters, an id that is not a uuid) means NO email: a dead or weakly signed link is worse than none.
+        // The page link, sealed now, on the CONFIGURED origin only (plan D6): `ctx.origin` falls back to the request's
+        // own host, which for a cron is the deployment's vercel.app URL, and Gmail discards mail whose links point
+        // there. No link that works (APP_ORIGIN not configured, no secret, a production secret under 32 characters,
+        // an id that is not a uuid) means NO email: a dead or weakly signed link is worse than none.
         // Console only on a normal tick (a deployment fault, not the customer's), a real skip on a release.
         checkinUrl = checkinLink({
-          accountId: row.accountId, bookingId: row.bookingId, language: row.language, now: ctx.now, origin: ctx.origin,
+          accountId: row.accountId, bookingId: row.bookingId, language: row.language, now: ctx.now,
+          origin: configuredOrigin(),
         });
         if (checkinUrl === null) {
           k.skippedNoLink++;
@@ -370,8 +375,11 @@ export async function processReviewRequests(
           c.unstamped++;
           console.error(
             `review request sent but NOT stamped for booking ${row.bookingId} after `
-            + `${stamp.attempts} attempts — expect up to 11 more copies before the morning band `
-            + `closes: ${String(stamp.lastError)}`,
+            + (asCheckin
+              ? `${stamp.attempts} attempts — it stays due and is retried every tick until it ages out (36 h); the `
+                + `provider's idempotency key (review-checkin/<booking>) deduplicates the retries for 24 h: `
+              : `${stamp.attempts} attempts — expect up to 11 more copies before the morning band closes: `)
+            + String(stamp.lastError),
           );
         }
 
@@ -445,6 +453,9 @@ async function sendCheckinEmail(ctx: PassContext, row: DueReviewRequest, to: str
     to, fromName: brand.name, fromAddress: row.fromEmail ?? undefined,
     replyTo: normalizeReplyTo(row.replyToEmail),
     subject, body: text, html, language: row.language,
+    // ONE fixed key per booking: a check-in stays due ~34 h (anything that failed after it landed, or a stamp that
+    // never did, is retried on the next tick with the same key and the provider deduplicates it for 24 h).
+    idempotencyKey: `review-checkin/${row.bookingId}`,
   });
 }
 

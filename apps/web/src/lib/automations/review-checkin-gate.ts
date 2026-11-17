@@ -33,9 +33,18 @@ import { resolveAccountZone } from "@/lib/booking/followup-timing";
 export const CHECKIN_DELAY_MS = 2 * 60 * 60 * 1000;
 export const CHECKIN_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 
-export function shouldSendCheckinNow(now: Date, anchor: Date, timezone: string): boolean {
+/** Where a check-in stands on the clock: `early` (under 2 h, or an unreadable instant or zone: it is not time), `due`,
+ *  or `late` (past 36 h: it will never send, and the pass counts it apart so a quiet "waiting" count cannot hide it). */
+export type CheckinTiming = "early" | "due" | "late";
+
+export function checkinTiming(now: Date, anchor: Date, timezone: string): CheckinTiming {
   const elapsedMs = now.getTime() - anchor.getTime();
-  if (!Number.isFinite(elapsedMs)) return false;
-  if (resolveAccountZone(timezone) === null) return false;
-  return elapsedMs >= CHECKIN_DELAY_MS && elapsedMs <= CHECKIN_MAX_AGE_MS;
+  if (!Number.isFinite(elapsedMs)) return "early";
+  if (resolveAccountZone(timezone) === null) return "early";
+  if (elapsedMs < CHECKIN_DELAY_MS) return "early";
+  return elapsedMs <= CHECKIN_MAX_AGE_MS ? "due" : "late";
+}
+
+export function shouldSendCheckinNow(now: Date, anchor: Date, timezone: string): boolean {
+  return checkinTiming(now, anchor, timezone) === "due";
 }

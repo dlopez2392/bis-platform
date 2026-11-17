@@ -8,7 +8,8 @@ import { reviewRequestPass } from "./review-request";
  * The reconcile sweep for "not great" To-dos (F-072 PR 3; plan D3, PR 2's review). The answer page retries the To-do
  * a few times and a replay repairs it, but a customer who never taps again would leave an owner with no To-do and a
  * page that told the customer "We've let {name} know". Every tick this reads the not-great answers of the last
- * CHECKIN_SWEEP_WINDOW_MS that have no To-do (bounded by CHECKIN_SWEEP_LIMIT) and asks for each; the unique index
+ * CHECKIN_SWEEP_WINDOW_MS that have no To-do (the filter is in the query, so CHECKIN_SWEEP_LIMIT bounds only rows
+ * that still need one; a full page is counted `checkinSweepPageFull`) and asks for each; the unique index
  * (tasks_review_checkin_once) makes a call that loses a race a no-op, so it can never make a second.
  *
  * The window is short on purpose: a To-do the owner deliberately removed is not remade for ever. It is long enough
@@ -23,7 +24,7 @@ export const CHECKIN_SWEEP_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const CHECKIN_SWEEP_LIMIT = 25;
 
 export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters> {
-  const out = { checkinTasksOpened: 0, checkinTasksFailed: 0 };
+  const out = { checkinTasksOpened: 0, checkinTasksFailed: 0, checkinSweepPageFull: 0 };
   let missing;
   try {
     missing = await listCheckinsMissingTask(ctx.db, new Date(ctx.now.getTime() - CHECKIN_SWEEP_WINDOW_MS).toISOString(), CHECKIN_SWEEP_LIMIT);
@@ -31,6 +32,8 @@ export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters>
     console.error(`check-in sweep: the not-great answers could not be read: ${loggableError(e)}`);
     return { checkinTasksFailed: 1 };
   }
+  // A full page means there may be more task-missing rows than this tick looked at (the next tick takes them).
+  if (missing.length >= CHECKIN_SWEEP_LIMIT) out.checkinSweepPageFull = 1;
   for (const checkin of missing) {
     try {
       const title = await taskTitle(ctx.db, checkin.accountId, checkin.contactId);
@@ -52,6 +55,13 @@ export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters>
  */
 export const reviewRequestsPass: Pass = {
   key: reviewRequestPass.key,
+  /** A check-in that cannot be sent for want of a link, or a To-do the sweep cannot make, is a deployment or database
+   *  fault nobody is watching: make the heartbeat red so opsWatch can say so. Counters are unchanged. */
+  beatFailure: (c) => {
+    if ((c.skippedNoLink ?? 0) > 0) return `review check-ins are not sent: no link can be made (${c.skippedNoLink}); APP_ORIGIN or CONSENT_TOKEN_SECRET is unset or unusable`;
+    if ((c.checkinTasksFailed ?? 0) > 0) return `the check-in sweep could not make ${c.checkinTasksFailed} To-do(s)`;
+    return null;
+  },
   async run(ctx) {
     let counters: PassCounters | undefined;
     let failure: unknown;

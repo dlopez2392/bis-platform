@@ -141,15 +141,17 @@ export async function checkinCounts(db: SupabaseClient, accountId: string, since
 }
 
 /**
- * The ids of bookings whose customer answered "not great" since `sinceIso` (plan D7b, owner answer Q5): the referral
- * ask skips them. ONLY "not great": an "okay" or a "great" never blocks it. One bounded read (answers are rare and the
- * window is the referral list's own 85 h), filtered by the caller against the rows it already holds, so a long list
- * of booking ids never travels in a URL. THROWS on a read error: answering "nobody" would ask a customer who just
- * said the job was not great whether they know anyone.
+ * The ids of bookings, among THESE accounts', whose customer answered "not great" since `sinceIso` (plan D7b, owner
+ * answer Q5): the referral ask skips them. ONLY "not great": an "okay" or a "great" never blocks it. One bounded read
+ * scoped to the accounts the caller already holds rows for (never platform-wide) and capped at NOT_GREAT_READ_LIMIT,
+ * filtered by the caller against the rows it holds, so a long list of booking ids never travels in a URL. THROWS on
+ * a read error; the caller decides how to fail (the referral list fails closed for the tick).
  */
-export async function notGreatBookingIds(db: SupabaseClient, sinceIso: string): Promise<Set<string>> {
+export const NOT_GREAT_READ_LIMIT = 1000;
+export async function notGreatBookingIds(db: SupabaseClient, accountIds: readonly string[], sinceIso: string): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set();
   const { data, error } = await db.from("job_checkins").select("booking_id")
-    .eq("answer", "not_great").gte("answered_at", sinceIso);
+    .in("account_id", [...accountIds]).eq("answer", "not_great").gte("answered_at", sinceIso).limit(NOT_GREAT_READ_LIMIT);
   if (error) throw new Error(`notGreatBookingIds failed: ${error.message}`);
   return new Set(((data ?? []) as { booking_id: string }[]).map((r) => r.booking_id));
 }
@@ -182,23 +184,18 @@ export async function accountsWithCheckin(db: SupabaseClient, accountIds: readon
 /**
  * "Not great" answers answered since `sinceIso` whose To-do does not exist (plan D3, PR 2's review): the sweep's
  * read. The answer page retries the To-do a few times and a replay repairs it, but a customer who never taps again
- * needs this. Newest first and BOUNDED by `limit`, so the pass's work per tick is bounded whatever the table holds;
- * the To-do read is one `in` over at most `limit` ids. Two reads rather than an embed anti-join: unambiguous, and
- * the second is skipped when there are no candidates, which is nearly every tick. The `limit` counts the newest
- * not-great answers in the window INCLUDING ones whose To-do exists, so a window holding more than `limit` of them
- * could hide an older missing one: a ceiling, accepted at today's volume (a handful of not-great answers a day
- * across the platform), to be raised before it can bite. THROWS on a read error.
+ * needs this. The "no linked To-do" filter is IN THE QUERY (a PostgREST embed of tasks through
+ * `tasks.review_checkin_id`, filtered `is null`, which PostgREST turns into an anti-join), so `limit` bounds the
+ * rows that still NEED a To-do and rows that have one can never crowd a missing one out of the page. Newest first.
+ * No RPC and no migration. THE EMBED FILTER IS PROVEN ONLY AGAINST A REAL DATABASE (test/job-checkins.test.ts, "26
+ * answered-with-To-do rows newer than one missing"); where that case cannot run, CI must prove it. If PostgREST
+ * ever refuses it the read THROWS, the sweep counts `checkinTasksFailed`, and the fallback is the earlier two-read
+ * shape (newest `limit` answers, then one `in` over their ids), which is correct but can be crowded. THROWS on error.
  */
 export async function listCheckinsMissingTask(db: SupabaseClient, sinceIso: string, limit: number): Promise<JobCheckin[]> {
-  const { data, error } = await db.from("job_checkins").select(COLS)
-    .eq("answer", "not_great").gte("answered_at", sinceIso)
+  const { data, error } = await db.from("job_checkins").select(`${COLS}, tasks!review_checkin_id(id)`)
+    .eq("answer", "not_great").gte("answered_at", sinceIso).is("tasks", null)
     .order("answered_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listCheckinsMissingTask failed: ${error.message}`);
-  const rows = (data ?? []) as Row[];
-  if (rows.length === 0) return [];
-  const { data: tasks, error: taskErr } = await db.from("tasks").select("review_checkin_id")
-    .in("review_checkin_id", rows.map((r) => r.id));
-  if (taskErr) throw new Error(`listCheckinsMissingTask failed: ${taskErr.message}`);
-  const have = new Set(((tasks ?? []) as { review_checkin_id: string }[]).map((t) => t.review_checkin_id));
-  return rows.filter((r) => !have.has(r.id)).map(toCheckin);
+  return ((data ?? []) as Row[]).map(toCheckin);
 }

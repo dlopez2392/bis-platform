@@ -17,7 +17,7 @@ import { listCheckinsMissingTask } from "./job-checkins";
  *  - the sweep's read: "not great" answers with no To-do, bounded.
  */
 type Call = { table: string; method: string; args: unknown[] };
-function fakeDb(answers: Record<string, unknown>) {
+function fakeDb(answers: Record<string, unknown>, errors: Record<string, string> = {}) {
   const calls: Call[] = [];
   const chainFor = (table: string): unknown => {
     let single = false;
@@ -29,7 +29,8 @@ function fakeDb(answers: Record<string, unknown>) {
             const answer = seeded ? answers[table] : (single ? null : []);
             // A by-id read asks for ONE row: the first of a seeded list, enabled (the recipe read's `enabled`).
             const data = single && Array.isArray(answer) ? { enabled: true, ...(answer[0] as object) } : answer;
-            return Promise.resolve({ data, error: null, count: 0 }).then(res, rej);
+            const error = Object.prototype.hasOwnProperty.call(errors, table) ? { message: errors[table] } : null;
+            return Promise.resolve({ data: error ? null : data, error, count: 0 }).then(res, rej);
           };
         }
         if (method === "maybeSingle" || method === "single") single = true;
@@ -94,6 +95,14 @@ describe("the calendar follow-up stands down for a check-in that went out (D7a, 
     expect(readTables(calls)).not.toContain("automations");
   });
 
+  it("a recipe read that fails degrades safely: the asked booking stands down this tick, the rest still go, the pass is not taken down", async () => {
+    const { db } = fakeDb({
+      bookings: [followupRow("asked", { review_requested_at: "2026-09-09T16:00:00Z" }), followupRow("plain")],
+      accounts: ACCOUNT_ROW, automations: CHECKIN_ON,
+    }, { automations: "boom" });
+    expect((await listDueFollowups(db, NOW)).map((d) => d.bookingId)).toEqual(["plain"]);
+  });
+
   it("the by-id read a release makes stands down the same way: gone, so the held row leaves the queue", async () => {
     const { db } = fakeDb({
       bookings: followupRow("asked", { review_requested_at: "2026-09-09T16:00:00Z" }), accounts: ACCOUNT_ROW, automations: CHECKIN_ON,
@@ -124,11 +133,18 @@ describe("the referral ask skips a customer who said 'not great' (D7b, Q5)", () 
     expect((await listDueReferralAsks(db, NOW)).map((d) => d.bookingId)).toEqual(["fine"]);
   });
 
-  it("asks the check-ins for not_great ONLY: an okay or great answer never blocks the ask", async () => {
+  it("asks the check-ins for not_great ONLY, scoped to the accounts in play and bounded (never platform-wide)", async () => {
     const { db, calls } = fakeDb({ bookings: [referralRow("fine")], accounts: ACCOUNT_ROW, automations: REFERRAL_ON, job_checkins: [] });
     await listDueReferralAsks(db, NOW);
-    const eqs = calls.filter((c) => c.table === "job_checkins" && c.method === "eq").map((c) => c.args);
-    expect(eqs).toContainEqual(["answer", "not_great"]);
+    const asked = calls.filter((c) => c.table === "job_checkins").map((c) => [c.method, ...c.args]);
+    expect(asked).toContainEqual(["eq", "answer", "not_great"]);
+    expect(asked).toContainEqual(["in", "account_id", [ACCT]]);
+    expect(asked.some((a) => a[0] === "limit")).toBe(true);
+  });
+
+  it("a not-great read that fails FAILS CLOSED for the tick: no referral ask is due, nothing throws", async () => {
+    const { db } = fakeDb({ bookings: [referralRow("a"), referralRow("b")], accounts: ACCOUNT_ROW, automations: REFERRAL_ON }, { job_checkins: "boom" });
+    expect(await listDueReferralAsks(db, NOW)).toEqual([]);
   });
 
   it("the by-id read a release makes excludes it too: gone", async () => {
@@ -161,26 +177,33 @@ describe("the review-request due row carries the account's mailing address (D4)"
 describe("listCheckinsMissingTask: the sweep's read", () => {
   const checkin = (id: string) => ({
     id, account_id: ACCT, booking_id: `bk-${id}`, contact_id: `c-${id}`, answer: "not_great",
-    answered_at: "2026-09-10T14:00:00Z", review_link_opened_at: null,
+    answered_at: "2026-09-10T14:00:00Z", review_link_opened_at: null, tasks: [],
   });
 
-  it("returns the not-great answers that have no To-do, and not the ones that do (mutation: skip the subtraction -> FAILS)", async () => {
-    const { db } = fakeDb({ job_checkins: [checkin("a"), checkin("b")], tasks: [{ review_checkin_id: "a" }] });
-    expect((await listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50)).map((c) => c.id)).toEqual(["b"]);
+  it("returns what the query returns, as check-ins: the 'no To-do' filter is in the QUERY, not applied afterwards", async () => {
+    const { db } = fakeDb({ job_checkins: [checkin("a"), checkin("b")] });
+    expect((await listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50)).map((c) => c.id)).toEqual(["a", "b"]);
   });
 
-  it("asks only for not_great, inside the window, newest first, bounded", async () => {
-    const { db, calls } = fakeDb({ job_checkins: [], tasks: [] });
+  it("filters to answers with NO linked To-do (the anti-join), not_great only, inside the window, newest first, bounded (mutation: drop the null filter -> FAILS)", async () => {
+    const { db, calls } = fakeDb({ job_checkins: [] });
     await listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50);
-    const asked = calls.filter((c) => c.table === "job_checkins");
-    expect(asked.map((c) => [c.method, ...c.args])).toEqual(expect.arrayContaining([
-      ["eq", "answer", "not_great"], ["gte", "answered_at", "2026-09-01T00:00:00Z"], ["limit", 50],
+    const asked = calls.filter((c) => c.table === "job_checkins").map((c) => [c.method, ...c.args]);
+    expect(asked).toEqual(expect.arrayContaining([
+      ["eq", "answer", "not_great"], ["gte", "answered_at", "2026-09-01T00:00:00Z"], ["is", "tasks", null],
+      ["order", "answered_at", { ascending: false }], ["limit", 50],
     ]));
+    expect(String(asked.find((a) => a[0] === "select")![1])).toContain("tasks!review_checkin_id(id)");
   });
 
-  it("does not read To-dos when there are no candidates", async () => {
-    const { db, calls } = fakeDb({ job_checkins: [], tasks: [] });
-    expect(await listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50)).toEqual([]);
+  it("never reads To-dos separately: no second read exists to be crowded by the page", async () => {
+    const { db, calls } = fakeDb({ job_checkins: [checkin("a")], tasks: [{ review_checkin_id: "a" }] });
+    await listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50);
     expect(readTables(calls)).not.toContain("tasks");
+  });
+
+  it("a read error throws (the sweep counts it)", async () => {
+    const { db } = fakeDb({}, { job_checkins: "boom" });
+    await expect(listCheckinsMissingTask(db, "2026-09-01T00:00:00Z", 50)).rejects.toThrow(/boom/);
   });
 });

@@ -101,7 +101,7 @@ describe("an opted-out address and a suppressed account get nothing (the check-i
 
 describe("what the customer receives, subject through footer", () => {
   for (const [language, subject, question, button, unsubscribe] of [
-    ["en", "How did we do, Rio Roofing?", "Thanks for choosing Rio Roofing. One quick question: how did we do?", "Tell us how we did", "unsubscribe"],
+    ["en", "Rio Roofing: how did we do?", "Thanks for choosing Rio Roofing. One quick question: how did we do?", "Tell us how we did", "unsubscribe"],
     ["es", "¿Cómo le fue con Rio Roofing?", "Gracias por elegir a Rio Roofing. Una pregunta rápida: ¿cómo le fue?", "Cuéntenos cómo nos fue", "cancelar"],
   ] as const) {
     it(`${language}: the brand's logo and name, ONE check-in link in both parts, and the gate's unsubscribe footer and postal address`, async () => {
