@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import {
   isPersonLanguageValue, serviceDb, readMyOwnerLineEnrollment, readOwnerLineSwitch, readAccountTimezone,
-  OWNER_LINE_VERIFY_MINUTES, type PersonLanguage,
+  OWNER_LINE_VERIFY_MINUTES, listMySubscriptions, type PersonLanguage,
 } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
 import { THEME_COOKIE } from "@/lib/branding/theme-mode";
@@ -21,6 +21,9 @@ import {
   startOwnerLineVerificationAction, setOwnerLinePinAction, removeOwnerLinePinAction, removeOwnerLineCellAction,
 } from "./owner-line-actions";
 import { PreferencesPanel } from "@/components/preferences/preferences-panel";
+import { DailyBriefCard, DailyBriefCardError } from "@/components/preferences/daily-brief-card";
+import { dailyBriefRows, type DailyBriefRowView } from "@/components/preferences/daily-brief-view";
+import { setMyDailyBriefAction } from "./daily-brief-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -113,6 +116,9 @@ export default async function PreferencesPage({
   // text, and this is why it never renders in the first place.
   // An impersonation session reads nothing of the owner line (owner ruling 2026-11-09), so it is decided first.
   let slots: OwnerLineSlot[] = [];
+  // The daily brief card (F-082 PR 4) rides the same memberships read: `null` rows is its error state, [] its empty
+  // state. The agency and an impersonation session get no card at all (it is a person's own opt-in).
+  let briefRows: DailyBriefRowView[] | null | undefined;
   if (!actor) {
     const db = serviceDb();
     let memberships: MyMembership[] | null;
@@ -121,6 +127,15 @@ export default async function PreferencesPage({
     } catch (e) {
       console.error(`preferences: owner-line memberships read failed: ${loggableError(e)}`);
       memberships = null;
+    }
+    if (!isAgency) {
+      try {
+        briefRows = memberships === null ? null
+          : dailyBriefRows(memberships, memberships[0] === undefined ? [] : await listMySubscriptions(db, memberships[0].userId));
+      } catch (e) {
+        console.error(`preferences: daily brief read failed: ${loggableError(e)}`);
+        briefRows = null;
+      }
     }
     slots = memberships === null
       ? [{ kind: "error", mb: null }]
@@ -136,6 +151,16 @@ export default async function PreferencesPage({
         themeFallback={themeFallback}
         seenMode={seenMode}
       />
+      {briefRows !== undefined ? (
+        <section id="daily-brief" lang={locale} className="max-w-3xl px-6 pb-6">
+          {briefRows === null ? (
+            <DailyBriefCardError locale={locale} pseudo={pseudo} />
+          ) : (
+            <DailyBriefCard rows={briefRows} locale={locale} pseudo={pseudo}
+              setBrief={setMyDailyBriefAction} />
+          )}
+        </section>
+      ) : null}
       {slots.length > 0 ? (
         <section id="owner-line" lang={locale} className="max-w-3xl space-y-4 px-6 pb-6">
           {slots.map((slot) => slot.kind === "error" ? (

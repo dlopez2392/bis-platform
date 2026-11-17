@@ -93,6 +93,7 @@ import { m, type MessageKey } from "@/lib/messages";
 import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
 import { TradePickerDemo } from "./trade-picker-demo";
 import { BisAccessDemo } from "./bis-access-demo";
+import { DailyBriefDemo } from "./daily-brief-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -984,6 +985,11 @@ export default async function StyleguidePage({
           {/* S-22 slice 1: Google Calendar busy times, every state. Connect and Reconnect are the one primary where
               they show; Disconnect is always ghost; status is dot + word. */}
           <GoogleCardStates />
+        </Section>
+
+        {/* F-082 PR 4: the daily brief card on Mis preferencias: off and on rows, empty, error, skeleton, Spanish. */}
+        <Section title={t(m, "dailyBrief.card.title", "en")} file="components/preferences/daily-brief-card.tsx">
+          <DailyBriefDemo />
         </Section>
 
         {/* F-046 part 1 (plan Task 12, spec 5.2-5.6): the Agenda card, first on the Calendar page: a Day with two jobs
