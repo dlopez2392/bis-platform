@@ -105,7 +105,7 @@ PR 1 adds a migration, so its `e2e` gate waits on danlo's click for `migrations-
 
 Texting the check-in (a seam: the page and token are channel-free, the text composer would carry the same link once an account is registered); AI-written or auto-replies to an answer; the Google Business Profile API, reply-to-review and review import (S-34, F-170, gated); incentives or follow-up nagging; changing the referral ladder's timing; a weekly-report line; an owner-editable review link.
 
-## 8. OWNER QUESTIONS (each with a recommendation)
+## OWNER QUESTIONS — ANSWERED 2026-11-17 (danlo, tiles): Q1 one button; Q2 yes (only when the check-in sent); Q3 agency only; Q4 yes, email the owner at once (To-do alone if the sender is not cheaply reusable); Q5 skip the referral ask after 'not great' only; Q6 no weekly line; Q7 first answer wins
 
  - **Q1. One button or three links in the email?** Recommend ONE button that opens the page, with the three answers there. Three in-email links are a true one tap, but a mail scanner that fetches them records answers nobody gave and raises false alerts; the repo's `/u` rule (GET reads, a press writes) exists for this. Cost: the customer taps the email button, then the answer.
  - **Q2. Does the check-in replace the next-morning follow-up?** Recommend yes: when a check-in was sent for a booking, the calendar follow-up for it is skipped; if the check-in never sent, the follow-up still goes. Otherwise a customer gets two "how did it go" within a day.
