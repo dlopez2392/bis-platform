@@ -80,8 +80,9 @@ const HEAD: readonly PlanNode[] = [
   rel("quoteFollowups"),
   n("siteTraffic", ["billingPause"]), n("documentsSweep", ["billingPause"]),
   n("documentsScan", ["documentsSweep"]), n("documentsExpiry", ["documentsScan"]),
-  // F-082: the owner brief reads and writes only its own subscription row and sends one email per person; it
-  // depends on nothing but the pause (so a pause stamped this tick is read), and no pass reads what it writes.
+  // F-082: the owner brief reads and writes only its own subscription row and sends one email per person. A paused
+  // business STILL gets it (owner mail is never stopped by the billing pause, as with the weekly report): the pass
+  // reads no pause state, and follows billingPause only to keep the plan's shape. No pass reads what it writes.
   n("dailyOwnerBrief", ["billingPause"]),
   n("weeklyClientReport", ["billingPause"]), n("weeklyAgencyReport", ["weeklyClientReport"]),
   n(JOBS_DRAIN_KEY, ["billingPause"], "settled", JOBS_DRAIN_MAX_S),

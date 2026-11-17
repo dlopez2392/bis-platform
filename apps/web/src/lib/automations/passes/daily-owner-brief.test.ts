@@ -19,12 +19,13 @@ import { NO_CLOSURES } from "../closures";
 import { DAILY_BRIEF_TICK_CAP, DAILY_BRIEF_BUDGET_MS } from "../caps";
 import type { PassContext } from "../context";
 import { dailyOwnerBriefPass } from "./daily-owner-brief";
+import { runPass } from "../harness";
 
 const TICK = new Date("2027-03-10T13:00:00Z");   // 07:00 Wednesday in Chicago
 const ORIGIN = "https://app.example.com";
 const emailSend = vi.fn();
-const ctx = (): PassContext => ({
-  db: {} as never, now: TICK, origin: ORIGIN, email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) } as never,
+const ctx = (now: Date = TICK): PassContext => ({
+  db: {} as never, now, origin: ORIGIN, email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) } as never,
   sms: fakeSmsGate({ send: async () => ({ providerMessageId: "x" }) }), closures: NO_CLOSURES,
 });
 const UUID = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
@@ -110,6 +111,57 @@ describe("dailyOwnerBriefPass (orchestration)", () => {
     db.listDueBriefSubscriptions.mockResolvedValue([sub(1)]);
     expect(await dailyOwnerBriefPass.run(ctx())).toMatchObject({ sent: 0, skippedNoWayOut: 1 });
     expect(db.claimBriefDay).not.toHaveBeenCalled();
+  });
+
+  const keyOf = (call: number) => (emailSend.mock.calls[call]![0] as { idempotencyKey?: string }).idempotencyKey;
+
+  it("the send carries a FIXED idempotency key per business, person and local day, so a retry can never be a second email (mutation: a random key -> FAILS)", async () => {
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1)]);
+    await dailyOwnerBriefPass.run(ctx());
+    expect(keyOf(0)).toBe(`daily-brief/${UUID(2001)}/${UUID(1001)}/2027-03-10`);
+  });
+
+  it("ANY send failure releases (the key makes the retry safe), and the retry reuses the SAME key", async () => {
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1)]);
+    emailSend.mockRejectedValueOnce(new Error("Unable to fetch data. The request could not be resolved."));
+    expect(await dailyOwnerBriefPass.run(ctx())).toMatchObject({ sent: 0, failed: 1, released: 1 });
+    expect(await dailyOwnerBriefPass.run(ctx(new Date(TICK.getTime() + 900_000)))).toMatchObject({ sent: 1 });
+    expect(keyOf(1)).toBe(keyOf(0));
+    expect(keyOf(0)).toBeDefined();
+  });
+
+  it("the person's enabling day is their ACCOUNT-local day: a Chicago owner who enabled at 20:00 on the 9th is sent on the 10th (mutation: the UTC day -> FAILS)", async () => {
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1, { enabledAt: "2027-03-10T02:00:00Z" })]);   // 20:00 Chicago on the 9th, but the 10th in UTC
+    expect(await dailyOwnerBriefPass.run(ctx())).toMatchObject({ sent: 1, skippedNotYet: 0 });
+  });
+
+  it("a zone ahead of UTC: enabling at 00:30 local on the 10th is NOT sent that morning, 23:30 on the 9th is (mutation: the UTC day -> FAILS)", async () => {
+    const tokyo7am = new Date("2027-03-09T22:00:00Z");   // 07:00 on the 10th in Tokyo
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1, { accountTimezone: "Asia/Tokyo", enabledAt: "2027-03-09T15:30:00Z" })]);   // 00:30 on the 10th, the 9th in UTC
+    expect(await dailyOwnerBriefPass.run(ctx(tokyo7am))).toMatchObject({ sent: 0, skippedNotYet: 1 });
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1, { accountTimezone: "Asia/Tokyo", enabledAt: "2027-03-09T14:30:00Z" })]);   // 23:30 on the 9th
+    expect(await dailyOwnerBriefPass.run(ctx(tokyo7am))).toMatchObject({ sent: 1 });
+  });
+
+  it("a row whose role is not in DAILY_BRIEF_ROLES is skipped and counted, even if the list handed it over (mutation: the check removed -> FAILS)", async () => {
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1, { role: "technician" as never })]);
+    expect(await dailyOwnerBriefPass.run(ctx())).toMatchObject({ sent: 0, skippedRole: 1 });
+    expect(db.claimBriefDay).not.toHaveBeenCalled();
+  });
+
+  it("a tick that sent nothing and failed something is a FAILED heartbeat (so opsWatch can alert); one that sent anything, or failed nothing, is not (mutation: the rule removed -> FAILS)", async () => {
+    const beat = vi.fn(async () => {});
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1)]);
+    emailSend.mockRejectedValue(new Error("down"));
+    const counters = await runPass(dailyOwnerBriefPass, ctx(), beat);
+    expect(counters).toMatchObject({ sent: 0, failed: 1 });
+    expect(beat).toHaveBeenCalledWith(expect.anything(), "cron.pass.dailyOwnerBrief", { ok: false, error: expect.stringContaining("1") });
+    beat.mockClear();
+    emailSend.mockResolvedValue({ kind: "sent", providerMessageId: "m" });
+    db.listDueBriefSubscriptions.mockResolvedValue([sub(1), sub(2)]);
+    emailSend.mockRejectedValueOnce(new Error("down"));
+    await runPass(dailyOwnerBriefPass, ctx(), beat);
+    expect(beat).toHaveBeenCalledWith(expect.anything(), "cron.pass.dailyOwnerBrief", { ok: true });
   });
 
   it("what is handed to the gate: the operator kind, the brand as From, the signed one-click link, the person's language", async () => {

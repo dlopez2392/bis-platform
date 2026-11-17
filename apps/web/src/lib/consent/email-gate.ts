@@ -196,6 +196,7 @@ function sendFields(req: EmailRequest): SendEmailInput {
     ...(req.fromAddress !== undefined ? { fromAddress: req.fromAddress } : {}),
     ...(req.replyTo !== undefined ? { replyTo: req.replyTo } : {}),
     subject: req.subject, body: req.body,
+    ...(req.idempotencyKey !== undefined ? { idempotencyKey: req.idempotencyKey } : {}),
     ...(tags ? { tags } : {}),
   };
 }

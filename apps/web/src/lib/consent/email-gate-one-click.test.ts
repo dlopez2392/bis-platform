@@ -118,6 +118,14 @@ describe("sendEmail: the headers reach the provider for the kind that opted in, 
     expect(headersSent()).toEqual({ "List-Unsubscribe": `<${ONE_CLICK}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" });
   });
 
+  it("the gate hands the caller's idempotencyKey to the provider, and a request without one carries none (the provider then mints a random key; mutation: drop it from sendFields -> FAILS)", async () => {
+    await sendEmail(req("operator.daily_brief", { idempotencyKey: "daily-brief/a/u/2027-03-10" }), { db: {} as never, env: ENV });
+    expect((send.mock.calls[0]![0] as { idempotencyKey?: string }).idempotencyKey).toBe("daily-brief/a/u/2027-03-10");
+    send.mockClear();
+    await sendEmail(req("operator.weekly_report"), { db: {} as never, env: ENV });
+    expect(send.mock.calls[0]![0]).not.toHaveProperty("idempotencyKey");
+  });
+
   it("every other OPERATOR kind ignores a link it was handed: no headers", async () => {
     const others = Object.entries(MOCKED_KINDS as Record<string, EmailKindSpec>)
       .filter(([k, s]) => s.class === "operator" && !k.startsWith("operator.probe_") && k !== "operator.daily_brief").map(([k]) => k);

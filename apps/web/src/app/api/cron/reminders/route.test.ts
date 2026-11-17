@@ -358,7 +358,7 @@ const EMPTY_NO_SHOW_NUDGES = {
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
 // F-082: nothing is subscribed here (no subscription can exist before the opt-in ships), so the pass reports idle counters.
-const EMPTY_DAILY_BRIEF = { sent: 0, failed: 0, skippedQuiet: 0, skippedAlreadyHandled: 0, skippedNotInBand: 0, skippedNotYet: 0, skippedCap: 0, skippedBudget: 0, skippedNoOrigin: 0, skippedNoWayOut: 0, unresolvableTimezone: 0, released: 0, unstamped: 0 };
+const EMPTY_DAILY_BRIEF = { sent: 0, failed: 0, skippedQuiet: 0, skippedAlreadyHandled: 0, skippedNotInBand: 0, skippedNotYet: 0, skippedCap: 0, skippedBudget: 0, skippedNoOrigin: 0, skippedNoWayOut: 0, unresolvableTimezone: 0, released: 0, unstamped: 0, skippedRole: 0 };
 const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0, skippedCap: 0, skippedBudget: 0, unresolvableTimezone: 0, unstamped: 0 };
 // `skippedNoRecipient: 1`, not 0: `getAgencyReportTarget` is mocked to return
 // no row here, and refusing to send with nowhere to send TO — visibly, under

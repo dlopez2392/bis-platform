@@ -9,13 +9,21 @@ import { refuseProduction } from "../../../../e2e/fixtures/production-guard";
 loadEnv({ path: ".env.local" });
 refuseProduction(process.env, "lib/automations/passes/daily-owner-brief.live.test.ts");
 
-const provider = vi.hoisted(() => ({ sent: [] as { to: string; subject: string; body: string; html?: string; headers?: Record<string, string>; fromName?: string }[],
+const scope = vi.hoisted(() => ({ ids: new Set<string>() }));
+const provider = vi.hoisted(() => ({ sent: [] as { to: string; subject: string; body: string; html?: string; headers?: Record<string, string>; idempotencyKey?: string }[],
   fail: null as null | (() => never), hold: null as null | Promise<void> }));
+// The pass sees ONLY this file's own fixture subscriptions: a real subscription on the shared project (bis-ci) can
+// never be claimed or mailed by a test, whatever else is in the table.
+vi.mock("@bis/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@bis/db")>();
+  return { ...real, listDueBriefSubscriptions: async (db: Parameters<typeof real.listDueBriefSubscriptions>[0]) =>
+    (await real.listDueBriefSubscriptions(db)).filter((r) => scope.ids.has(r.subscriptionId)) };
+});
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getEmailProvider: () => ({
     isFake: true,
-    send: async (i: { to: string; subject: string; body: string; html?: string; headers?: Record<string, string> }) => {
+    send: async (i: { to: string; subject: string; body: string; html?: string; headers?: Record<string, string>; idempotencyKey?: string }) => {
       if (provider.hold) await provider.hold;
       if (provider.fail) provider.fail();
       provider.sent.push(i);
@@ -74,7 +82,7 @@ async function subscribe(b: Biz, p: { id: string }, role: "owner" | "staff" | "t
   const db = serviceDb();
   await must(db.from("memberships").insert({ user_id: p.id, scope: "account", account_id: b.id, role }).select("id"), "membership");
   const id = (await must<{ id: string }>(db.from("owner_brief_subscriptions").insert({ user_id: p.id, account_id: b.id, enabled_at: enabledAt }).select("id").single(), "subscription")).id;
-  subs.push(id);
+  subs.push(id); scope.ids.add(id);
   return id;
 }
 const job = async (b: Biz, first: string) => {
@@ -180,15 +188,14 @@ describe("the daily owner brief pass (live)", () => {
     expect(mine(p)).toHaveLength(1);
   });
 
-  it("a send that may have landed (the provider timed out) is NOT released: a duplicate morning mail is worse than a missed one", async () => {
-    const b = await business("unsure"); const p = await person("unsure"); const id = await subscribe(b, p);
+  it("a failure that may have landed (a reset connection) is released too, and the retry carries the SAME fixed idempotency key", async () => {
+    const b = await business("unsure"); const p = await person("unsure"); await subscribe(b, p);
     await job(b, "Unsure");
-    provider.fail = () => { throw new Error("resend did not answer within 10 s"); };
-    expect(await tick(T0700)).toMatchObject({ sent: 0, failed: 1, released: 0 });
-    expect((await row(id)).last_handled_day).toBe("2027-03-10");
+    provider.fail = () => { throw new Error("Unable to fetch data. The request could not be resolved."); };
+    expect(await tick(T0700)).toMatchObject({ sent: 0, failed: 1, released: 1 });
     provider.fail = null;
-    await tick(at(15));
-    expect(mine(p)).toHaveLength(0);
+    expect(await tick(at(15))).toMatchObject({ sent: 1 });
+    expect(mine(p)[0]!.idempotencyKey).toBe(`daily-brief/${b.id}/${p.id}/2027-03-10`);   // the unit file pins that both attempts carry it
   });
 
   it("a replayed identical now sends once, in sequence and when two runs overlap", async () => {

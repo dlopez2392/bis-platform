@@ -57,6 +57,8 @@ export async function runPass(
   let outcome: HeartbeatOutcome = { ok: true };
   try {
     counters = await pass.run(ctx);
+    const unhealthy = pass.beatFailure?.(counters) ?? null;
+    if (unhealthy !== null) outcome = { ok: false, error: unhealthy };
   } catch (e) {
     counters = { errored: 1 };
     outcome = { ok: false, error: String(e) };

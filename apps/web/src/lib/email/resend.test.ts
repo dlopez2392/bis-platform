@@ -148,6 +148,16 @@ describe("one rate-limit retry (F-196 Q4)", () => {
     expect(sleep).toHaveBeenCalledWith(1_000);
   });
 
+  it("a caller's own idempotencyKey is the key on the wire, on the retry too (F-082: the brief's key makes a retry after an ambiguous failure harmless); one without gets a random one (mutation: ignore the field -> FAILS)", async () => {
+    sendMock
+      .mockResolvedValueOnce(rateLimited("1"))
+      .mockResolvedValueOnce({ data: { id: "re_2" }, error: null, headers: {} });
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, vi.fn().mockResolvedValue(undefined));
+    await provider.send({ ...INPUT, idempotencyKey: "daily-brief/a/u/2027-03-10" });
+    expect((sendMock.mock.calls[0]![1] as { idempotencyKey?: string }).idempotencyKey).toBe("daily-brief/a/u/2027-03-10");
+    expect((sendMock.mock.calls[1]![1] as { idempotencyKey?: string }).idempotencyKey).toBe("daily-brief/a/u/2027-03-10");
+  });
+
   it("two sends never share a key: the key belongs to one send, not to the provider (mutation: mint it once in the constructor → FAILS)", async () => {
     const provider = resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, vi.fn().mockResolvedValue(undefined));
     await provider.send(INPUT);

@@ -1,8 +1,7 @@
 import {
-  listDueBriefSubscriptions, claimBriefDay, releaseBriefDay, stampBriefOutcome, listAccountWork,
+  listDueBriefSubscriptions, claimBriefDay, releaseBriefDay, stampBriefOutcome, listAccountWork, DAILY_BRIEF_ROLES,
   type DueBriefSubscription,
 } from "@bis/db";
-import { EmailNotSent } from "@/lib/consent/email-gate";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { dailyBriefEmail } from "@/lib/email/templates/daily-brief";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -28,12 +27,12 @@ import type { Pass } from "../context";
  *   today → tick cap → tick budget → no configured APP_ORIGIN, or no signed way off → CLAIM the day → read and
  *   shape → quiet (stamp it, send nothing) → send → stamp.
  *
- * CLAIM, THEN SEND, RELEASE ON A DEFINITE FAILURE. Deliberately not the weekly report's send-then-stamp: that order
+ * CLAIM, THEN SEND, RELEASE ON FAILURE. Deliberately not the weekly report's send-then-stamp: that order
  * tolerates a duplicate when the stamp write fails, and the dispatcher may replay a tick's `now` up to 900 s old, so
  * two runs can overlap. Only the run whose conditional UPDATE won sends. The price, chosen on purpose: a function
  * killed between claim and send loses that day's brief (at most once). A send that FAILED, or a read that failed,
- * gives the claim back so the next tick in the band retries; a send that MAY have landed (the provider timed out
- * waiting) is kept, because a duplicate morning email is judged worse than a missed one.
+ * gives the claim back so the next tick in the band retries. ANY send failure may release: one that may have landed
+ * (a reset connection, a timeout) is retried with the same fixed idempotency key, which Resend deduplicates.
  *
  * A MISSED BAND IS A MISSED DAY: a 10 AM "your 7 AM day" is stale and is never sent. Capped subscriptions are not
  * lost: the claim is the cursor, and the band is eight ticks wide.
@@ -43,18 +42,16 @@ import type { Pass } from "../context";
  * a CHECK-constrained list read by the client's history, and a brief to a team member is not a customer message).
  */
 
-/** The provider's own words when it stopped waiting (email/resend.ts): the mail may still have been accepted. */
-const MAY_HAVE_LANDED = /did not answer within/i;
-const mayHaveLanded = (e: unknown): boolean =>
-  e instanceof EmailNotSent && e.result.kind === "failed" && MAY_HAVE_LANDED.test(e.result.error);
-
 export const dailyOwnerBriefPass: Pass = {
   key: "dailyOwnerBrief",
+  /** A tick that sent nothing and failed something is a failed heartbeat, so opsWatch can alert on a brief that is
+   *  down; one that sent anything is not (one bad address must not look like an outage). Counters are unchanged. */
+  beatFailure: (c) => (c.sent === 0 && (c.failed ?? 0) > 0 ? `the daily brief sent nothing and failed ${c.failed}` : null),
   async run(ctx) {
     const c = {
       sent: 0, failed: 0, skippedQuiet: 0, skippedAlreadyHandled: 0, skippedNotInBand: 0, skippedNotYet: 0,
       skippedCap: 0, skippedBudget: 0, skippedNoOrigin: 0, skippedNoWayOut: 0, unresolvableTimezone: 0,
-      released: 0, unstamped: 0,
+      released: 0, unstamped: 0, skippedRole: 0,
     };
     const startedAt = Date.now();
     const due = await listDueBriefSubscriptions(ctx.db);
@@ -70,6 +67,9 @@ export const dailyOwnerBriefPass: Pass = {
     };
 
     for (const row of due) {
+      // Defence in depth for D1: the list already filters by role in the database; a row that is not Owner or Staff
+      // (a Technician's scope lives only in RLS) is never read for, whatever handed it over.
+      if (!(DAILY_BRIEF_ROLES as readonly string[]).includes(row.role)) { c.skippedRole++; continue; }
       const zone = resolveAccountZone(row.accountTimezone);
       const days = zone === null ? null : briefDays(ctx.now, zone);
       if (zone === null || days === null) {
@@ -127,15 +127,15 @@ export const dailyOwnerBriefPass: Pass = {
           accountId: row.accountId, kind: "operator.daily_brief", to: row.email, fromName: row.brandName,
           replyTo: normalizeReplyTo(row.replyToEmail), subject: built.subject, body: built.text, html: built.html,
           language: built.locale, now: ctx.now, oneClickUnsubscribe: links.oneClick,
+          // ONE fixed key per business, person and local day: a failure that may have landed (a reset connection, a
+          // non-JSON 5xx, a timeout) is retried on the next tick with the same key and Resend deduplicates it
+          // (24 h window), so ANY failure may release the claim without risking a second email.
+          idempotencyKey: `daily-brief/${row.accountId}/${row.userId}/${days.today}`,
         });
       } catch (e) {
         c.failed++;
-        if (mayHaveLanded(e)) {
-          console.error(`daily brief: send to subscription ${row.subscriptionId} timed out and may have landed; NOT released: ${String(e)}`);
-        } else {
-          console.error(`daily brief: send failed for subscription ${row.subscriptionId}: ${String(e)}`);
-          await release(row, days.today);
-        }
+        console.error(`daily brief: send failed for subscription ${row.subscriptionId}: ${String(e)}`);
+        await release(row, days.today);
         continue;
       }
       c.sent++;   // only after the provider answered
