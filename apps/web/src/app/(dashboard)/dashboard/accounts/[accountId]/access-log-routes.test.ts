@@ -650,7 +650,7 @@ describe("who may reach the logger (spec 2.2, spec 4.2 item 3)", () => {
   }, WHOLE_TREE);
   it("no public, cron, webhook or voice tree imports any access-log module", () => {
     const PUBLIC = ["app/api/cron/", "app/api/webhooks/", "app/api/voice/", "app/api/sms/", "app/api/concierge/", "app/api/d/",
-      "app/api/s/", "app/api/unsubscribe/", "app/api/ops/", "app/b/", "app/c/", "app/f/", "app/u/", "app/d/", "app/s/", "app/cal/",
+      "app/api/s/", "app/api/unsubscribe/", "app/api/ops/", "app/b/", "app/c/", "app/f/", "app/u/", "app/d/", "app/s/", "app/r/", "app/cal/",
       "lib/automations/", "lib/voice/"];
     expect(all.filter((x) => PUBLIC.some((p) => x.f.startsWith(p)) && x.imports.some((i) => /access-log/.test(i))).map((x) => x.f)).toEqual([]);
   }, WHOLE_TREE);

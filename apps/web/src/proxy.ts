@@ -50,7 +50,10 @@ export default clerkMiddleware(async (auth, req) => {
  * `.*\..*` clause already skips; the explicit `brief/` is what keeps a
  * dotless path out too.) Its one-click route `/api/brief/off/…` stays matched
  * like `/api/unsubscribe`: still public, because only /dashboard is protected.
+ *
+ * `/r/<token>` (F-072) is the customer's after-the-job check-in page, no sign-in, same reason as `/u`. Its presses
+ * are server actions posted to the page's own path, which this exclusion covers.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|brief/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|r/|brief/|.*\\..*).*)", "/(api|trpc)(.*)"],
 };
