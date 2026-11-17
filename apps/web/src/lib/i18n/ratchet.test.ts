@@ -417,7 +417,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the twenty-six English-only readers (mutation: add a twenty-seventh without a test row → FAILS)", () => {
+  it("names exactly the twenty-seven English-only readers (mutation: add a twenty-eighth without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -518,6 +518,9 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       // English word; LANGUAGE_LINE asks it for the reader's language
       // separately. An AI prompt input, never UI copy.
       "src/lib/record/ai-summary-prompt.ts",
+      // F-082: the daily brief's /brief/off page, the /u tree's own situation — a token and no session, so both
+      // languages stacked. All of its reads sit in this one file.
+      "src/app/brief/off/[token]/copy.ts",
     ]);
   });
 

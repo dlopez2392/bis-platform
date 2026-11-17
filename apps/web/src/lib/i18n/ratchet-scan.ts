@@ -533,4 +533,8 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/lib/record/ai-summary-prompt.ts",
     reason: "label()'s own doc comment: a stored code is handed to the MODEL as the catalogue's ENGLISH word, always, regardless of the reader's language — the rules are English and LANGUAGE_LINE asks the model for the reader's language separately; this is an AI prompt input, never UI copy a person reads",
   },
+  {
+    file: "src/app/brief/off/[token]/copy.ts",
+    reason: "the daily brief's /brief/off page is token-only like /u (no session, no account read, no Accept-Language): the title, the lines and the button read the English AND the Spanish catalogue entry, stacked in their own lang, because there is no reader language to resolve; every read of the page is in this one file",
+  },
 ];

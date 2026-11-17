@@ -48,7 +48,27 @@ function tileCall(x: CallListRow, handsets: readonly string[]): x is TileCall {
     && !(x.caller_e164 !== null && handsets.includes(x.caller_e164));
 }
 
-export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** What each read returns, typed for a caller that is code and not the model (the daily brief, PR 2). Types only:
+ *  the functions below return exactly what they returned before, now with their shape on the signature. */
+type ReadRangeError = { ok: false; error: "bad_range" | "range_too_long" };
+export type CallsAndMessagesResult = ReadRangeError | {
+  ok: true; range: { first: string; last: string }; count: number; spam: number; more: number;
+  calls: { when: string; caller: string; outcome: string; reason: string | null; needsCallback: boolean }[];
+};
+export type AppointmentsResult = ReadRangeError | {
+  ok: true; range: { first: string; last: string }; count: number; truncated: boolean; more: number;
+  /** How many of `count` are still `booked`: exact, from the raw status, for a caller that is code (the daily brief). */
+  bookedCount: number;
+  appointments: { when: string; customer: string | null; meetingType: string | null; status: string;
+    /** The raw status, language-free: match on this, never on `status`, which is the reader's word. */
+    statusCode: "booked" | "cancelled" | "completed" | "no_show" }[];
+};
+export type NeedsAttentionResult = {
+  ok: true; count: number; more: number;
+  items: { what: string; customer: string | null; due: string | null }[];
+};
+
+export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<CallsAndMessagesResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const [answered, spam] = await Promise.all([
@@ -91,7 +111,7 @@ export async function callsAndMessages(c: OwnerReadContext, args: Record<string,
   };
 }
 
-export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<AppointmentsResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const { rows, truncated } = await listAgendaBookings(c.db, c.accountId, r.fromIso, r.toIso);
@@ -99,15 +119,15 @@ export async function appointments(c: OwnerReadContext, args: Record<string, unk
   const tr: Tr = makeTr(c.locale);
   return {
     ok: true, range: { first: r.firstDay, last: r.lastDay }, count: shown.length, truncated,
-    more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN),
+    more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN), bookedCount: shown.filter((x) => x.status === "booked").length,
     appointments: shown.slice(0, APPOINTMENTS_SPOKEN).map((x) => ({
       when: when(x.starts_at, c, r.multiDay), customer: nameOf(x.contact),
-      meetingType: x.meeting_type ? meetingWord(tr, x.meeting_type) : null, status: statusWord(tr, x.status),
+      meetingType: x.meeting_type ? meetingWord(tr, x.meeting_type) : null, status: statusWord(tr, x.status), statusCode: x.status,
     })),
   };
 }
 
-export async function needsAttention(c: OwnerReadContext): Promise<Record<string, unknown>> {
+export async function needsAttention(c: OwnerReadContext): Promise<NeedsAttentionResult> {
   const rows = await listAccountWork(c.db, c.accountId);
   const shown = rows.slice(0, TODO_SPOKEN);
   // Names through the SAME client (so RLS, or the account scope, bounds them too): tasks/page.tsx:183-195's shape.

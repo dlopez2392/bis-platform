@@ -129,7 +129,7 @@ describe("the owner tools (F-032 §5)", () => {
   it("appointments: never the note, the phone, the email or the address; a moved booking's cancelled half is not read out", async () => {
     const out = await runOwnerTool(ctx(), "appointments", { range: "tomorrow" }) as { appointments: object[]; count: number };
     expect(out.count).toBe(1);
-    expect(out.appointments).toEqual([{ when: "9:00 AM", customer: "Ana", meetingType: m["calendar.job.inPerson"], status: m["calendar.bookings.status.booked"] }]);
+    expect(out.appointments).toEqual([{ when: "9:00 AM", customer: "Ana", meetingType: m["calendar.job.inPerson"], status: m["calendar.bookings.status.booked"], statusCode: "booked" }]);
     expect(JSON.stringify(out)).not.toMatch(/gate code|ana@example|5550188|Main/);
   });
 
@@ -140,11 +140,13 @@ describe("the owner tools (F-032 §5)", () => {
     ] });
     const out = await runOwnerTool(ctx({ session: { ...SESSION, locale: "es" } }), "appointments", { range: "tomorrow" }) as { appointments: object[] };
     expect(out.appointments).toEqual([
-      { when: expect.any(String), customer: null, meetingType: m["calendar.job.byPhone.es"], status: m["calendar.bookings.status.no_show.es"] },
-      { when: expect.any(String), customer: null, meetingType: null, status: m["calendar.bookings.status.completed.es"] },
+      { when: expect.any(String), customer: null, meetingType: m["calendar.job.byPhone.es"], status: m["calendar.bookings.status.no_show.es"], statusCode: "no_show" },
+      { when: expect.any(String), customer: null, meetingType: null, status: m["calendar.bookings.status.completed.es"], statusCode: "completed" },
     ]);
-    // Never a code: no stored value survives into what is spoken.
-    expect(JSON.stringify(out)).not.toMatch(/no_show|in_person|"phone"|"completed"/);
+    // Never a code in what is SPOKEN: the raw `statusCode` is the one added field (for the daily brief, which is code, not a
+    // voice), so it is removed before the check; every other stored value must still be absent.
+    const spoken = JSON.stringify(out, (k, v) => (k === "statusCode" ? undefined : v));
+    expect(spoken).not.toMatch(/no_show|in_person|"phone"|"completed"/);
   });
 
   it("needs_attention: the To do page's own words for each source, with the customer's name, never a raw source code (mutation: what = w.title -> two empty items, FAILS)", async () => {

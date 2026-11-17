@@ -92,7 +92,14 @@ export function isSmsKind(kind: string): kind is SmsKind {
  */
 export type EmailClass = "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator" | "transactional";
 
-export type EmailKindSpec = { readonly class: EmailClass; readonly hours: HoursRule; readonly footer: "unsubscribe" | "none" };
+export type EmailKindSpec = {
+  readonly class: EmailClass; readonly hours: HoursRule; readonly footer: "unsubscribe" | "none";
+  /** F-082 (owner answer Q5, 2026-11-15): an OPERATOR kind with `footer: "none"` that may carry the RFC 8058
+   *  List-Unsubscribe pair for a signed link its caller hands the gate (`EmailRequest.oneClickUnsubscribe`). Only
+   *  `operator.daily_brief` sets it. A customer kind's pair is made by the gate from the consent token and never
+   *  comes from a caller. */
+  readonly oneClickUnsubscribe?: true;
+};
 
 export const EMAIL_KINDS = {
   "booking.confirmation": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },

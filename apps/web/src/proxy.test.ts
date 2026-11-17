@@ -26,6 +26,9 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/d/sometoken", "/d/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "/s/sometoken", "/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "/cal/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.ics",
+    // F-082: the daily brief's "turn this off" page, opened from an email by a signed-in owner.
+    // (A real token has dots, which the matcher's own `.*\..*` already skips; the dotless one proves the carve-out.)
+    "/brief/off/sometoken", "/brief/off/1.abc.def",
   ])("%s skips the proxy, so a signed-in visitor's cookie can never turn the framed page into a Clerk handshake redirect (mutation: drop c/ f/ b/ u/ d/ s/ from the matcher → FAILS)", (path) => {
     expect(runs(path)).toBe(false);
   });
@@ -36,6 +39,9 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/docs", "/dashboard/d", "/api/d/sometoken/start",
     "/api/s/sometoken/download", "/settings", "/s",
     "/cal", "/cal/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    // F-082: the brief's one-click route is an API like /api/unsubscribe: it is not a document, so Clerk keeps its
+    // request state there and it is still public (only /dashboard is protected).
+    "/api/brief/off/1.abc.def", "/brief", "/briefing/x",
     // S-22: both Google Calendar routes call requireAccountAccess, which reads Clerk's request state.
     "/api/google-calendar/connect?account=x", "/api/google-calendar/callback?code=x&state=y",
   ])("%s still runs the proxy: the dashboard stays protected and every API keeps Clerk's request state (mutation: an over-broad exclusion → FAILS)", (path) => {

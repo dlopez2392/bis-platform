@@ -15,7 +15,7 @@ import { m } from "@/lib/messages";
 import { billingEnforced } from "@/lib/billing/enforce";
 import { billingVerdict } from "@/lib/billing/standing";
 import {
-  EMAIL_KINDS, isEmailKind, emailReadsLedger, emailStopsWhilePaused, FOOTER_ADDRESS_KINDS, type EmailKind, type OperatorEmailKind,
+  EMAIL_KINDS, isEmailKind, emailReadsLedger, emailStopsWhilePaused, FOOTER_ADDRESS_KINDS, type EmailKind, type EmailKindSpec, type OperatorEmailKind,
 } from "./classes";
 import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
 import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
@@ -92,6 +92,10 @@ export type EmailRequest = Omit<SendEmailInput, "headers"> & {
   accountZone?: string | null;
   /** Choice 21: the latest instant this email is still useful. */
   deadline?: Date | null;
+  /** The https URL of THIS message's own RFC 8058 one-click target (the daily brief's signed `off` link). Honoured
+   *  only for a kind whose registry entry says `oneClickUnsubscribe` (see `oneClickHeaders`); every other kind
+   *  ignores it, so a caller cannot put List-Unsubscribe on mail that did not ask for it. */
+  oneClickUnsubscribe?: string;
 };
 
 export type EmailBlockReason =
@@ -194,6 +198,18 @@ function sendFields(req: EmailRequest): SendEmailInput {
     subject: req.subject, body: req.body,
     ...(tags ? { tags } : {}),
   };
+}
+
+/**
+ * The RFC 8058 pair for an OPERATOR kind that opted in through the registry (F-082, owner answer Q5), or null. Gmail and
+ * Outlook show their own "unsubscribe" button from it. The URL must be ONE https URI with nothing in it that could
+ * end the header or the angle brackets (RFC 8058: "MUST contain one HTTPS URI"; a line break would be header
+ * injection). Anything else, and every kind that did not opt in, gets no header at all.
+ */
+export function oneClickHeaders(spec: EmailKindSpec, url: string | undefined): Record<string, string> | null {
+  if (spec.oneClickUnsubscribe !== true || spec.class !== "operator") return null;
+  if (typeof url !== "string" || !/^https:\/\/[^\s<>"]+$/.test(url)) return null;
+  return { "List-Unsubscribe": `<${url}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
 }
 
 function withoutFooter(req: EmailRequest): SendEmailInput {
@@ -382,7 +398,11 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
   const replyTo = await customerReplyTo(req, deps);
   const out: EmailRequest = replyTo === req.replyTo ? req : { ...req, replyTo };
 
-  const input: SendEmailInput = spec.footer === "unsubscribe" ? withFooter(out, links, postal) : withoutFooter(out);
+  const built: SendEmailInput = spec.footer === "unsubscribe" ? withFooter(out, links, postal) : withoutFooter(out);
+  // A footer-less kind that opted in carries the caller's signed link; a customer kind's pair (above) is never
+  // replaced, because only `footer: "none"` kinds are asked.
+  const oneClick = spec.footer === "none" ? oneClickHeaders(spec, req.oneClickUnsubscribe) : null;
+  const input: SendEmailInput = oneClick ? { ...built, headers: oneClick } : built;
 
   try {
     const { providerMessageId } = await provider.send(input);
