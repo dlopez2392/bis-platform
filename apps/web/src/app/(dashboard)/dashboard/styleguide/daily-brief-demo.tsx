@@ -17,7 +17,7 @@ const ok = async () => ({ ok: true as const });
 
 export function DailyBriefDemo() {
   return (
-    <div className="space-y-6">
+    <div className="flex w-full min-w-0 max-w-md flex-col gap-6">
       <DailyBriefCard rows={ROWS} locale="en" pseudo={false} setBrief={ok} />
       <DailyBriefCard rows={[]} locale="en" pseudo={false} setBrief={ok} />
       <DailyBriefCardError locale="en" pseudo={false} />
