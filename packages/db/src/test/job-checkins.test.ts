@@ -559,6 +559,24 @@ describe("ensureCheckinTask: exactly one To-do for a not-great answer (plan D3)"
     });
   });
 
+  it("another account's id with this account's check-in throws and never hands back this account's To-do (probe: drop the 23505 lookup's account filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await completedJob(db, accountId, 15);
+      const r = await recordCheckinAnswer(db, accountId, bookingId, "not_great");
+      if (r.status !== "recorded") throw new Error("seed: not recorded");
+      const input = { title: "Call Jc15: they said the job was not great", dueAt: "2027-03-10T15:00:00.000Z" };
+      const mine = await ensureCheckinTask(db, accountId, r.checkin, input, "checkin");
+      await withTestAccount(async (_db, otherAccountId) => {
+        // tasks_review_checkin_once fires before the composite key's check, so this insert is a 23505, and the
+        // "already there" read must be scoped to the CALLER's account or it answers with the To-do above.
+        await expect(ensureCheckinTask(db, otherAccountId, r.checkin, input, "checkin")).rejects.toThrow(/already there but unreadable/);
+        const { data, error } = await db.from("tasks").select("id, account_id").in("account_id", [accountId, otherAccountId]);
+        expect(error).toBeNull();
+        expect(data).toEqual([{ id: mine.id, account_id: accountId }]);
+      });
+    });
+  });
+
   it("refuses a check-in that is not not_great, and writes no To-do", async () => {
     await withTestAccount(async (db, accountId) => {
       const { bookingId } = await completedJob(db, accountId, 14);

@@ -183,9 +183,9 @@ export async function recentReviewAsks(
   const key = who.email ? emailKey(who.email) : "";
   if (key === "") return false;
   // contacts!inner: the embed filter must exclude the booking row, not just empty its nested object (see
-  // REVIEW_REQUEST_SELECT's note). bookings has one key into contacts (bookings_contact_id_fkey), so the embed is
-  // unambiguous, and it is the composite (account_id, contact_id) one, so the contact is this account's.
-  const { data: byAddress, error: addressErr } = await db.from("bookings").select("id, contacts!inner(email_key)")
+  // REVIEW_REQUEST_SELECT's note). The embed names bookings_contact_id_fkey, the composite (account_id, contact_id)
+  // key, so the contact is this account's, and a later second key from bookings into contacts cannot make it ambiguous.
+  const { data: byAddress, error: addressErr } = await db.from("bookings").select("id, contacts!bookings_contact_id_fkey!inner(email_key)")
     .eq("account_id", accountId).eq("contacts.email_key", key).gt("review_requested_at", sinceIso).limit(1);
   if (addressErr) throw new Error(`recentReviewAsks failed: ${addressErr.message}`);
   return (byAddress ?? []).length > 0;
