@@ -224,6 +224,9 @@ const ALLOWED: Record<string, Reason> = {
   // are server code that has already authorised the act; no producer exists in this part.
   "lib/automations/jobs/enqueue.ts": "public-or-cron",
   "lib/booking/availability.ts": "public-or-cron",
+  // Daily brief (F-082 PR 2): the one-click way off, reached only from the public token routes after the signed
+  // token (person + business) verifies; deletes that one subscription and nothing else.
+  "lib/brief/off.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",
   "lib/consent/email-context.ts": "proven-target",
   "lib/consent/email-gate.ts": "proven-target",
