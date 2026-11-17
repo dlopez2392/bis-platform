@@ -3481,6 +3481,54 @@ export type Database = {
           },
         ]
       }
+      job_checkins: {
+        Row: {
+          account_id: string
+          answer: string
+          answered_at: string
+          booking_id: string
+          contact_id: string
+          created_at: string
+          id: string
+          review_link_opened_at: string | null
+        }
+        Insert: {
+          account_id: string
+          answer: string
+          answered_at?: string
+          booking_id: string
+          contact_id: string
+          created_at?: string
+          id?: string
+          review_link_opened_at?: string | null
+        }
+        Update: {
+          account_id?: string
+          answer?: string
+          answered_at?: string
+          booking_id?: string
+          contact_id?: string
+          created_at?: string
+          id?: string
+          review_link_opened_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_checkins_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_checkins_booking_fkey"
+            columns: ["account_id", "booking_id", "contact_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["account_id", "id", "contact_id"]
+          },
+        ]
+      }
       jobs: {
         Row: {
           account_id: string | null
@@ -4665,6 +4713,7 @@ export type Database = {
           document_request_kind: string | null
           due_at: string | null
           id: string
+          review_checkin_id: string | null
           title: string
         }
         Insert: {
@@ -4684,6 +4733,7 @@ export type Database = {
           document_request_kind?: string | null
           due_at?: string | null
           id?: string
+          review_checkin_id?: string | null
           title: string
         }
         Update: {
@@ -4703,6 +4753,7 @@ export type Database = {
           document_request_kind?: string | null
           due_at?: string | null
           id?: string
+          review_checkin_id?: string | null
           title?: string
         }
         Relationships: [
@@ -4753,6 +4804,13 @@ export type Database = {
             columns: ["account_id", "document_request_id"]
             isOneToOne: false
             referencedRelation: "document_requests"
+            referencedColumns: ["account_id", "id"]
+          },
+          {
+            foreignKeyName: "tasks_review_checkin_fkey"
+            columns: ["account_id", "review_checkin_id"]
+            isOneToOne: false
+            referencedRelation: "job_checkins"
             referencedColumns: ["account_id", "id"]
           },
         ]

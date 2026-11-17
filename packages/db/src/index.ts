@@ -199,6 +199,13 @@ export {
   claimBriefDay, releaseBriefDay, stampBriefOutcome,
   type DailyBriefRole, type BriefOutcome, type BriefSubscription, type DueBriefSubscription,
 } from "./owner-brief";
+// F-072 (migration job_checkins): the after-the-job check-in's answers, its one "not great" To-do, and the 90-day ask
+// rule. See ./job-checkins.ts and recentReviewAsks in ./automations.ts.
+export { recentReviewAsks } from "./automations";
+export {
+  CHECKIN_ANSWERS, recordCheckinAnswer, getCheckinForBooking, markReviewLinkOpened, ensureCheckinTask, checkinCounts,
+  type CheckinAnswer, type JobCheckin, type RecordCheckinResult, type CheckinCounts,
+} from "./job-checkins";
 export * from "./automation-log";
 export * from "./automation-settings";
 
