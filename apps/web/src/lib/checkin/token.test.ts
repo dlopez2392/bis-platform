@@ -1,8 +1,8 @@
 import { createHmac, hkdfSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openConsentToken, sealConsentToken } from "@/lib/consent/token";
 import { openBriefToken, sealBriefToken } from "@/lib/brief/token";
-import { openCheckinToken, readCheckinToken, sealCheckinToken } from "./token";
+import { checkinLink, openCheckinToken, readCheckinToken, sealCheckinToken } from "./token";
 
 const SECRET = "s".repeat(40);
 const OTHER = "o".repeat(40);
@@ -158,5 +158,44 @@ describe("readCheckinToken", () => {
   it("opens a token sealed under CONSENT_TOKEN_SECRET_PREVIOUS", () => {
     const token = sealCheckinToken(PAYLOAD, OTHER);
     expect(readCheckinToken(token, env({ CONSENT_TOKEN_SECRET: SECRET, CONSENT_TOKEN_SECRET_PREVIOUS: OTHER })).ok).toBe(true);
+  });
+});
+
+describe("checkinLink: the link the email carries (F-072 PR 3)", () => {
+  const env = { NODE_ENV: "test", CONSENT_TOKEN_SECRET: SECRET } as NodeJS.ProcessEnv;
+  const link = (over: Partial<Parameters<typeof checkinLink>[0]> = {}) =>
+    checkinLink({ accountId: ACCT, bookingId: BOOKING, language: "es", now: new Date(ISSUED), origin: "https://app.bis-rgv.com/", env, ...over });
+
+  it("is /r/<token> under the origin it was given, and the token opens to this job, language and time", () => {
+    const url = link()!;
+    const token = url.split("/r/")[1]!;
+    expect(url).toBe(`https://app.bis-rgv.com/r/${token}`);
+    expect(openCheckinToken(token, [SECRET])).toEqual(PAYLOAD);
+  });
+
+  it("in production a secret under 32 characters makes no link, and 32 makes one (mutation: drop the floor -> the short one makes a link, FAILS)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const prod = (secret: string) => ({ VERCEL_ENV: "production", CONSENT_TOKEN_SECRET: secret }) as unknown as NodeJS.ProcessEnv;
+      expect(link({ env: prod("short") })).toBeNull();
+      expect(link({ env: prod("s".repeat(31)) })).toBeNull();
+      expect(link({ env: prod("s".repeat(32)) })).not.toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("outside production a short secret still makes a link (the floor is production's, as the brief's is)", () => {
+    expect(link({ env: { NODE_ENV: "test", CONSENT_TOKEN_SECRET: "short" } as NodeJS.ProcessEnv })).not.toBeNull();
+  });
+
+  it("is null for no secret, no origin, an origin that is not an origin, or an id that is not a uuid: never a link that cannot work", () => {
+    expect(link({ env: { NODE_ENV: "test" } as NodeJS.ProcessEnv })).toBeNull();
+    expect(link({ origin: "" })).toBeNull();
+    expect(link({ origin: null })).toBeNull();
+    expect(link({ origin: "not a url" })).toBeNull();
+    expect(link({ origin: "ftp://app.bis-rgv.com" })).toBeNull();
+    expect(link({ bookingId: "nope" })).toBeNull();
+    expect(link({ accountId: "nope" })).toBeNull();
   });
 });

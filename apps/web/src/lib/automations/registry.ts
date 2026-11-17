@@ -5,7 +5,7 @@ import { cancelNoticesPass } from "./passes/cancel-notices";
 import { jobHoldsPass } from "./passes/job-holds";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
-import { reviewRequestPass } from "./passes/review-request";
+import { reviewRequestsPass } from "./passes/checkin-sweep";
 import { referralAskPass } from "./passes/referral-ask";
 import { noShowNudgePass } from "./passes/no-show-nudge";
 import { smsReminderPass } from "./passes/sms-reminder";
@@ -81,6 +81,8 @@ import { recordChangesAuditPass } from "./passes/record-changes-audit";
  * on anything above (fanout.ts gives it `after: []`, same as billingPause); it sits here, before
  * the usage report and opsWatch, so a red heartbeat here is still caught by opsWatch in the SAME
  * tick (opsWatch reads every pass above it, usageReport included).
+ * The review-request entry is the pass PLUS the check-in's To-do sweep (passes/checkin-sweep.ts), one key: the sweep
+ * reads and writes only check-in answers and To-dos, so its place in the order is the review request's own.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, dailyOwnerBriefPass, weeklyClientReportPass, weeklyAgencyReportPass, recordChangesAuditPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestsPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, dailyOwnerBriefPass, weeklyClientReportPass, weeklyAgencyReportPass, recordChangesAuditPass, usageReportPass, opsWatchPass];

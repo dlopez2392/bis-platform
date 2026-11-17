@@ -7,9 +7,10 @@ import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
-import { stampReviewRequested } from "../automations";
+import { stampReviewRequested, upsertAutomation, listDueReviewRequests, getDueReviewRequestById } from "../automations";
 import {
   recordCheckinAnswer, getCheckinForBooking, markReviewLinkOpened, ensureCheckinTask, checkinCounts,
+  listCheckinsMissingTask, notGreatBookingIds, hasNotGreatCheckin, accountsWithCheckin,
 } from "../job-checkins";
 
 /**
@@ -608,6 +609,72 @@ describe("markReviewLinkOpened and checkinCounts (plan D1, D8)", () => {
       expect(await checkinCounts(db, accountId, since)).toEqual({ asked: 4, answered: 3, great: 1, okay: 1, notGreat: 1, opened: 1 });
       expect(await checkinCounts(db, accountId, new Date(Date.now() + 60_000).toISOString()))
         .toEqual({ asked: 0, answered: 0, great: 0, okay: 0, notGreat: 0, opened: 0 });
+    });
+  });
+});
+
+/**
+ * F-072 PR 3: the reads the send, the sweep and the neighbours' guards use, against the real database. The same
+ * logic is proven without one in ../review-checkin-guards.test.ts; these prove the queries are valid PostgREST.
+ * NOT RUN where no database is reachable (the PR 3 report says so).
+ */
+describe("the check-in's PR 3 reads, live", () => {
+  const NOW_ISO = "2027-03-10T20:00:00.000Z";
+
+  it("listCheckinsMissingTask returns the not-great answers without a To-do, inside the window, bounded (probe: drop the subtraction -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const jobs = await Promise.all([9, 10, 11].map((h) => completedJob(db, accountId, h)));
+      const answers = await Promise.all([
+        recordCheckinAnswer(db, accountId, jobs[0]!.bookingId, "not_great"),
+        recordCheckinAnswer(db, accountId, jobs[1]!.bookingId, "not_great"),
+        recordCheckinAnswer(db, accountId, jobs[2]!.bookingId, "okay"),
+      ]);
+      const [a, b] = answers.map((r) => (r.status === "recorded" ? r.checkin : null));
+      await ensureCheckinTask(db, accountId, a!, { title: "Call", dueAt: NOW_ISO }, "checkin");
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      expect((await listCheckinsMissingTask(db, since, 50)).map((c) => c.id)).toEqual([b!.id]);
+      expect(await listCheckinsMissingTask(db, new Date(Date.now() + 60_000).toISOString(), 50)).toEqual([]);
+    });
+  });
+
+  it("notGreatBookingIds and hasNotGreatCheckin see not_great ONLY, and only this account's booking", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const bad = await completedJob(db, accountId, 9);
+      const fine = await completedJob(db, accountId, 10);
+      await recordCheckinAnswer(db, accountId, bad.bookingId, "not_great");
+      await recordCheckinAnswer(db, accountId, fine.bookingId, "okay");
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      expect([...(await notGreatBookingIds(db, since))]).toEqual([bad.bookingId]);
+      expect(await hasNotGreatCheckin(db, accountId, bad.bookingId)).toBe(true);
+      expect(await hasNotGreatCheckin(db, accountId, fine.bookingId)).toBe(false);
+      await withTestAccount(async (_db, otherAccountId) => {
+        expect(await hasNotGreatCheckin(db, otherAccountId, bad.bookingId)).toBe(false);
+      });
+    });
+  });
+
+  it("accountsWithCheckin is true only for the boolean true on the review_request recipe", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cfg = (checkin: unknown) => ({ channel: "email", reviewUrl: "https://g.page/r/x/review", checkin });
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(false);
+      await upsertAutomation(db, accountId, "review_request", { enabled: true, body: "", config: cfg("true") }, "user_test");
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(false);
+      await upsertAutomation(db, accountId, "review_request", { enabled: true, body: "", config: cfg(true) }, "user_test");
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(true);
+      expect(await accountsWithCheckin(db, [])).toEqual(new Set());
+    });
+  });
+
+  it("a suppressed account with checkin: true is never due and never released (the outbound-suppressed case for the check-in path)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review", checkin: true } }, "user_test");
+      const { bookingId } = await completedJob(db, accountId, 9, "ana.checkin@example.com");
+      expect((await listDueReviewRequests(db, NOW_ISO)).map((r) => r.bookingId)).toContain(bookingId);
+      expect((await getDueReviewRequestById(db, bookingId)).due?.config?.checkin).toBe(true);
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueReviewRequests(db, NOW_ISO)).map((r) => r.bookingId)).not.toContain(bookingId);
+      expect((await getDueReviewRequestById(db, bookingId)).due).toBeNull();
     });
   });
 });

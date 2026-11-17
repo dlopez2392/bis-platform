@@ -259,3 +259,61 @@ describe("outbound suppression", () => {
     expect(sql).toMatch(/add column outbound_suppressed boolean not null default false/);
   });
 });
+
+/**
+ * F-072 PR 3: the check-in is a branch of the review request, so it has no due-list of its own to walk; what the walk
+ * above cannot show is that a suppressed account with `checkin: true` really is never due. Behaviour, against a fake
+ * that answers each table with a fixed value (the live twin is in test/job-checkins.test.ts): the same account row
+ * with the flag off yields the due booking, with it on yields nothing, from the list AND from the by-id read a
+ * release makes. Probe: have either read skip `loadSendableRows` and the second assertion of that read fails.
+ */
+describe("outbound suppression: the check-in path (F-072)", () => {
+  const ACCT = "acct-1";
+  const answers = (suppressed: boolean): Record<string, unknown> => ({
+    bookings: {
+      id: "bk-1", account_id: ACCT, contact_id: "c-1", starts_at: "2026-09-09T13:00:00Z", ends_at: "2026-09-09T14:00:00Z",
+      completed_at: "2026-09-09T14:30:00Z", followup_sent_at: null, review_request_sms_failed_at: null, closure_kept_at: null,
+      contacts: { account_id: ACCT, email: "ana@example.com", phone: null, language: null, archived_at: null },
+    },
+    accounts: {
+      timezone: "America/Chicago", brand_name: "Rio Roofing", brand_logo_path: null, brand_color: null, brand_neutral: null,
+      brand_corners: null, brand_type: null, brand_mode: null, reply_to_email: "o@rio.test", from_email: null,
+      outbound_suppressed: suppressed, mailing_address: "12 Main St", language: "en",
+    },
+    automations: [{ account_id: ACCT, body: "", body_es: null, enabled: true, config: { channel: "email", reviewUrl: "https://g.page/r/x/review", checkin: true } }],
+  });
+  /** One fixed answer per table; a list read gets rows, a by-id read (maybeSingle/single) gets one row. */
+  const fake = (suppressed: boolean) => {
+    const a = answers(suppressed);
+    const chain = (table: string): unknown => {
+      let one = false;
+      const c: unknown = new Proxy({}, {
+        get(_t, method: string) {
+          if (method === "then") {
+            return (res: (v: unknown) => unknown) => {
+              const v = a[table];
+              const data = table === "bookings" ? (one ? v : [v]) : table === "automations" ? (one ? { ...(v as object[])[0] } : v) : v;
+              return Promise.resolve({ data, error: null, count: 0 }).then(res);
+            };
+          }
+          if (method === "maybeSingle" || method === "single") one = true;
+          return () => c;
+        },
+      });
+      return c;
+    };
+    return { from: chain } as never;
+  };
+
+  it("with the account not suppressed, the check-in's booking is due (the control: the fake really yields it)", async () => {
+    const { listDueReviewRequests, getDueReviewRequestById } = await import("../automations");
+    expect((await listDueReviewRequests(fake(false), "2026-09-09T17:00:00Z")).map((r) => r.bookingId)).toEqual(["bk-1"]);
+    expect((await getDueReviewRequestById(fake(false), "bk-1")).due?.config?.checkin).toBe(true);
+  });
+
+  it("with the account suppressed, a checkin: true recipe is never due: not in the list, not by id (mutation: skip loadSendableRows -> FAILS)", async () => {
+    const { listDueReviewRequests, getDueReviewRequestById } = await import("../automations");
+    expect(await listDueReviewRequests(fake(true), "2026-09-09T17:00:00Z")).toEqual([]);
+    expect((await getDueReviewRequestById(fake(true), "bk-1")).due).toBeNull();
+  });
+});

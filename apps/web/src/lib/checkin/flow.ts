@@ -70,7 +70,8 @@ export async function loadCheckinPage(db: SupabaseClient, p: CheckinTokenPayload
   return { view: isExpired(p, now) ? { kind: "expired" } : { kind: "ask" }, branding, reviewUrl };
 }
 
-async function taskTitle(db: SupabaseClient, accountId: string, contactId: string): Promise<string> {
+/** The "not great" To-do's title, in the ACCOUNT's language: read here for the answer page and the cron's sweep. */
+export async function taskTitle(db: SupabaseClient, accountId: string, contactId: string): Promise<string> {
   const [contact, account] = await Promise.all([
     db.from("contacts").select("first_name, last_name").eq("account_id", accountId).eq("id", contactId).maybeSingle(),
     db.from("accounts").select("language").eq("id", accountId).maybeSingle(),

@@ -204,6 +204,7 @@ export {
 export { recentReviewAsks } from "./automations";
 export {
   CHECKIN_ANSWERS, recordCheckinAnswer, getCheckinForBooking, markReviewLinkOpened, ensureCheckinTask, checkinCounts,
+  listCheckinsMissingTask,
   type CheckinAnswer, type JobCheckin, type RecordCheckinResult, type CheckinCounts,
 } from "./job-checkins";
 export * from "./automation-log";

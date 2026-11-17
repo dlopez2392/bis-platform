@@ -1,6 +1,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
+import { accountsWithCheckin } from "./job-checkins";
 import { newPublicId, ALPHABET } from "./forms";
 import type { Branding } from "./branding";
 import { bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
@@ -2019,7 +2020,7 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
 // is load-bearing, not decoration — PostgREST only turns an embed filter into a
 // row-excluding join when the embed is `!inner`; without it `.is("contacts.archived_at",
 // null)` below would filter the nested object and leave the booking row itself intact.
-const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, closure_kept_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts!inner(account_id, first_name, last_name, email, language, archived_at)`;
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, closure_kept_at, review_requested_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts!inner(account_id, first_name, last_name, email, language, archived_at)`;
 
 function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -2032,6 +2033,22 @@ function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
     language: recipientLanguage(r.contacts?.language, info.accountLanguage),
     followupBodyEs: r.calendars?.followup_body_es ?? null,
   };
+}
+
+/**
+ * F-072 (plan D7a, owner answer Q2): the calendar's "How did it go?" stands down for a booking whose after-the-job
+ * check-in already went out, so a customer is not asked how it went twice inside a day. "Went out" is
+ * `review_requested_at` set (the check-in's one stamp) on an account whose review-request recipe has `checkin: true`;
+ * a check-in that never sent leaves the stamp null and the follow-up goes as it always has. An account without the
+ * flag is untouched, and when no due booking was asked (nearly every tick) the recipes are not even read.
+ */
+async function withoutCheckedInBookings<T extends { account_id: string; review_requested_at?: string | null }>(
+  db: SupabaseClient, rows: T[],
+): Promise<T[]> {
+  const asked = rows.filter((r) => r.review_requested_at);
+  if (asked.length === 0) return rows;
+  const on = await accountsWithCheckin(db, [...new Set(asked.map((r) => r.account_id))]);
+  return on.size === 0 ? rows : rows.filter((r) => !(r.review_requested_at && on.has(r.account_id)));
 }
 
 export async function listDueFollowups(
@@ -2056,7 +2073,8 @@ export async function listDueFollowups(
 
   // The contact AND the calendar (whose words are the body) must be this
   // booking's own account's (ownAccountEmbedsOnly).
-  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueFollowups", "booking", ["contacts", "calendars"]);
+  const rows = await withoutCheckedInBookings(
+    db, ownAccountEmbedsOnly((data ?? []) as any[], "listDueFollowups", "booking", ["contacts", "calendars"]));
   if (rows.length === 0) return [];
 
   // Same per-account cache as listDueReminders. DueFollowup carries
@@ -2082,6 +2100,8 @@ export async function getDueFollowupById(db: SupabaseClient, bookingId: string):
     return { due: null, why: "gone" };
   }
   if ((data as any).calendars?.followup_enabled !== true) return { due: null, why: "off" };
+  // F-072 D7a: a check-in went out for this booking since it was held, so the follow-up stands down.
+  if ((await withoutCheckedInBookings(db, [data as any])).length === 0) return { due: null, why: "gone" };
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueFollowupById");
   if (sendable.length === 0) return { due: null, why: "off" };
   return { due: toDueFollowup(data, accountInfo.get((data as any).account_id)!) };

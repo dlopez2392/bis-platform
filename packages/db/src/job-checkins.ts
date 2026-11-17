@@ -139,3 +139,66 @@ export async function checkinCounts(db: SupabaseClient, accountId: string, since
   ]);
   return { asked, answered, great, okay, notGreat, opened };
 }
+
+/**
+ * The ids of bookings whose customer answered "not great" since `sinceIso` (plan D7b, owner answer Q5): the referral
+ * ask skips them. ONLY "not great": an "okay" or a "great" never blocks it. One bounded read (answers are rare and the
+ * window is the referral list's own 85 h), filtered by the caller against the rows it already holds, so a long list
+ * of booking ids never travels in a URL. THROWS on a read error: answering "nobody" would ask a customer who just
+ * said the job was not great whether they know anyone.
+ */
+export async function notGreatBookingIds(db: SupabaseClient, sinceIso: string): Promise<Set<string>> {
+  const { data, error } = await db.from("job_checkins").select("booking_id")
+    .eq("answer", "not_great").gte("answered_at", sinceIso);
+  if (error) throw new Error(`notGreatBookingIds failed: ${error.message}`);
+  return new Set(((data ?? []) as { booking_id: string }[]).map((r) => r.booking_id));
+}
+
+/** The by-id twin a RELEASE reads: did this booking's customer answer "not great"? THROWS on a read error. */
+export async function hasNotGreatCheckin(db: SupabaseClient, accountId: string, bookingId: string): Promise<boolean> {
+  const { data, error } = await db.from("job_checkins").select("id")
+    .eq("account_id", accountId).eq("booking_id", bookingId).eq("answer", "not_great").maybeSingle();
+  if (error) throw new Error(`hasNotGreatCheckin failed: ${error.message}`);
+  return data !== null;
+}
+
+/**
+ * Which of these accounts have the check-in switched on (`automations.config.checkin === true` on their
+ * review_request recipe; only the boolean counts, as in `parseReviewRequestConfig`). The calendar follow-up reads it
+ * (plan D7a) for the few due bookings that were already asked; it lives here, not beside the recipe's parser,
+ * because booking.ts cannot import automations.ts (they import each other). Whether the recipe is currently enabled
+ * does not matter: a check-in that went out is a check-in that went out. THROWS on a read error.
+ */
+export async function accountsWithCheckin(db: SupabaseClient, accountIds: readonly string[]): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set();
+  const { data, error } = await db.from("automations").select("account_id, config")
+    .eq("recipe_key", "review_request").in("account_id", [...accountIds]);
+  if (error) throw new Error(`accountsWithCheckin failed: ${error.message}`);
+  const on = ((data ?? []) as { account_id: string; config: unknown }[])
+    .filter((a) => (a.config as { checkin?: unknown } | null)?.checkin === true);
+  return new Set(on.map((a) => a.account_id));
+}
+
+/**
+ * "Not great" answers answered since `sinceIso` whose To-do does not exist (plan D3, PR 2's review): the sweep's
+ * read. The answer page retries the To-do a few times and a replay repairs it, but a customer who never taps again
+ * needs this. Newest first and BOUNDED by `limit`, so the pass's work per tick is bounded whatever the table holds;
+ * the To-do read is one `in` over at most `limit` ids. Two reads rather than an embed anti-join: unambiguous, and
+ * the second is skipped when there are no candidates, which is nearly every tick. The `limit` counts the newest
+ * not-great answers in the window INCLUDING ones whose To-do exists, so a window holding more than `limit` of them
+ * could hide an older missing one: a ceiling, accepted at today's volume (a handful of not-great answers a day
+ * across the platform), to be raised before it can bite. THROWS on a read error.
+ */
+export async function listCheckinsMissingTask(db: SupabaseClient, sinceIso: string, limit: number): Promise<JobCheckin[]> {
+  const { data, error } = await db.from("job_checkins").select(COLS)
+    .eq("answer", "not_great").gte("answered_at", sinceIso)
+    .order("answered_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(`listCheckinsMissingTask failed: ${error.message}`);
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0) return [];
+  const { data: tasks, error: taskErr } = await db.from("tasks").select("review_checkin_id")
+    .in("review_checkin_id", rows.map((r) => r.id));
+  if (taskErr) throw new Error(`listCheckinsMissingTask failed: ${taskErr.message}`);
+  const have = new Set(((tasks ?? []) as { review_checkin_id: string }[]).map((t) => t.review_checkin_id));
+  return rows.filter((r) => !have.has(r.id)).map(toCheckin);
+}
