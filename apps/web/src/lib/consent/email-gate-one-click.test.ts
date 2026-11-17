@@ -16,7 +16,10 @@ vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<obj
 // The registry plus ONE probe kind that opts in, standing in for `operator.daily_brief` (PR 3 registers that).
 vi.mock("./classes", async (importOriginal) => {
   const real = await importOriginal<typeof import("./classes")>();
-  const kinds = { ...real.EMAIL_KINDS, "operator.probe_one_click": { class: "operator", hours: "any", footer: "none", oneClickUnsubscribe: true } };
+  const kinds = { ...real.EMAIL_KINDS, "operator.probe_one_click": { class: "operator", hours: "any", footer: "none", oneClickUnsubscribe: true },
+    // Misuse probes: the flag on a kind that keeps the unsubscribe footer, and on a non-operator kind.
+    "operator.probe_footer_flagged": { class: "operator", hours: "any", footer: "unsubscribe", oneClickUnsubscribe: true },
+    "staff.probe_class_flagged": { class: "staff_typed", hours: "any", footer: "none", oneClickUnsubscribe: true } };
   const known = (k: string) => Object.hasOwn(real.EMAIL_KINDS, k);
   return {
     ...real, EMAIL_KINDS: kinds,
@@ -64,6 +67,10 @@ describe("oneClickHeaders", () => {
       "List-Unsubscribe": `<${ONE_CLICK}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     });
   });
+  it("nothing for an opted-in kind that is not operator mail", () => {
+    expect(oneClickHeaders({ class: "staff_typed", hours: "any", footer: "none", oneClickUnsubscribe: true }, ONE_CLICK)).toBeNull();
+    expect(oneClickHeaders({ class: "marketing", hours: "any", footer: "unsubscribe", oneClickUnsubscribe: true }, ONE_CLICK)).toBeNull();
+  });
   it("nothing for a kind that did not opt in, however good the url", () => {
     expect(oneClickHeaders({ class: "operator", hours: "any", footer: "none" }, ONE_CLICK)).toBeNull();
     expect(oneClickHeaders({ class: "operator", hours: "any", footer: "none", oneClickUnsubscribe: false } as unknown as EmailKindSpec, ONE_CLICK)).toBeNull();
@@ -76,9 +83,9 @@ describe("oneClickHeaders", () => {
 });
 
 describe("the registry: who may carry the one-click link", () => {
-  it("only the probe kind here; no real kind opts in until the brief's own kind is registered (PR 3 makes this list ['operator.daily_brief'])", () => {
+  it("only the probe kinds here; no real kind opts in until the brief's own kind is registered (PR 3 makes the real list ['operator.daily_brief'])", () => {
     const optedIn = Object.entries(MOCKED_KINDS as Record<string, EmailKindSpec>).filter(([, s]) => s.oneClickUnsubscribe === true).map(([k]) => k);
-    expect(optedIn).toEqual(["operator.probe_one_click"]);
+    expect(optedIn).toEqual(["operator.probe_one_click", "operator.probe_footer_flagged", "staff.probe_class_flagged"]);
   });
 });
 
@@ -90,6 +97,15 @@ describe("sendEmail: the headers reach the provider for the kind that opted in, 
     expect((send.mock.calls[0]![0] as { html: string }).html).not.toContain(UNSUBSCRIBE_MARKER);
   });
 
+  it("the flag alone is not enough: not on a kind that keeps the unsubscribe footer, not on a non-operator kind", async () => {
+    await sendEmail(req("operator.probe_footer_flagged", { contactId: "0c9a8b7d-1e2f-4a3b-8c4d-5e6f7a8b9c0d" }), { db: {} as never, env: ENV });
+    const footerKind = headersSent();
+    expect(footerKind?.["List-Unsubscribe"] ?? "").not.toContain("/api/brief/");
+    send.mockClear();
+    await sendEmail(req("staff.probe_class_flagged"), { db: {} as never, env: ENV });
+    expect(headersSent()).toBeUndefined();
+  });
+
   it("the same request on that kind WITHOUT a link sends no headers (the body link still ships)", async () => {
     await sendEmail(req("operator.probe_one_click", { oneClickUnsubscribe: undefined }), { env: ENV });
     expect(headersSent()).toBeUndefined();
@@ -97,7 +113,7 @@ describe("sendEmail: the headers reach the provider for the kind that opted in, 
 
   it("every other OPERATOR kind ignores a link it was handed: no headers", async () => {
     const others = Object.entries(MOCKED_KINDS as Record<string, EmailKindSpec>)
-      .filter(([k, s]) => s.class === "operator" && k !== "operator.probe_one_click").map(([k]) => k);
+      .filter(([k, s]) => s.class === "operator" && !k.startsWith("operator.probe_")).map(([k]) => k);
     expect(others.length).toBeGreaterThan(5);
     for (const kind of others) {
       send.mockClear();

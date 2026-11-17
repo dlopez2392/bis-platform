@@ -25,19 +25,19 @@ const only = (locale: Locale, patch: Partial<BriefContent>): BriefContent => ({
 
 describe("briefSubject", () => {
   it("EN: parts present only, plural-correct, the brand name", () => {
-    expect(briefSubject(full("en"))).toBe("Your day at Rio Roofing: 3 jobs today, 2 calls answered yesterday, 1 new lead, 7 to do");
+    expect(briefSubject(full("en"))).toBe("Your day at Rio Roofing: 3 jobs today, 2 calls answered yesterday, 1 new lead yesterday, 7 things to do");
     expect(briefSubject(only("en", { bookings: { count: 1, more: 0, items: [] } }))).toBe("Your day at Rio Roofing: 1 job today");
-    expect(briefSubject(only("en", { calls: { count: 1 }, leads: { count: 4 } }))).toBe("Your day at Rio Roofing: 1 call answered yesterday, 4 new leads");
-    expect(briefSubject(only("en", { todos: { count: 1, more: 0, items: [] } }))).toBe("Your day at Rio Roofing: 1 to do");
+    expect(briefSubject(only("en", { calls: { count: 1 }, leads: { count: 4 } }))).toBe("Your day at Rio Roofing: 1 call answered yesterday, 4 new leads yesterday");
+    expect(briefSubject(only("en", { todos: { count: 1, more: 0, items: [] } }))).toBe("Your day at Rio Roofing: 1 thing to do");
   });
   it("ES: usted, the glossary's words, plural-correct", () => {
     expect(briefSubject(full("es"))).toBe(
-      "Su día en Rio Roofing: 3 trabajos hoy, 2 llamadas atendidas ayer, 1 cliente potencial nuevo, 7 pendientes");
+      "Su día en Rio Roofing: 3 trabajos hoy, 2 llamadas atendidas ayer, 1 cliente potencial nuevo ayer, 7 cosas pendientes");
     expect(briefSubject(only("es", { bookings: { count: 1, more: 0, items: [] } }))).toBe("Su día en Rio Roofing: 1 trabajo hoy");
-    expect(briefSubject(only("es", { todos: { count: 1, more: 0, items: [] } }))).toBe("Su día en Rio Roofing: 1 pendiente");
+    expect(briefSubject(only("es", { todos: { count: 1, more: 0, items: [] } }))).toBe("Su día en Rio Roofing: 1 cosa pendiente");
   });
   it("a blank brand name drops the clause instead of inventing a noun", () => {
-    expect(briefSubject({ ...full("en"), brandName: "  " })).toBe("Your day: 3 jobs today, 2 calls answered yesterday, 1 new lead, 7 to do");
+    expect(briefSubject({ ...full("en"), brandName: "  " })).toBe("Your day: 3 jobs today, 2 calls answered yesterday, 1 new lead yesterday, 7 things to do");
     expect(briefSubject({ ...only("es", {}), brandName: "" })).toBe("Su día");
   });
   it("with no section at all it still reads as a subject", () => {

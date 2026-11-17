@@ -24,7 +24,7 @@ const content = (locale: "en" | "es", patch: Partial<BriefContent> = {}): BriefC
 describe("dailyBriefEmail", () => {
   it("EN: subject, text and html carry the day, the sections, the links and the way off", () => {
     const e = dailyBriefEmail({ brand, content: content("en"), links, offUrl });
-    expect(e.subject).toBe("Your day at Rio Roofing: 1 job today, 2 calls answered yesterday, 1 to do");
+    expect(e.subject).toBe("Your day at Rio Roofing: 1 job today, 2 calls answered yesterday, 1 thing to do");
     for (const part of ["Your day: Tuesday, June 15", "On the calendar today", "9:00 AM: Ana Ruiz, On site", "2 calls answered.", "Call back Cy"]) {
       expect(e.text, part).toContain(part);
       expect(e.html, part).toContain(part);
@@ -40,7 +40,7 @@ describe("dailyBriefEmail", () => {
 
   it("ES: one message in one language end to end, usted, the brand name still there", () => {
     const e = dailyBriefEmail({ brand, content: content("es"), links, offUrl });
-    expect(e.subject).toBe("Su día en Rio Roofing: 1 trabajo hoy, 2 llamadas atendidas ayer, 1 pendiente");
+    expect(e.subject).toBe("Su día en Rio Roofing: 1 trabajo hoy, 2 llamadas atendidas ayer, 1 cosa pendiente");
     for (const part of ["Su día: martes, 15 de junio", "En el calendario de hoy", "2 llamadas atendidas.", "Abrir el calendario", "Recibe esto cada mañana porque lo activó.", "Desactivar este resumen"]) {
       expect(e.html, part).toContain(part);
     }

@@ -10,10 +10,12 @@ const NOW = new Date("2027-06-15T12:05:00Z"); // 07:05 in Chicago
 const range = { first: "2027-06-15", last: "2027-06-15" };
 
 const appt = (status: "booked" | "cancelled" | "completed" | "no_show", customer: string | null, when = "9:00 AM", locale: "en" | "es" = "en") => ({
-  when, customer, meetingType: "On site", status: statusWord(makeTr(locale), status),
+  when, customer, meetingType: "On site", status: statusWord(makeTr(locale), status), statusCode: status,
 });
-const appointments = (rows: ReturnType<typeof appt>[], more = 0): AppointmentsResult => (
-  { ok: true, range, count: rows.length + more, truncated: false, more, appointments: rows }
+/** `moreBooked`: jobs past the read's own cap that are still booked (the read's exact `bookedCount` includes them). */
+const appointments = (rows: ReturnType<typeof appt>[], more = 0, moreBooked = more): AppointmentsResult => (
+  { ok: true, range, count: rows.length + more, truncated: false, more, appointments: rows,
+    bookedCount: rows.filter((r) => r.statusCode === "booked").length + moreBooked }
 );
 const calls = (count: number): CallsAndMessagesResult => (
   { ok: true, range, count, spam: 7, more: 0, calls: [] }
@@ -62,20 +64,16 @@ describe("shapeBrief", () => {
     });
   });
 
-  it("recognises 'booked' in Spanish too, because the read speaks the reader's language", () => {
-    const c = shapeBrief(reads({ locale: "es", appointments: appointments([appt("booked", "Ana Ruiz", "9:00 a.m.", "es"), appt("cancelled", "Bo Lee", "10:00 a.m.", "es")]) }));
+  it("matches on the raw status code, so rows worded in another language than the brief's still count", () => {
+    // The read wrote its words in Spanish; the brief is English. A word comparison would drop every job.
+    const c = shapeBrief(reads({ locale: "en", appointments: appointments([appt("booked", "Ana Ruiz", "9:00 a.m.", "es"), appt("cancelled", "Bo Lee", "10:00 a.m.", "es")]) }));
     expect(c.bookings?.items.map((i) => i.customer)).toEqual(["Ana Ruiz"]);
+    const d = shapeBrief(reads({ locale: "es", appointments: appointments([appt("booked", "Ana Ruiz", "9:00 AM", "en")]) }));
+    expect(d.bookings?.count).toBe(1);
   });
 
-  it("the four status words are four different words, so matching 'booked' by its word is unambiguous", () => {
-    for (const locale of ["en", "es"] as const) {
-      const words = (["booked", "cancelled", "completed", "no_show"] as const).map((s) => statusWord(makeTr(locale), s));
-      expect(new Set(words).size, locale).toBe(4);
-    }
-  });
-
-  it("jobs past the read's own cap ride as 'more', and the count includes them", () => {
-    const c = shapeBrief(reads({ appointments: appointments([appt("booked", "Ana Ruiz")], 3) }));
+  it("jobs past the read's cap are counted exactly from its bookedCount: cancelled ones past the cap are not 'more'", () => {
+    const c = shapeBrief(reads({ appointments: appointments([appt("booked", "Ana Ruiz")], 5, 3) }));
     expect(c.bookings).toMatchObject({ count: 4, more: 3 });
   });
 

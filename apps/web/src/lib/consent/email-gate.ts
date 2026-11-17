@@ -201,13 +201,13 @@ function sendFields(req: EmailRequest): SendEmailInput {
 }
 
 /**
- * The RFC 8058 pair for a kind that opted in through the registry (F-082, owner answer Q5), or null. Gmail and
+ * The RFC 8058 pair for an OPERATOR kind that opted in through the registry (F-082, owner answer Q5), or null. Gmail and
  * Outlook show their own "unsubscribe" button from it. The URL must be ONE https URI with nothing in it that could
  * end the header or the angle brackets (RFC 8058: "MUST contain one HTTPS URI"; a line break would be header
  * injection). Anything else, and every kind that did not opt in, gets no header at all.
  */
 export function oneClickHeaders(spec: EmailKindSpec, url: string | undefined): Record<string, string> | null {
-  if (spec.oneClickUnsubscribe !== true) return null;
+  if (spec.oneClickUnsubscribe !== true || spec.class !== "operator") return null;
   if (typeof url !== "string" || !/^https:\/\/[^\s<>"]+$/.test(url)) return null;
   return { "List-Unsubscribe": `<${url}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
 }

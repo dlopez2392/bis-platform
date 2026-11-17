@@ -8,8 +8,9 @@ import { sealBriefToken } from "@/lib/brief/token";
 import { sealConsentToken } from "@/lib/consent/token";
 
 const SECRET = "route-test-secret-0123456789abcdef-012";
-const SUB = "4b1d6f0e-3c1a-4e2b-9a55-0f7a1c2d3e4f";
-const token = () => sealBriefToken({ v: 1, s: SUB, i: 1_790_000_000_000 }, SECRET);
+const USER = "4b1d6f0e-3c1a-4e2b-9a55-0f7a1c2d3e4f";
+const ACCT = "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f";
+const token = () => sealBriefToken({ v: 1, u: USER, a: ACCT, i: 1_790_000_000_000 }, SECRET);
 const ctx = (t: string) => ({ params: Promise.resolve({ token: t }) });
 const post = (t: string, body = "List-Unsubscribe=One-Click") => POST(
   new Request(`https://app.example.com/api/brief/off/${t}`, {
@@ -32,7 +33,7 @@ describe("POST /api/brief/off/[token]: the one-click way off", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("location")).toBeNull();
     expect(db.unsubscribeFromBrief).toHaveBeenCalledTimes(1);
-    expect(db.unsubscribeFromBrief).toHaveBeenCalledWith({ tag: "service" }, { id: SUB });
+    expect(db.unsubscribeFromBrief).toHaveBeenCalledWith({ tag: "service" }, { userId: USER, accountId: ACCT });
   });
 
   it("is idempotent: a subscription that is already gone is still 200, and a second press is the same", async () => {
@@ -47,7 +48,7 @@ describe("POST /api/brief/off/[token]: the one-click way off", () => {
   });
 
   it("a bad token is 400 and touches nothing: forged, truncated, and a CONSENT token", async () => {
-    const consent = sealConsentToken({ v: 1, a: SUB, c: "email", t: "ana@example.com", i: 1, n: null }, SECRET);
+    const consent = sealConsentToken({ v: 1, a: ACCT, c: "email", t: "ana@example.com", i: 1, n: null }, SECRET);
     for (const bad of ["1.forged.token", "junk", token().slice(0, -3), consent]) {
       const res = await post(bad);
       expect(res.status, bad.slice(0, 12)).toBe(400);
@@ -82,5 +83,45 @@ describe("GET /api/brief/off/[token]: never deletes", () => {
     expect(res.headers.get("location")).toBe(`https://app.example.com/brief/off/${t}`);
     expect(db.unsubscribeFromBrief).not.toHaveBeenCalled();
     expect(db.serviceDb).not.toHaveBeenCalled();
+  });
+});
+
+describe("the link is bound to the person and the business, not to a row", () => {
+  type Row = { id: string; userId: string; accountId: string };
+  const OTHER_USER = "9c2d7e1f-4d2b-4f3c-8b66-1a8b2d3e4f50";
+  const OTHER_ACCT = "7a3e8f20-5e3c-4a4d-9c77-2b9c3e4f5a61";
+  let rows: Row[];
+  let n: number;
+  /** A re-insert gets a NEW id, as gen_random_uuid does. */
+  const insert = (userId: string, accountId: string) => rows.push({ id: `row-${++n}`, userId, accountId });
+  beforeEach(() => {
+    rows = []; n = 0;
+    // The real function's two target shapes, over an in-memory table.
+    db.unsubscribeFromBrief.mockImplementation(async (_db: unknown, t: { id: string } | { userId: string; accountId: string }) => {
+      const before = rows.length;
+      rows = rows.filter((r) => !("id" in t ? r.id === t.id : r.userId === t.userId && r.accountId === t.accountId));
+      return rows.length < before;
+    });
+  });
+
+  it("off, then on again (a new row id), and the link from the OLD email turns the NEW row off", async () => {
+    insert(USER, ACCT);
+    const oldEmailLink = token();
+    rows = []; // Preferences: off, and its Undo re-inserts
+    insert(USER, ACCT);
+    expect(rows[0]!.id).toBe("row-2");
+    expect((await post(oldEmailLink)).status).toBe(200);
+    expect(rows).toEqual([]);
+  });
+
+  it("a token for (A, acct1) cannot touch (B, acct1) or (A, acct2)", async () => {
+    insert(USER, ACCT); insert(OTHER_USER, ACCT); insert(USER, OTHER_ACCT);
+    expect((await post(token())).status).toBe(200);
+    expect(rows.map((r) => [r.userId, r.accountId])).toEqual([[OTHER_USER, ACCT], [USER, OTHER_ACCT]]);
+  });
+
+  it("nothing to delete (already off) is still 200: off is the answer, and it is idempotent", async () => {
+    expect((await post(token())).status).toBe(200);
+    expect(db.unsubscribeFromBrief).toHaveBeenCalledTimes(1);
   });
 });

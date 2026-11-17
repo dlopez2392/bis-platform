@@ -9,8 +9,9 @@ import { turnOffAction } from "./actions";
 import { sealBriefToken } from "@/lib/brief/token";
 
 const SECRET = "page-test-secret-0123456789abcdef-0123";
-const SUB = "4b1d6f0e-3c1a-4e2b-9a55-0f7a1c2d3e4f";
-const token = () => sealBriefToken({ v: 1, s: SUB, i: 1_790_000_000_000 }, SECRET);
+const USER = "4b1d6f0e-3c1a-4e2b-9a55-0f7a1c2d3e4f";
+const ACCT = "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f";
+const token = () => sealBriefToken({ v: 1, u: USER, a: ACCT, i: 1_790_000_000_000 }, SECRET);
 const render = async (t: string) => renderToStaticMarkup(await Page({ params: Promise.resolve({ token: t }) }));
 
 beforeEach(() => {
@@ -64,7 +65,7 @@ describe("/brief/off/[token] page", () => {
 describe("turnOffAction: the button's one write", () => {
   it("a good token deletes that subscription and answers off", async () => {
     expect(await turnOffAction(token())).toEqual({ state: "off" });
-    expect(db.unsubscribeFromBrief).toHaveBeenCalledWith({ tag: "service" }, { id: SUB });
+    expect(db.unsubscribeFromBrief).toHaveBeenCalledWith({ tag: "service" }, { userId: USER, accountId: ACCT });
   });
   it("is idempotent: already gone is still off", async () => {
     db.unsubscribeFromBrief.mockResolvedValue(false);

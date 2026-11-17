@@ -4,8 +4,6 @@
 // plus the Monday report's lead count, and returns structured facts. It makes no sentence and no markup:
 // brief-copy.ts words them, templates/daily-brief.ts lays them out, and a text-message renderer would be a sibling
 // of that template (the seam the plan leaves). A section with nothing in it is null: omitted, never zeroed.
-import { makeTr } from "@/lib/record/copy";
-import { statusWord } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calendar/agenda-view";
 import type { AppointmentsResult, CallsAndMessagesResult, NeedsAttentionResult } from "@/lib/owner-line/tools/read";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -60,13 +58,11 @@ export function shapeBrief(r: BriefReads): BriefContent {
   if (!r.calls.ok) throw new Error(`brief: the calls read failed (${r.calls.error})`);
   const label = dayLabel(r.now, r.zone, r.locale);
 
-  // Only jobs still `booked`. The agenda read returns every status except a replaced cancellation, and gives the
-  // status as the reader's WORD (statusWord), so "booked" is matched by that same word from the same function.
-  // The four words are distinct in both languages (pinned in the test). Jobs beyond the read's own cap are
-  // `more`, an upper bound (it cannot say which of them are cancelled); no real shop books 25 jobs in a day.
-  const bookedWord = statusWord(makeTr(r.locale), "booked");
-  const booked = r.appointments.appointments.filter((a) => a.status === bookedWord);
-  const more = r.appointments.more;
+  // Only jobs still `booked`, matched on the read's RAW status code (never on its translated word, which is in the
+  // read's locale and silently mismatches the brief's). `bookedCount` is the read's exact count of booked jobs, so
+  // the jobs past its own 25-row cap are `more` with no cancelled one among them.
+  const booked = r.appointments.appointments.filter((a) => a.statusCode === "booked");
+  const more = Math.max(0, r.appointments.bookedCount - booked.length);
 
   return {
     locale: r.locale, brandName: r.brandName, dayLabel: label,

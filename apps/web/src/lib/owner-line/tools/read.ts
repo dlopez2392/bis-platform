@@ -50,14 +50,18 @@ function tileCall(x: CallListRow, handsets: readonly string[]): x is TileCall {
 
 /** What each read returns, typed for a caller that is code and not the model (the daily brief, PR 2). Types only:
  *  the functions below return exactly what they returned before, now with their shape on the signature. */
-type RangeError = { ok: false; error: "bad_range" | "range_too_long" };
-export type CallsAndMessagesResult = RangeError | {
+type ReadRangeError = { ok: false; error: "bad_range" | "range_too_long" };
+export type CallsAndMessagesResult = ReadRangeError | {
   ok: true; range: { first: string; last: string }; count: number; spam: number; more: number;
   calls: { when: string; caller: string; outcome: string; reason: string | null; needsCallback: boolean }[];
 };
-export type AppointmentsResult = RangeError | {
+export type AppointmentsResult = ReadRangeError | {
   ok: true; range: { first: string; last: string }; count: number; truncated: boolean; more: number;
-  appointments: { when: string; customer: string | null; meetingType: string | null; status: string }[];
+  /** How many of `count` are still `booked`: exact, from the raw status, for a caller that is code (the daily brief). */
+  bookedCount: number;
+  appointments: { when: string; customer: string | null; meetingType: string | null; status: string;
+    /** The raw status, language-free: match on this, never on `status`, which is the reader's word. */
+    statusCode: "booked" | "cancelled" | "completed" | "no_show" }[];
 };
 export type NeedsAttentionResult = {
   ok: true; count: number; more: number;
@@ -115,10 +119,10 @@ export async function appointments(c: OwnerReadContext, args: Record<string, unk
   const tr: Tr = makeTr(c.locale);
   return {
     ok: true, range: { first: r.firstDay, last: r.lastDay }, count: shown.length, truncated,
-    more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN),
+    more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN), bookedCount: shown.filter((x) => x.status === "booked").length,
     appointments: shown.slice(0, APPOINTMENTS_SPOKEN).map((x) => ({
       when: when(x.starts_at, c, r.multiDay), customer: nameOf(x.contact),
-      meetingType: x.meeting_type ? meetingWord(tr, x.meeting_type) : null, status: statusWord(tr, x.status),
+      meetingType: x.meeting_type ? meetingWord(tr, x.meeting_type) : null, status: statusWord(tr, x.status), statusCode: x.status,
     })),
   };
 }
