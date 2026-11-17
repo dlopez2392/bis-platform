@@ -4,6 +4,7 @@ import {
   type Branding, type CheckinAnswer, type SupabaseClient,
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
+import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { checkinTaskTitle } from "./copy";
 import type { CheckinTokenPayload } from "./token";
 
@@ -88,11 +89,12 @@ async function taskTitle(db: SupabaseClient, accountId: string, contactId: strin
  * "something went wrong, please tap again" and means NOTHING was recorded.
  *
  *  - An answer that is not one of the three, or a token past 30 days, writes nothing.
- *  - recordCheckinAnswer decides first-wins at the database; only the call that RECORDED a "not great" opens the
- *    one To-do, so a replay or a double submit makes none. A throw (a contact merge moved the booking between its
+ *  - recordCheckinAnswer decides first-wins at the database. A "not great" (recorded now OR found already there)
+ *    asks for its ONE To-do on the winner's check-in id; the unique index makes every call after the first a no-op.
+ *    A throw (a contact merge moved the booking between its
  *    read and its insert, 23503, or any database fault) is "retry".
- *  - A To-do that cannot be opened after the answer is recorded is logged and the customer is still thanked: the
- *    answer stands, and a "tap again" would only find it already recorded.
+ *  - A To-do that cannot be opened after retries is logged and the customer is still thanked: the answer stands, and
+ *    a replay (or PR 3's sweep) asks for the To-do again.
  */
 export async function answerCheckin(
   db: SupabaseClient, p: CheckinTokenPayload, answer: unknown, now: Date,
@@ -106,12 +108,17 @@ export async function answerCheckin(
     console.error(`check-in page: account ${p.a}, booking ${p.b}: the answer was not recorded: ${loggableError(e)}`);
     return "retry";
   }
-  if (result.status !== "recorded" || result.checkin.answer !== "not_great") return "done";
-  try {
-    const title = await taskTitle(db, p.a, result.checkin.contactId);
-    await ensureCheckinTask(db, p.a, result.checkin, { title, dueAt: now.toISOString() }, "checkin-page", "system");
-  } catch (e) {
-    console.error(`check-in page: account ${p.a}, booking ${p.b}: a not-great answer was recorded but its To-do was not opened: ${loggableError(e)}`);
+  if (result.status === "gone" || result.checkin.answer !== "not_great") return "done";
+  // The WINNER's check-in, whichever call this is: a replay of a not-great answer re-asks for the same To-do, which
+  // is a no-op when it exists (tasks_review_checkin_once, ensureCheckinTask's 23505 branch) and repairs it when the
+  // first call's insert failed. A few bounded attempts, as the stamps do (stampWithRetry: under a second in all).
+  const checkin = result.checkin;
+  const opened = await stampWithRetry(async () => {
+    const title = await taskTitle(db, p.a, checkin.contactId);
+    await ensureCheckinTask(db, p.a, checkin, { title, dueAt: now.toISOString() }, "checkin-page", "system");
+  });
+  if (!opened.stamped) {
+    console.error(`check-in page: account ${p.a}, booking ${p.b}: a not-great answer is recorded but its To-do may not exist (the title read, the insert or its event failed after ${opened.attempts} attempts): ${loggableError(opened.lastError)}`);
   }
   return "done";
 }

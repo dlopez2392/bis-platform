@@ -148,15 +148,72 @@ describe("answerCheckin", () => {
     expect(dbm.ensureCheckinTask.mock.calls[0]![5]).toBe("system");
   });
 
-  it("a replay or a double submit (someone answered first) records nothing new and makes no To-do", async () => {
+  /** ensureCheckinTask as the unique index behaves: the first call per check-in creates, every later one finds it. */
+  const uniqueIndex = () => {
+    const made = new Set<string>();
+    dbm.ensureCheckinTask.mockImplementation(async (_db, _a, c: JobCheckin) => {
+      const created = !made.has(c.id);
+      made.add(c.id);
+      return { id: `task-${c.id}`, created };
+    });
+    return made;
+  };
+
+  it("a replay or a double submit (someone answered first) asks for the WINNER's To-do by id, and the unique index yields exactly ONE created task", async () => {
+    const winner = checkin("not_great");
     dbm.recordCheckinAnswer
-      .mockResolvedValueOnce({ status: "recorded", checkin: checkin("not_great") })
-      .mockResolvedValue({ status: "already", checkin: checkin("not_great") });
+      .mockResolvedValueOnce({ status: "recorded", checkin: winner })
+      .mockResolvedValue({ status: "already", checkin: winner });
+    uniqueIndex();
+    const { db } = world();
+    for (const a of ["not_great", "not_great", "great"]) await answerCheckin(db, PAYLOAD, a, NOW);
+    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(3);
+    for (const call of dbm.ensureCheckinTask.mock.calls) expect(call[2].id).toBe(winner.id);
+    const created = await Promise.all(dbm.ensureCheckinTask.mock.results.map((r) => r.value as Promise<{ created: boolean }>));
+    expect(created.filter((c) => c.created)).toHaveLength(1);
+  });
+
+  it("an 'already' answer that is not great (great or okay won) makes no To-do", async () => {
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "already", checkin: checkin("great") });
     const { db } = world();
     await answerCheckin(db, PAYLOAD, "not_great", NOW);
-    await answerCheckin(db, PAYLOAD, "not_great", NOW);
-    await answerCheckin(db, PAYLOAD, "great", NOW);
-    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(1);
+    expect(dbm.ensureCheckinTask).not.toHaveBeenCalled();
+  });
+
+  it("(a) a first attempt that throws is retried, and the To-do is made", async () => {
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin("not_great") });
+    dbm.ensureCheckinTask.mockRejectedValueOnce(new Error("blip")).mockResolvedValue({ id: "t1", created: true });
+    const { db } = world();
+    vi.mocked(console.error).mockClear();
+    expect(await answerCheckin(db, PAYLOAD, "not_great", NOW)).toBe("done");
+    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(2);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("(b) a recorded not-great whose To-do insert fails every attempt is repaired by the replay: same check-in id, task created", async () => {
+    const winner = checkin("not_great");
+    dbm.recordCheckinAnswer
+      .mockResolvedValueOnce({ status: "recorded", checkin: winner })
+      .mockResolvedValue({ status: "already", checkin: winner });
+    let down = true;
+    const made = new Set<string>();
+    dbm.ensureCheckinTask.mockImplementation(async (_db, _a, c: JobCheckin) => {
+      if (down) throw new Error("insert failed");
+      made.add(c.id);
+      return { id: "t1", created: true };
+    });
+    const { db } = world();
+    vi.mocked(console.error).mockClear();
+    expect(await answerCheckin(db, PAYLOAD, "not_great", NOW)).toBe("done");
+    expect(made.size).toBe(0);
+    expect(console.error).toHaveBeenCalled();
+    const attempts = dbm.ensureCheckinTask.mock.calls.length;
+    expect(attempts).toBeGreaterThan(1);
+    down = false;
+    expect(await answerCheckin(db, PAYLOAD, "not_great", NOW)).toBe("done");
+    expect(dbm.ensureCheckinTask.mock.calls.length).toBe(attempts + 1);
+    expect(dbm.ensureCheckinTask.mock.calls.at(-1)![2].id).toBe(winner.id);
+    expect(made.has(winner.id)).toBe(true);
   });
 
   it("a booking that is gone or not completed: nothing happens", async () => {
@@ -189,12 +246,12 @@ describe("answerCheckin", () => {
     expect(console.error).toHaveBeenCalled();
   });
 
-  it("an answer that is recorded stays recorded and is thanked even when its To-do could not be opened (logged, never a raw error)", async () => {
+  it("an answer that is recorded stays recorded and is thanked even when its To-do could not be opened after the retries (logged naming the doubt, never a raw error)", async () => {
     dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin("not_great") });
     dbm.ensureCheckinTask.mockRejectedValue(new Error("down"));
     const { db } = world();
     expect(await answerCheckin(db, PAYLOAD, "not_great", NOW)).toBe("done");
-    expect(console.error).toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("its To-do may not exist"));
   });
 
   it("a customer with no name gets the no-name To-do title", async () => {

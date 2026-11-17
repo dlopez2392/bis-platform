@@ -88,14 +88,21 @@ describe("answerCheckinAction", () => {
     expect(dbm.ensureCheckinTask.mock.calls[0]![2]).toMatchObject({ answer: "not_great", bookingId: BOOKING, contactId: CONTACT });
   });
 
-  it("a replay and a double submit (even at the same instant) record once and make ONE To-do (mutation: create the task on every answer -> FAILS)", async () => {
+  it("a replay and a double submit (even at the same instant) record once; every To-do request carries the WINNER's check-in id and the unique index yields ONE created task (mutation: create the task on every answer -> FAILS)", async () => {
+    const made = new Set<string>();
+    dbm.ensureCheckinTask.mockImplementation(async (_db, _a, c: JobCheckin) => {
+      const created = !made.has(c.id);
+      made.add(c.id);
+      return { id: `task-${c.id}`, created };
+    });
     await Promise.all([1, 2, 3].map(() => redirected(answerCheckinAction(TOKEN, form({ answer: "not_great" })))));
     await redirected(answerCheckinAction(TOKEN, form({ answer: "not_great" })));
     await redirected(answerCheckinAction(TOKEN, form({ answer: "great" })));
-    expect(dbm.recordCheckinAnswer).toHaveBeenCalledTimes(5);
     const outcomes = await Promise.all(dbm.recordCheckinAnswer.mock.results.map((r) => r.value as Promise<{ status: string }>));
     expect(outcomes.map((o) => o.status).sort()).toEqual(["already", "already", "already", "already", "recorded"]);
-    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(1);
+    for (const call of dbm.ensureCheckinTask.mock.calls) expect(call[2].id).toBe("c1");
+    const created = await Promise.all(dbm.ensureCheckinTask.mock.results.map((r) => r.value as Promise<{ created: boolean }>));
+    expect(created.filter((c) => c.created)).toHaveLength(1);
   });
 
   it("a different answer after the first one changes nothing and makes no To-do (the first answer wins)", async () => {
