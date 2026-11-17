@@ -1,5 +1,5 @@
-import { createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
 import { consentTokenSecrets, isUuid } from "@/lib/consent/token";
+import { openSigned, sealSigned } from "@/lib/signed-token";
 import { isProductionEnv } from "@/lib/email/environment";
 
 /**
@@ -30,25 +30,17 @@ export type BriefTokenPayload = {
   i: number;
 };
 
-const VERSION = "1";
-/** Far longer than any real token (~190 characters); a bound on work. */
-const MAX_TOKEN_LENGTH = 2048;
+/** The HKDF salt of this kind; signed-token.ts holds the one derivation, MAC and order of checks. */
+const DOMAIN = "bis-brief-token";
 /** Date's own range, so `new Date(i)` can never throw downstream. */
-const BODY_CHARS = /^[A-Za-z0-9_-]+$/;
-/** HMAC-SHA256 is 32 bytes: exactly 43 base64url characters, unpadded. */
-const SIG_CHARS = /^[A-Za-z0-9_-]{43}$/;
 const MAX_TIME = 8.64e15;
 /** The shortest secret production seals with: the email gate's own floor for the consent link. */
 const MIN_SECRET_LENGTH = 32;
 
-const macKey = (secret: string) => Buffer.from(hkdfSync("sha256", secret, "bis-brief-token", "mac-v1", 32));
-const macOf = (key: Buffer, body: string) => createHmac("sha256", key).update(`${VERSION}.${body}`).digest();
-
 export function sealBriefToken(p: BriefTokenPayload, secret: string): string {
   if (!secret) throw new Error("sealBriefToken: no secret");
   if (!isUuid(p.u) || !isUuid(p.a)) throw new Error("sealBriefToken: the user or account id is not a uuid");
-  const body = Buffer.from(JSON.stringify({ v: p.v, u: p.u, a: p.a, i: p.i }), "utf8").toString("base64url");
-  return `${VERSION}.${body}.${macOf(macKey(secret), body).toString("base64url")}`;
+  return sealSigned(DOMAIN, { v: p.v, u: p.u, a: p.a, i: p.i }, secret);
 }
 
 function shapeOf(x: unknown): BriefTokenPayload | null {
@@ -60,25 +52,7 @@ function shapeOf(x: unknown): BriefTokenPayload | null {
 }
 
 export function openBriefToken(token: unknown, secrets: readonly (string | null | undefined)[]): BriefTokenPayload | null {
-  if (typeof token !== "string" || token.length > MAX_TOKEN_LENGTH) return null;
-  const parts = token.split(".");
-  if (parts.length !== 3 || parts[0] !== VERSION) return null;
-  const [, body, sig] = parts as [string, string, string];
-  // base64url ONLY: Buffer.from(…, "base64url") silently drops a trailing '!', '=', spaces and newlines and
-  // accepts '+' and '/', so a token with junk after a valid signature would otherwise open.
-  if (!BODY_CHARS.test(body) || !SIG_CHARS.test(sig)) return null;
-  const got = Buffer.from(sig, "base64url");
-  for (const secret of secrets) {
-    if (!secret) continue;
-    const want = macOf(macKey(secret), body);
-    if (got.length !== want.length || !timingSafeEqual(got, want)) continue;
-    try {
-      return shapeOf(JSON.parse(Buffer.from(body, "base64url").toString("utf8")));
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return shapeOf(openSigned(DOMAIN, token, secrets));
 }
 
 export type BriefTokenRead =
