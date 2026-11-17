@@ -43,7 +43,14 @@ export default clerkMiddleware(async (auth, req) => {
  * link, with no sign-in, the same reason as `/d`. Its download route
  * `/api/s/…` stays matched: the page calls it with `fetch`, which is not a
  * document request, so Clerk never hands it a handshake.
+ *
+ * `/brief/off/<token>` (F-082) is the daily brief's "turn this off" page,
+ * opened from an email by someone who is usually signed in, with no sign-in
+ * needed, the same reason as `/u`. (A real token carries dots, which the
+ * `.*\..*` clause already skips; the explicit `brief/` is what keeps a
+ * dotless path out too.) Its one-click route `/api/brief/off/…` stays matched
+ * like `/api/unsubscribe`: still public, because only /dashboard is protected.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|brief/|.*\\..*).*)", "/(api|trpc)(.*)"],
 };

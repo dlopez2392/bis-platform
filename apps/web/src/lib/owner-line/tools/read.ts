@@ -48,7 +48,23 @@ function tileCall(x: CallListRow, handsets: readonly string[]): x is TileCall {
     && !(x.caller_e164 !== null && handsets.includes(x.caller_e164));
 }
 
-export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** What each read returns, typed for a caller that is code and not the model (the daily brief, PR 2). Types only:
+ *  the functions below return exactly what they returned before, now with their shape on the signature. */
+type RangeError = { ok: false; error: "bad_range" | "range_too_long" };
+export type CallsAndMessagesResult = RangeError | {
+  ok: true; range: { first: string; last: string }; count: number; spam: number; more: number;
+  calls: { when: string; caller: string; outcome: string; reason: string | null; needsCallback: boolean }[];
+};
+export type AppointmentsResult = RangeError | {
+  ok: true; range: { first: string; last: string }; count: number; truncated: boolean; more: number;
+  appointments: { when: string; customer: string | null; meetingType: string | null; status: string }[];
+};
+export type NeedsAttentionResult = {
+  ok: true; count: number; more: number;
+  items: { what: string; customer: string | null; due: string | null }[];
+};
+
+export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<CallsAndMessagesResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const [answered, spam] = await Promise.all([
@@ -91,7 +107,7 @@ export async function callsAndMessages(c: OwnerReadContext, args: Record<string,
   };
 }
 
-export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<AppointmentsResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const { rows, truncated } = await listAgendaBookings(c.db, c.accountId, r.fromIso, r.toIso);
@@ -107,7 +123,7 @@ export async function appointments(c: OwnerReadContext, args: Record<string, unk
   };
 }
 
-export async function needsAttention(c: OwnerReadContext): Promise<Record<string, unknown>> {
+export async function needsAttention(c: OwnerReadContext): Promise<NeedsAttentionResult> {
   const rows = await listAccountWork(c.db, c.accountId);
   const shown = rows.slice(0, TODO_SPOKEN);
   // Names through the SAME client (so RLS, or the account scope, bounds them too): tasks/page.tsx:183-195's shape.

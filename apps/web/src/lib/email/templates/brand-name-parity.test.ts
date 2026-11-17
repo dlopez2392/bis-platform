@@ -52,3 +52,23 @@ describe("the four S-09 PR 2 templates show the brand name in Spanish too, never
     expect(noShow.subject).toContain("Rio Roofing");
   });
 });
+
+describe("the daily brief shows the brand name in both languages, never accounts.name (F-082)", () => {
+  it("the subject and the card header carry the name the caller resolved, in en and es", async () => {
+    const { dailyBriefEmail } = await import("./daily-brief");
+    const brand = {
+      name: "Rio Roofing", logoUrl: null,
+      accent: { accent: "#1e3a8a", accentForeground: "#ffffff" } as Parameters<typeof dailyBriefEmail>[0]["brand"]["accent"],
+    };
+    const links = { calendar: "https://x/calendar", calls: "https://x/calls", todos: "https://x/tasks" };
+    for (const locale of ["en", "es"] as const) {
+      const e = dailyBriefEmail({
+        brand, links, offUrl: "https://x/brief/off/t",
+        content: { locale, brandName: "Rio Roofing", dayLabel: "d", bookings: null, calls: { count: 1 }, leads: null, todos: null },
+      });
+      expect(e.subject, locale).toContain("Rio Roofing");
+      expect(e.html, locale).toContain("Rio Roofing");
+      expect(e.subject + e.text + e.html, locale).not.toContain("accounts.name");
+    }
+  });
+});
