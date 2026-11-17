@@ -28,6 +28,7 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
   pickRequestThemeMode: () => ({ providerDefault: "light" }),
 }));
 vi.mock("@/components/preferences/preferences-panel", () => ({ PreferencesPanel: () => null }));
+vi.mock("./daily-brief-actions", () => ({ setMyDailyBriefAction: vi.fn() }));
 vi.mock("./owner-line-actions", () => ({
   startOwnerLineVerificationAction: vi.fn(), setOwnerLinePinAction: vi.fn(),
   removeOwnerLinePinAction: vi.fn(), removeOwnerLineCellAction: vi.fn(),
@@ -40,6 +41,9 @@ const reads = vi.hoisted(() => ({
   membershipsFail: false,
   enrollment: {} as Record<string, unknown>,
   failFor: null as string | null,
+  subs: [] as { accountId: string; lastSentDay: string | null }[],
+  subsCalls: [] as string[],
+  subsFail: false,
 }));
 vi.mock("@/lib/owner-line/memberships", () => ({
   listMyMemberships: async (_db: unknown, clerkUserId: string) => {
@@ -51,6 +55,11 @@ vi.mock("@/lib/owner-line/memberships", () => ({
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   serviceDb: () => ({ tag: "service" }),
+  listMySubscriptions: async (_db: unknown, userId: string) => {
+    reads.subsCalls.push(userId);
+    if (reads.subsFail) throw new Error("listMySubscriptions failed: boom");
+    return reads.subs;
+  },
   readMyOwnerLineEnrollment: async (_db: unknown, accountId: string) => {
     reads.log.push(`enrollment:${accountId}`);
     if (reads.failFor === accountId) throw new Error("readMyOwnerLineEnrollment failed: permission denied");
@@ -66,6 +75,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
 const { default: PreferencesPage } = await import("./page");
 const { OwnerLineCard } = await import("@/components/owner-line/owner-line-card");
 const { OwnerLineCardError } = await import("@/components/owner-line/owner-line-card-error");
+const { DailyBriefCard, DailyBriefCardError } = await import("@/components/preferences/daily-brief-card");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -92,6 +102,9 @@ beforeEach(() => {
   reads.membershipsFail = false;
   reads.enrollment = {};
   reads.failFor = null;
+  reads.subs = [];
+  reads.subsCalls = [];
+  reads.subsFail = false;
   delete process.env.BIS_I18N_QA;
 });
 
@@ -183,5 +196,50 @@ describe("Mis preferencias: the pseudo-locale reaches the cards (design Importan
     const { OWNER_LINE_VERIFY_MINUTES } = await import("@bis/db");
     reads.memberships = [mb("a1", "owner")];
     expect(cardsIn(await page())[0]!.props.verifyMinutes).toBe(OWNER_LINE_VERIFY_MINUTES);
+  });
+});
+
+describe("Mis preferencias: the daily brief card (F-082 PR 4)", () => {
+  const brief = (els: ReactElement<Record<string, unknown>>[]) => els.filter((e) => e.type === DailyBriefCard);
+  const rowsOf = (c: ReactElement<Record<string, unknown>>) => c.props.rows as { accountId: string; on: boolean }[];
+
+  it("one row per Owner/Staff business, a Technician's business is absent, and on follows the subscription", async () => {
+    reads.memberships = [mb("a1", "owner"), mb("a2", "staff"), mb("a3", "technician")];
+    reads.subs = [{ accountId: "a2", lastSentDay: "2026-11-17" }];
+    const [card] = brief(await page());
+    expect(rowsOf(card!).map((r) => [r.accountId, r.on])).toEqual([["a1", false], ["a2", true]]);
+    expect(reads.subsCalls).toEqual(["u-a1"]);
+  });
+
+  it("a person with only Technician memberships sees the empty state (zero rows), not nothing", async () => {
+    reads.memberships = [mb("a3", "technician")];
+    expect(rowsOf(brief(await page())[0]!)).toEqual([]);
+  });
+
+  it("a failed subscriptions read is the card's own error state and never blanks the page or the owner-line cards", async () => {
+    reads.memberships = [mb("a1", "owner")];
+    reads.subsFail = true;
+    const els = await page();
+    expect(els.filter((e) => e.type === DailyBriefCardError)).toHaveLength(1);
+    expect(brief(els)).toEqual([]);
+    expect(cardsIn(els)).toHaveLength(1);
+  });
+
+  it("a failed memberships read is the same error state", async () => {
+    reads.membershipsFail = true;
+    expect(await page().then((els) => els.filter((e) => e.type === DailyBriefCardError))).toHaveLength(1);
+  });
+
+  it("an impersonation session and the agency get no brief card and no subscriptions read (mutation: ignore actor -> FAILS)", async () => {
+    reads.memberships = [mb("a1", "owner")];
+    authState.actor = { sub: "user_bis_staff" };
+    let els = await page();
+    expect(brief(els)).toEqual([]);
+    expect(els.filter((e) => e.type === DailyBriefCardError)).toEqual([]);
+    authState.actor = undefined;
+    authState.appRole = "agency_admin";
+    els = await page();
+    expect(brief(els)).toEqual([]);
+    expect(reads.subsCalls).toEqual([]);
   });
 });

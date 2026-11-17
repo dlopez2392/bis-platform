@@ -115,7 +115,7 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
   // "Configuración" is nav.setup's Spanish label (not Settings').
   "nav:setup": ["wizard", "activation", "onboarding", "go live", "configuración", "configuracion"],
   // F-032 Task 6: the "Call in to your business" card lives on this page, one per membership.
-  "nav:preferences": ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my", "owner line", "call in", "pin", "llamar"],
+  "nav:preferences": ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my", "owner line", "call in", "pin", "llamar", "daily brief", "morning email", "resumen", "correo"],
   // F-095 part 1 (spec §4.2): "acceso"/"invitación" added — "portal" is
   // already shared between the two languages, so it is not repeated.
   "settings:client-access": ["login", "invite", "portal", "acceso", "invitación"],

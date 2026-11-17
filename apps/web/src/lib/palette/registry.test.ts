@@ -758,6 +758,18 @@ describe("buildPaletteEntries — the ex-hand-pushed entries are findable by the
 // set of five (nav:preferences first, then nav:bis-access, nav:settings,
 // nav:setup, settings:team). Pins the restored order directly, not through
 // an intermediate "same ids, any order" check.
+// F-082 PR 4: the "Your daily brief" card lives on Preferences, so Preferences must be findable by it.
+describe("F-082 PR 4: daily brief keywords on Preferences", () => {
+  it("finds Preferences by daily brief, morning email, resumen and correo (mutation: drop one -> FAILS by name)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const prefs = entries.find((e) => e.id === "nav:preferences")!;
+    for (const word of ["daily brief", "morning email", "resumen", "correo"]) {
+      expect(prefs.keywords, word).toContain(word);
+      expect(filterEntries(entries, word).map((e) => e.id), word).toContain("nav:preferences");
+    }
+  });
+});
+
 // F-032 Task 6: the "Call in to your business" card (Preferences) and the switch card (Team).
 describe("F-032 Task 6: owner-line keywords on Preferences and Team", () => {
   it("finds Preferences by owner line, call in, pin and llamar (mutation: drop one of the four -> FAILS by name)", () => {
