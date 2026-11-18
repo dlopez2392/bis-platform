@@ -64,7 +64,7 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   note: true, task: true, deal: true, submission: true, message: true, booking: true, call: true, document: true,
   documentVersion: true, documentRemoved: true, documentRequest: true, documentSkip: true, documentUnskip: true,
   documentShared: true, documentShareOpened: true, chat: true,
-  // F-072: a check-in answer is read unconditionally like merge and archive, so the drawer's Recent can carry one.
+  // F-072: the type's exhaustive case; the drawer's Recent never reads the check-ins source (like suggestions).
   checkin: true,
   // item 8b-2: the type's exhaustive case; the drawer's Recent never reads suggestions (owner decision 1).
   suggestion: true,

@@ -6,7 +6,7 @@ import { m } from "@/lib/messages";
 
 vi.mock("sonner", () => ({ toast: {} }));
 
-import { AutomationsSettings } from "./automations-settings";
+import { AutomationsSettings, ReviewMessageFields } from "./automations-settings";
 import { CheckinCountsView, CheckinCountsSkeleton } from "./checkin-counts";
 
 /**
@@ -33,8 +33,7 @@ const html = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').re
 describe("the check-in switch (plan D5)", () => {
   it("is in the card's own form, named for the save, labelled, off for a row stored without it (mutation: render outside the form -> FAILS)", () => {
     const out = render();
-    expect(out).toContain('id="review-checkin"');
-    expect(out).toContain('name="checkin"');
+    expect(out).toContain('id="review-checkin"');    expect(out).toContain('name="checkin"');
     expect(html(out)).toContain(m["automations.review.checkin.label"]);
     expect(out.indexOf('id="review-checkin"')).toBeGreaterThan(out.indexOf("<form"));
     expect(out.indexOf('id="review-checkin"')).toBeLessThan(out.indexOf("</form>"));
@@ -61,18 +60,19 @@ describe("the check-in switch (plan D5)", () => {
     const out = render({ automation: ROW({ channel: "sms", reviewUrl: LINK, checkin: true }) });
     expect(out).not.toContain('name="checkin"');
     // The Text channel's own message box stays visible: the check-in is not in play.
-    expect(out).not.toMatch(/<div hidden="" class="grid gap-4 md:grid-cols-2"/);
+    expect(isHidden(out)).toBe(false);
   });
 });
 
-describe("the message box while the switch is on (plan D5)", () => {
-  const bodyWrap = (out: string) => /<div([^>]*)data-testid="review-message-fields"/.exec(out) ?? /data-testid="review-message-fields"([^>]*)>/.exec(out);
+/** The `hidden` attribute on the message-fields element ITSELF (not a class, not a neighbour's attribute). */
+const fieldsTag = (out: string) => /<div\b[^>]*data-testid="review-message-fields"[^>]*>/.exec(out)?.[0] ?? null;
+function isHidden(out: string): boolean { return /\shidden(=""|\s|>)/.test(fieldsTag(out) ?? ""); }
 
-  it("steps aside (hidden) but stays in the form, so the typed text still submits and is not wiped on save (mutation: unmount it -> FAILS)", () => {
+describe("the message box while the switch is on (plan D5)", () => {
+  it("steps aside (hidden attribute on its own element) but stays in the form, so the typed text still submits (mutation: unmount it -> FAILS)", () => {
     const on = render({ automation: ROW({ channel: "email", reviewUrl: LINK, checkin: true }) });
-    expect(bodyWrap(on)).not.toBeNull();
-    expect(/data-testid="review-message-fields"[^>]*hidden|hidden[^>]*data-testid="review-message-fields"/.test(on)).toBe(true);
-    // Still rendered, with the operator's stored words, inside the form.
+    expect(fieldsTag(on)).not.toBeNull();
+    expect(isHidden(on)).toBe(true);
     expect(on).toContain('name="body"');
     expect(on).toContain("Thanks, come again!");
     expect(on.indexOf('name="body"')).toBeLessThan(on.indexOf("</form>"));
@@ -81,8 +81,20 @@ describe("the message box while the switch is on (plan D5)", () => {
 
   it("is visible with the switch off (mutation: hide it always -> FAILS)", () => {
     const off = render();
-    expect(/data-testid="review-message-fields"[^>]*hidden|hidden[^>]*data-testid="review-message-fields"/.test(off)).toBe(false);
+    expect(fieldsTag(off)).not.toBeNull();
+    expect(isHidden(off)).toBe(false);
     expect(off).toContain('name="body"');
+  });
+
+  // The card's channel is client state a static render cannot change, so the rule lives in ReviewMessageFields, which
+  // the card renders with its own live `checkin` and `channel`; this drives it with every pair.
+  it("Email with the switch on is hidden; switch the channel to Text and it is visible again (mutation: drop the channel check -> FAILS)", () => {
+    const at = (checkin: boolean, channel: "email" | "sms") =>
+      renderToStaticMarkup(createElement(ReviewMessageFields, { checkin, channel }, createElement("span", null, "x")));
+    expect(isHidden(at(true, "email"))).toBe(true);
+    expect(isHidden(at(true, "sms"))).toBe(false);
+    expect(isHidden(at(false, "email"))).toBe(false);
+    expect(isHidden(at(false, "sms"))).toBe(false);
   });
 });
 
@@ -96,6 +108,11 @@ describe("Open link (plan D5)", () => {
     expect(a).toContain('target="_blank"');
     expect(a).toContain('rel="noopener noreferrer"');
     expect(html(render())).toContain(m["automations.review.openLink"]);
+  });
+
+  it("says it opens in a new tab in text a screen reader reads, not only in a title (mutation: drop the hidden text -> FAILS)", () => {
+    const out = html(render());
+    expect(/<span class="sr-only">[^<]*<\/span>/.exec(out)?.[0]).toContain(m["automations.review.openLinkNewTab"]);
   });
 
   it("is not drawn without a link, or for a link that is not http(s): never a javascript: href (mutation: href=raw value -> FAILS)", () => {
@@ -145,9 +162,25 @@ describe("the counts line (plan D8): loading, empty, loaded, error", () => {
     expect(html(out)).toContain(m["automations.review.counts.title"]);
   });
 
-  it("the card draws whatever the page hands it as its counts, inside the card (a server-rendered slot)", () => {
-    const out = render({ counts: createElement("p", { "data-testid": "slot" }, "COUNTS-HERE") });
+  const slot = createElement("p", { "data-testid": "slot" }, "COUNTS-HERE");
+
+  it("the card draws the counts the page hands it, under the form, when the check-in is on and the channel is Email", () => {
+    const out = render({ automation: ROW({ channel: "email", reviewUrl: LINK, checkin: true }), counts: slot });
     expect(out).toContain("COUNTS-HERE");
     expect(out.indexOf("COUNTS-HERE")).toBeGreaterThan(out.indexOf("</form>"));
+  });
+
+  it("draws NO counts for a stored checkin that is false or absent, nor for Text: no false 'no check-ins yet' on an account that never had one (mutation: always draw -> FAILS)", () => {
+    for (const config of [{ channel: "email", reviewUrl: LINK }, { channel: "email", reviewUrl: LINK, checkin: false },
+      { channel: "sms", reviewUrl: LINK }, { channel: "sms", reviewUrl: LINK, checkin: true }]) {
+      expect(render({ automation: ROW(config), counts: slot }), JSON.stringify(config)).not.toContain("COUNTS-HERE");
+    }
+    expect(render({ automation: null, counts: slot })).not.toContain("COUNTS-HERE");
+  });
+
+  it("says 'asked' counts every review ask in the window, so it can include asks from before the switch (plan D8)", () => {
+    const out = view({ kind: "loaded", counts: { asked: 9, answered: 6, great: 3, okay: 2, notGreat: 1, opened: 4 } });
+    expect(out).toContain(m["automations.review.counts.askedNote"]);
+    expect(m["automations.review.counts.askedNote"]).toMatch(/before/);
   });
 });

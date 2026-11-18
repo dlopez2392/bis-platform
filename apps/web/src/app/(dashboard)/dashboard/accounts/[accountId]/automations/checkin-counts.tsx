@@ -41,6 +41,7 @@ function Body({ state }: { state: CheckinCountsState }) {
           .replace("{notGreat}", String(c.notGreat)).replace("{opened}", String(c.opened))}
       </p>
       <p className="text-xs text-muted-foreground">{m["automations.review.counts.note"]}</p>
+      <p className="text-xs text-muted-foreground">{m["automations.review.counts.askedNote"]}</p>
     </>
   );
 }

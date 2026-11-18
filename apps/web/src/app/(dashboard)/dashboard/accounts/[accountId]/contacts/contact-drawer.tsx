@@ -80,7 +80,7 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   // as the record page's own timeline (activity-timeline.tsx); unlike archive, the drawer's Recent CAN
   // show one (read unconditionally, and now through the tombstone id set too, loaders.ts's loadRecent).
   merge: Merge, mergeUndone: Undo2,
-  // F-072: a check-in answer (the drawer's Recent reads it unconditionally; the answer is its status word).
+  // F-072: the type's exhaustive case only. The drawer's Recent never asks for the check-ins source (loadRecent passes no `checkins`), as with `suggestion`.
   checkin: ThumbsUp,
   // F-115 part 1 (S-04), plan Task 4: the type's exhaustive case only. The drawer's Recent never
   // reads the changes source either (loaders.ts's loadRecent passes no `changes`).

@@ -72,7 +72,7 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
 // F-072 (plan D2): the answer as a dot and a word (rule 3). "Okay" is neither good nor a problem; "not great" is the
 // one that asks the owner to act, so it is the warning.
 const CHECKIN_ANSWER: Readonly<Record<"great" | "okay" | "not_great", readonly [MessageKey, TimelineTone]>> = {
-  great: ["checkin.answer.great", "good"], okay: ["checkin.answer.okay", "accent"], not_great: ["checkin.answer.not_great", "warn"],
+  great: ["checkin.answer.great", "good"], okay: ["checkin.answer.okay", "muted"], not_great: ["checkin.answer.not_great", "warn"],
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No

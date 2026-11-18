@@ -268,10 +268,13 @@ they re-resolve against the accent each element inherits.
   opt-out. The link counts when pressed, never when fetched. The three answer
   tiles carry no primary (rule 8's chooser amendment: every tile is the same
   weight and pressing one commits at once) and the review button is the one
-  primary, the same button with the same link whatever the answer. The answer
-  sits on the record as a customer-marked row, dot and word (rule 3; the
-  author is one of Provenance's five); only the agency switches it on, on the Review
-  requests card.
+  primary, the same button with the same link whatever the answer. The email
+  and the answer page carry the client's logo and brand colour (rule 9); the
+  one exception is the bad-link page, which is unbranded and in both languages,
+  because no account can be trusted before the link's signature verifies. The
+  answer sits on the record as a customer-marked row, dot and word (rule 3; the
+  author is one of Provenance's five); only the agency switches it on, on the
+  Review requests card.
 - **The daily brief:** opt-in per person per business, on the person's own
   Preferences page; 7 AM in the account's own zone and the person's language;
   today's bookings, yesterday's calls and leads handled, open To-dos. It

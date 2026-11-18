@@ -62,6 +62,13 @@ describe("listContactCheckins (plan D2)", () => {
     expect(e!.kind === "checkin" && e.checkin.todo).toBeNull();
   });
 
+  it("no not-great answer on the page means no To-do read at all, never an empty in() (mutation: always read tasks -> FAILS)", async () => {
+    const { db, calls } = fakeDb({ job_checkins: [checkin("k1", "great", "b1"), checkin("k4", "okay", "b4")], bookings: [] });
+    const out = await listContactCheckins(db, ACCT, "c1", PAGE);
+    expect(out).toHaveLength(2);
+    expect(calls.some((c) => c.table === "tasks")).toBe(false);
+  });
+
   it("no answers means no follow-up reads at all", async () => {
     const { db, calls } = fakeDb({ job_checkins: [] });
     expect(await listContactCheckins(db, ACCT, "c1", PAGE)).toEqual([]);
@@ -70,7 +77,7 @@ describe("listContactCheckins (plan D2)", () => {
 
   it("THROWS on a failed read, so the page names the source instead of showing a quiet timeline (mutation: swallow the error -> FAILS)", async () => {
     await expect(listContactCheckins(fakeDb({}, { job_checkins: "boom" }).db, ACCT, "c1", PAGE)).rejects.toThrow(/listContactCheckins failed: boom/);
-    await expect(listContactCheckins(fakeDb({ job_checkins: [checkin("k1", "great", "b1")] }, { tasks: "no" }).db, ACCT, "c1", PAGE))
+    await expect(listContactCheckins(fakeDb({ job_checkins: [checkin("k1", "not_great", "b1")] }, { tasks: "no" }).db, ACCT, "c1", PAGE))
       .rejects.toThrow(/to-dos failed: no/);
     await expect(listContactCheckins(fakeDb({ job_checkins: [checkin("k1", "great", "b1")] }, { bookings: "no" }).db, ACCT, "c1", PAGE))
       .rejects.toThrow(/bookings failed: no/);

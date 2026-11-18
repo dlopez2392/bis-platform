@@ -515,10 +515,13 @@ export async function listContactCheckins(
   type Row = { id: string; contact_id: string; booking_id: string; answer: TimelineCheckin["answer"]; answered_at: string };
   const rows = (data ?? []) as Row[];
   if (rows.length === 0) return [];
+  // Only a "not great" answer has a To-do; with none on the page there is nothing to ask (never an empty `in.()`).
+  const notGreatIds = rows.filter((r) => r.answer === "not_great").map((r) => r.id);
   const [bookings, todos] = await Promise.all([
     db.from("bookings").select("id, starts_at").eq("account_id", accountId).in("id", rows.map((r) => r.booking_id)),
-    db.from("tasks").select("review_checkin_id, completed_at").eq("account_id", accountId)
-      .in("review_checkin_id", rows.filter((r) => r.answer === "not_great").map((r) => r.id)),
+    notGreatIds.length === 0
+      ? Promise.resolve({ data: [] as unknown[], error: null })
+      : db.from("tasks").select("review_checkin_id, completed_at").eq("account_id", accountId).in("review_checkin_id", notGreatIds),
   ]);
   if (bookings.error) throw new Error(`listContactCheckins bookings failed: ${bookings.error.message}`);
   if (todos.error) throw new Error(`listContactCheckins to-dos failed: ${todos.error.message}`);

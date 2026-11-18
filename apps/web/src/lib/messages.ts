@@ -8740,6 +8740,8 @@ export const m = {
   "automations.review.counts.title": "Check-ins, last 30 days",
   "automations.review.counts.line": "{asked} asked, {answered} answered ({great} great, {okay} okay, {notGreat} not great). {opened} opened the review link.",
   "automations.review.counts.note": "\"Opened\" counts people who pressed the review button after answering. It cannot tell who left a review.",
+  "automations.review.counts.askedNote": "\"Asked\" counts every review request sent in these 30 days, so it can include some sent before the check-in was turned on.",
+  "automations.review.openLinkNewTab": "(opens in a new tab)",
   "automations.review.counts.empty": "No check-ins sent yet. When one goes out, the answers show up here.",
   "automations.review.counts.error": "Could not load the check-in counts. Reload the page to try again.",
 } as const;

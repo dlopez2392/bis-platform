@@ -24,7 +24,7 @@ describe("a check-in answer's row (plan D2)", () => {
     const r = one(checkin("great"));
     expect(r.mark).toEqual({ kind: "customer", label: "Customer" });
     expect([r.verb, r.status]).toEqual(["answered the check-in", { tone: "good", word: "Great" }]);
-    expect(one(checkin("okay")).status).toEqual({ tone: "accent", word: "Okay" });
+    expect(one(checkin("okay")).status).toEqual({ tone: "muted", word: "Okay" });
     expect(one(checkin("not_great")).status).toEqual({ tone: "warn", word: "Not great" });
   });
 

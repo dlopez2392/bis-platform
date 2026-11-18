@@ -52,7 +52,7 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "documentSkip": case "documentUnskip": return null;
     // S-07 3b: the head already names the file.
     case "documentShared": case "documentShareOpened": return null;
-    // F-072: the head already says who answered and what; the job's day and the To-do's state are its detail.
+    // F-072: the type's exhaustive case; the drawer's Recent never asks for this source (loadRecent passes no `checkins`).
     case "checkin": return null;
     // S-06 part 3: the head already says who chatted and how much; the unconfirmed line comes from the row.
     case "chat": return null;

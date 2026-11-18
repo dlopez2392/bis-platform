@@ -54,6 +54,22 @@ function formDefaults(row: AutomationRow | null): StoredForm {
   };
 }
 
+/**
+ * The message fields (body and its Spanish twin). Hidden, not unmounted, while the check-in is in play: ON and by
+ * EMAIL. On Text the check-in is neither drawn nor submitted, so the box is back. Its own component so the rule can be
+ * driven with every (switch, channel) pair, which a static render of the card cannot do (the channel is client state).
+ */
+export function ReviewMessageFields({ checkin, channel, children }: {
+  checkin: boolean; channel: ReviewRequestChannel; children?: React.ReactNode;
+}) {
+  const hidden = checkin && channel === "email";
+  return (
+    <div data-testid="review-message-fields" hidden={hidden} className={hidden ? undefined : "grid gap-4 md:grid-cols-2"}>
+      {children}
+    </div>
+  );
+}
+
 export function AutomationsSettings({
   automation, brandName, smsGate, saveAction, counts,
 }: {
@@ -78,7 +94,6 @@ export function AutomationsSettings({
   // save would refuse it), and while it is on the operator's message steps aside: the words are ours, fixed and
   // bilingual, because a paragraph typed here is exactly the gating the check-in exists to remove.
   const [checkin, setCheckin] = useState(stored.checkin);
-  const checkinOn = checkin && channel === "email";
   const openHref = openableHref(reviewUrl);
 
   // THE COUNTER COUNTS BODY PLUS LINK PLUS THE OPT-OUT SENTENCE, through the
@@ -167,6 +182,7 @@ export function AutomationsSettings({
                 className="inline-flex min-h-11 items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8"
               >
                 {m["automations.review.openLink"]}
+                <span className="sr-only">{m["automations.review.openLinkNewTab"]}</span>
               </a>
             ) : null}
           </div>
@@ -186,10 +202,7 @@ export function AutomationsSettings({
 
           {/* Hidden, not unmounted, while the check-in is on: the text still submits with the form, so a save never
               wipes what the operator wrote, and turning the switch off brings it straight back. */}
-          <div
-            data-testid="review-message-fields" hidden={checkinOn}
-            className={checkinOn ? undefined : "grid gap-4 md:grid-cols-2"}
-          >
+          <ReviewMessageFields checkin={checkin} channel={channel}>
             <div className="space-y-1.5">
               <Label htmlFor="review-body">{m["automations.bodyEn.label"]}</Label>
               <Textarea
@@ -224,11 +237,13 @@ export function AutomationsSettings({
               composeEs={(text) => (channel === "sms" ? withOptOut(composeReviewRequestSms(text, reviewUrl.trim()), "es") : text)}
               sms={channel === "sms"}
             />
-          </div>
+          </ReviewMessageFields>
 
           <SubmitButton pending={pending}>{m["automations.review.save"]}</SubmitButton>
         </form>
-        {counts}
+        {/* Only for an account that has the check-in on (and by email): for any other the line would say "no check-ins
+            yet" about a feature it never had. The STORED state, not the live switch: the counts describe what is saved. */}
+        {stored.checkin && stored.channel === "email" ? counts : null}
       </CardContent>
     </Card>
   );

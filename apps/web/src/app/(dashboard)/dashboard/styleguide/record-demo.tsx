@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarCheck, ExternalLink } from "lucide-react";
+import { CalendarCheck, ExternalLink, ThumbsUp } from "lucide-react";
 import type { ChangeGroup, ChangeRow } from "@bis/db";
 import { AuthorMark } from "@/components/record/author-mark";
 import { TimelineItem, TimelineItemSkeleton } from "@/components/record/timeline-item";
@@ -110,6 +110,13 @@ const changeHead = (verb: string, detail: string | null) => ({
   time: "Oct 18, 2026, 9:42 AM", dateTime: "2026-10-18T14:42:00.000Z",
 });
 
+const CHECKIN_ROWS: { id: string; tone: "good" | "muted" | "warn"; word: MessageKey; todo: MessageKey | null }[] = [
+  { id: "great", tone: "good", word: "checkin.answer.great", todo: null },
+  { id: "okay", tone: "muted", word: "checkin.answer.okay", todo: null },
+  { id: "not-great-open", tone: "warn", word: "checkin.answer.not_great", todo: "timeline.checkinTodoOpen" },
+  { id: "not-great-done", tone: "warn", word: "checkin.answer.not_great", todo: "timeline.checkinTodoDone" },
+];
+
 export function RecordDemo() {
   return (
     <div className="flex w-full min-w-0 flex-col gap-6">
@@ -189,6 +196,16 @@ export function RecordDemo() {
           locale="en" pseudo={false} canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
       </div>
       <span data-sg-change-item-end hidden />
+      {/* F-072 PR 4: the customer's answer to the after-the-job check-in, each answer (dot + word) and a "not great"
+          with its To-do open, then done. The customer mark on every row; min-w-0 via the row's own wrapping. */}
+      <div data-sg-checkin-rows className="w-[420px] max-w-full min-w-0 rounded-xl border border-border bg-card glass px-4 py-2">
+        {CHECKIN_ROWS.map((r) => (
+          <TimelineItem key={r.id} kind="checkin" icon={ThumbsUp} mark={{ kind: "customer", label: m["provenance.customer"] }}
+            verb={m["timeline.checkin"]} status={{ tone: r.tone, word: m[r.word] }}
+            detail={[m["timeline.checkinJob"].replace("{day}", "Oct 16, 2026"), ...(r.todo ? [m[r.todo]] : [])].join(" · ")}
+            time="Oct 17, 2026, 10:00 AM" dateTime="2026-10-17T15:00:00Z" />
+        ))}
+      </div>
     </div>
   );
 }

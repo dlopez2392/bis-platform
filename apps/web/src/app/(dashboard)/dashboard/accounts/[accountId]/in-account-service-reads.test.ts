@@ -63,6 +63,9 @@ function getsServiceClient(source: string): boolean {
 const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/automations/page.tsx": "agency-only",
+  // F-072 PR 4: the check-in counts line, rendered only inside the agency-only Automations page (gated by
+  // requireAgencyOnlyAccountAccess), the account taken from the route.
+  "app/(dashboard)/dashboard/accounts/[accountId]/automations/checkin-counts-line.tsx": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/billing/page.tsx": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/branding/actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/branding/page.tsx": "configuration",
