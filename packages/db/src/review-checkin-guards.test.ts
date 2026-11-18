@@ -193,7 +193,7 @@ describe("listCheckinsMissingTask: the sweep's read", () => {
       ["eq", "answer", "not_great"], ["gte", "answered_at", "2026-09-01T00:00:00Z"], ["is", "tasks", null],
       ["order", "answered_at", { ascending: false }], ["limit", 50],
     ]));
-    expect(String(asked.find((a) => a[0] === "select")![1])).toContain("tasks!review_checkin_id(id)");
+    expect(String(asked.find((a) => a[0] === "select")![1])).toContain("tasks!tasks_review_checkin_fkey(id)");
   });
 
   it("never reads To-dos separately: no second read exists to be crowded by the page", async () => {
