@@ -59,7 +59,7 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites then; thirty-one kinds now, with the operational
+ * twenty-two send sites then; thirty-four kinds now, with the operational
  * floor's ops alert, F-048's cancel notice, the two emails of F-048's
  * customer move (the customer's and the business's), S-06's reply
  * forward, and F-046's staff confirmation and moved email, each named at
@@ -129,6 +129,9 @@ export const EMAIL_KINDS = {
   "operator.cancel_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.move_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.lead_alert": { class: "operator", hours: "any", footer: "none" },
+  // F-072: a customer answered "not great" on the after-the-job check-in. Operator mail, as the lead alert is, to
+  // the booking calendar's notify_emails; the To-do is the record, this is the nudge.
+  "operator.checkin_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.call_alert": { class: "operator", hours: "any", footer: "none" },
   // F-032 (owner line) Task 8: three wrong PINs email the person and the account's Owner (spec §4.2).
   "operator.owner_line_lockout": { class: "operator", hours: "any", footer: "none" },

@@ -5,6 +5,7 @@ import {
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
+import { alertOwnerOfNotGreat } from "./alert";
 import { checkinTaskTitle } from "./copy";
 import type { CheckinTokenPayload } from "./token";
 
@@ -114,12 +115,23 @@ export async function answerCheckin(
   // is a no-op when it exists (tasks_review_checkin_once, ensureCheckinTask's 23505 branch) and repairs it when the
   // first call's insert failed. A few bounded attempts, as the stamps do (stampWithRetry: under a second in all).
   const checkin = result.checkin;
+  let created = false;
   const opened = await stampWithRetry(async () => {
     const title = await taskTitle(db, p.a, checkin.contactId);
-    await ensureCheckinTask(db, p.a, checkin, { title, dueAt: now.toISOString() }, "checkin-page", "system");
+    ({ created } = await ensureCheckinTask(db, p.a, checkin, { title, dueAt: now.toISOString() }, "checkin-page", "system"));
   });
   if (!opened.stamped) {
     console.error(`check-in page: account ${p.a}, booking ${p.b}: a not-great answer is recorded but its To-do may not exist (the title read, the insert or its event failed after ${opened.attempts} attempts): ${loggableError(opened.lastError)}`);
+  }
+  // The owner's email, ONLY when this call made the To-do: the unique index is what makes "once" true, so a replay
+  // (created: false) never mails again. alertOwnerOfNotGreat never throws and gives up after a few seconds, so it can
+  // neither undo the To-do nor keep the customer from their thank-you; the catch is the belt for a future change.
+  if (opened.stamped && created) {
+    try {
+      await alertOwnerOfNotGreat(db, checkin);
+    } catch (e) {
+      console.error(`check-in page: account ${p.a}, booking ${p.b}: the owner alert threw (the To-do exists): ${loggableError(e)}`);
+    }
   }
   return "done";
 }

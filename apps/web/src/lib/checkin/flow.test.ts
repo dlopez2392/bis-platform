@@ -6,6 +6,9 @@ const dbm = vi.hoisted(() => ({
   markReviewLinkOpened: vi.fn(), getAutomation: vi.fn(), getBranding: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbm }));
+// The owner's alert has its own tests (alert.test.ts); here only WHEN answerCheckin asks for it is read.
+const alertMock = vi.hoisted(() => ({ alertOwnerOfNotGreat: vi.fn() }));
+vi.mock("./alert", () => alertMock);
 
 import { answerCheckin, CHECKIN_LINK_MAX_AGE_MS, loadCheckinPage, reviewLinkTarget } from "./flow";
 import type { CheckinTokenPayload } from "./token";
@@ -37,6 +40,7 @@ beforeEach(() => {
   dbm.ensureCheckinTask.mockResolvedValue({ id: "t1", created: true });
   dbm.markReviewLinkOpened.mockResolvedValue(true);
   vi.spyOn(console, "error").mockImplementation(() => {});
+  alertMock.alertOwnerOfNotGreat.mockReset().mockResolvedValue({ sent: 1, failed: 0 });
 });
 
 describe("loadCheckinPage: a GET only reads", () => {
@@ -259,6 +263,90 @@ describe("answerCheckin", () => {
     const { db } = world({ contacts: [{ id: CONTACT, account_id: ACCT, first_name: " ", last_name: null }], accounts: [{ id: ACCT, language: null }] });
     await answerCheckin(db, PAYLOAD, "not_great", NOW);
     expect(dbm.ensureCheckinTask.mock.calls[0]![3].title).toBe("Call this customer: they said the job was not great");
+  });
+});
+
+describe("answerCheckin: the owner's alert fires exactly when the To-do was CREATED (F-072, owner decision 2026-11-17)", () => {
+  const alerts = () => alertMock.alertOwnerOfNotGreat.mock.calls;
+
+  it("a recorded not-great whose To-do was created alerts the owner once, for the WINNER's check-in (mutation: never call it -> FAILS)", async () => {
+    const rec = checkin("not_great");
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: rec });
+    const { db } = world();
+    expect(await answerCheckin(db, PAYLOAD, "not_great", NOW)).toBe("done");
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]![0]).toBe(db);
+    expect(alerts()[0]![1]).toBe(rec);
+  });
+
+  it("great and okay never alert (mutation: alert before the answer check -> FAILS)", async () => {
+    const { db } = world();
+    for (const a of ["great", "okay"] as const) {
+      dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin(a) });
+      await answerCheckin(db, PAYLOAD, a, NOW);
+    }
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("a replay or double tap, where the To-do already existed (created: false), never alerts again (mutation: alert on every ensureCheckinTask call -> FAILS)", async () => {
+    const winner = checkin("not_great");
+    dbm.recordCheckinAnswer
+      .mockResolvedValueOnce({ status: "recorded", checkin: winner })
+      .mockResolvedValue({ status: "already", checkin: winner });
+    dbm.ensureCheckinTask
+      .mockResolvedValueOnce({ id: "t1", created: true })
+      .mockResolvedValue({ id: "t1", created: false });
+    const { db } = world();
+    for (let i = 0; i < 3; i++) await answerCheckin(db, PAYLOAD, "not_great", NOW);
+    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(3);
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it("a replay that REPAIRS a To-do the first call could not make (created: true on the replay) alerts then, once", async () => {
+    const winner = checkin("not_great");
+    dbm.recordCheckinAnswer
+      .mockResolvedValueOnce({ status: "recorded", checkin: winner })
+      .mockResolvedValue({ status: "already", checkin: winner });
+    let down = true;
+    dbm.ensureCheckinTask.mockImplementation(async () => { if (down) throw new Error("insert failed"); return { id: "t1", created: true }; });
+    const { db } = world();
+    await answerCheckin(db, PAYLOAD, "not_great", NOW);
+    expect(alerts()).toHaveLength(0);
+    down = false;
+    await answerCheckin(db, PAYLOAD, "not_great", NOW);
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it("a To-do attempt that threw and was retried to success alerts once, not once per attempt", async () => {
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin("not_great") });
+    dbm.ensureCheckinTask.mockRejectedValueOnce(new Error("blip")).mockResolvedValue({ id: "t1", created: true });
+    await answerCheckin(world().db, PAYLOAD, "not_great", NOW);
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it("no To-do after every attempt: no alert (the sweep opens it, and alerts then)", async () => {
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin("not_great") });
+    dbm.ensureCheckinTask.mockRejectedValue(new Error("down"));
+    await answerCheckin(world().db, PAYLOAD, "not_great", NOW);
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("an old link, a gone booking and a bad answer alert nobody", async () => {
+    const { db } = world();
+    await answerCheckin(db, { ...PAYLOAD, i: NOW.getTime() - CHECKIN_LINK_MAX_AGE_MS - 1 }, "not_great", NOW);
+    await answerCheckin(db, PAYLOAD, "terrible", NOW);
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "gone" });
+    await answerCheckin(db, PAYLOAD, "not_great", NOW);
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("an alert that throws anyway is logged and the To-do stands and the customer is still thanked (mutation: let it throw through the action -> FAILS)", async () => {
+    dbm.recordCheckinAnswer.mockResolvedValue({ status: "recorded", checkin: checkin("not_great") });
+    alertMock.alertOwnerOfNotGreat.mockRejectedValue(new Error("mail down"));
+    const { db } = world();
+    await expect(answerCheckin(db, PAYLOAD, "not_great", NOW)).resolves.toBe("done");
+    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("mail down"));
   });
 });
 
