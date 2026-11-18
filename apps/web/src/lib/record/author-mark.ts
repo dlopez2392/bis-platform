@@ -30,7 +30,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
       if (entry.task.call_id) return { kind: "ai", personId: null };
       // S-07 2b: a To-do opened for a request's files is the automation's, like the stop-hold one.
       // S-07 3a: and so is an expiry To-do (0084's document_expiry_id).
-      if (entry.task.consent_event_id || entry.task.document_request_id || entry.task.document_expiry_id) return { kind: "automation", personId: null };
+      // F-072 (plan D3): and so is the "not great" check-in's To-do (job_checkins, tasks.review_checkin_id).
+      if (entry.task.consent_event_id || entry.task.document_request_id || entry.task.document_expiry_id || entry.task.review_checkin_id) return { kind: "automation", personId: null };
       return { kind: "person", personId: entry.task.created_by };
     case "deal": return { kind: "person", personId: entry.deal.created_by };
     case "submission": {
@@ -71,6 +72,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // customer; the customer mark, worded as the link's recipient (authorMark).
     case "documentShared": return { kind: "person", personId: entry.share.created_by };
     case "documentShareOpened": return { kind: "customer", personId: null };
+    // F-072 (plan D2): the customer's own answer to the after-the-job check-in; the customer kind, no sixth kind.
+    case "checkin": return { kind: "customer", personId: null };
     // item 8b-2 (spec 5.4, 8.3): the person who ACCEPTED it, never Sofía, who only suggested it. One the
     // reader cannot name reads "Someone on the team", still the person mark.
     case "suggestion": return { kind: "person", personId: entry.suggestion.proposal.decidedBy };

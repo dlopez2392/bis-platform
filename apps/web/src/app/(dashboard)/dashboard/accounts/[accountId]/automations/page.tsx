@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { headers } from "next/headers";
 import Link from "next/link";
 import {
@@ -14,6 +15,8 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 import { AutomationsSettings } from "./automations-settings";
+import { CheckinCountsSkeleton } from "./checkin-counts";
+import { CheckinCountsLine } from "./checkin-counts-line";
 import { ReferralAskCard } from "./referral-ask-card";
 import { ReactivationCard } from "./reactivation-card";
 import { QuoteFollowupCard, type StageOption } from "./quote-followup-card";
@@ -244,6 +247,9 @@ export default async function AutomationsPage({
             brandName={account.brandName}
             smsGate={smsGate}
             saveAction={saveReviewRequestAction.bind(null, accountId)}
+            // F-072 (plan D8): streamed on its own, so a slow count never holds the page and a failed one is the
+            // line's own error state, not the page's.
+            counts={<Suspense fallback={<CheckinCountsSkeleton />}><CheckinCountsLine accountId={accountId} /></Suspense>}
           />
           <ReferralAskCard
             automation={referralAsk}

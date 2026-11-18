@@ -8717,6 +8717,31 @@ export const m = {
   "checkin.task.title.es": "Llame a {name}: dijo que el trabajo no estuvo bien",
   "checkin.task.titleNoName": "Call this customer: they said the job was not great",
   "checkin.task.titleNoName.es": "Llame a este cliente: dijo que el trabajo no estuvo bien",
+  // F-072 PR 4 (plan D2): the customer's answer on the record's timeline. The mark is Customer / Cliente; the answer
+  // itself reads from checkin.answer.* above (a dot and a word).
+  "timeline.checkin": "answered the check-in",
+  "timeline.checkin.es": "respondió cómo le fue",
+  "timeline.checkinJob": "Job: {day}",
+  "timeline.checkinJob.es": "Trabajo: {day}",
+  "timeline.checkinTodoOpen": "To-do open",
+  "timeline.checkinTodoOpen.es": "Pendiente abierto",
+  "timeline.checkinTodoDone": "To-do done",
+  "timeline.checkinTodoDone.es": "Pendiente hecho",
+  "timeline.what.checkins": "check-in answers",
+  "timeline.what.checkins.es": "respuestas de seguimiento",
+  // F-072 PR 4 (plan D5, D8): the Review requests card. Agency-only and English-only, like the card.
+  "automations.review.checkin.label": "Ask how it went first, then offer the review link",
+  "automations.review.checkin.hint": "Email only. Two hours after a job is marked completed the customer gets one question, \"How did we do?\", and then your review link whatever they answer. The message you wrote is kept, but not used, while this is on.",
+  "automations.review.checkin.needsEmail": "The check-in goes by email. Switch the channel to Email, or turn the check-in off.",
+  "automations.review.checkin.needsHttps": "The check-in needs a review link that starts with https://. Update the link, or turn the check-in off.",
+  "automations.review.checkin.needsUrl": "Add the review link before turning the check-in on.",
+  "automations.review.openLink": "Open link",
+  "automations.review.openLinkHint": "Opens the review link in a new tab, so you can see what customers will see.",
+  "automations.review.counts.title": "Check-ins, last 30 days",
+  "automations.review.counts.line": "{asked} asked, {answered} answered ({great} great, {okay} okay, {notGreat} not great). {opened} opened the review link.",
+  "automations.review.counts.note": "\"Opened\" counts people who pressed the review button after answering. It cannot tell who left a review.",
+  "automations.review.counts.empty": "No check-ins sent yet. When one goes out, the answers show up here.",
+  "automations.review.counts.error": "Could not load the check-in counts. Reload the page to try again.",
 } as const;
 
 export type MessageKey = keyof typeof m;

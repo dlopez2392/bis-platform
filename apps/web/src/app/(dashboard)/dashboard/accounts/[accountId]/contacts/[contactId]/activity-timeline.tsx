@@ -1,5 +1,5 @@
 import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
-         StickyNote, Undo2 } from "lucide-react";
+         StickyNote, ThumbsUp, Undo2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { SmsGate } from "@/lib/sms/sender";
@@ -260,6 +260,9 @@ function Row({
       return <TimelineItem {...head} icon={Link2} />;
     case "documentShareOpened":
       return <TimelineItem {...head} icon={Download} />;
+    // F-072: the customer's answer to the after-the-job check-in; the status word carries the answer, the icon is the topic.
+    case "checkin":
+      return <TimelineItem {...head} icon={ThumbsUp} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

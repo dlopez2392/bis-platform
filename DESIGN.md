@@ -261,6 +261,17 @@ they re-resolve against the accent each element inherits.
   tell a quiet week from a broken product. Recipients live on the account and
   the field IS the on/off switch — no recipients, no report, and that is not a
   failure.
+- **The after-the-job check-in:** one email two hours after a job is marked
+  completed, in the customer's language; one question, three answers, then the
+  review link to everyone whatever they said; a "not great" becomes one To-do for
+  the owner. A customer is asked at most once per 90 days, never after an
+  opt-out. The link counts when pressed, never when fetched. The three answer
+  tiles carry no primary (rule 8's chooser amendment: every tile is the same
+  weight and pressing one commits at once) and the review button is the one
+  primary, the same button with the same link whatever the answer. The answer
+  sits on the record as a customer-marked row, dot and word (rule 3; the
+  author is one of Provenance's five); only the agency switches it on, on the Review
+  requests card.
 - **The daily brief:** opt-in per person per business, on the person's own
   Preferences page; 7 AM in the account's own zone and the person's language;
   today's bookings, yesterday's calls and leads handled, open To-dos. It

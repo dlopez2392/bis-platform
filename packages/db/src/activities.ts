@@ -64,7 +64,7 @@ export async function deleteTaskForUndo(
   return true;
 }
 
-const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id, document_expiry_id";
+const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id, document_expiry_id, review_checkin_id";
 
 export async function listContactTasks(
   db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
@@ -88,6 +88,8 @@ export async function listContactTasks(
     document_request_id: string | null;
     /** S-07 3a (0084): the file whose expiry this To-do is about; the automation opened it. */
     document_expiry_id: string | null;
+    /** F-072: the "not great" check-in answer this To-do is for; the automation opened it. */
+    review_checkin_id: string | null;
     /** 0073: the author's Clerk subject; present in page mode only. */
     created_by?: string | null;
   }[];

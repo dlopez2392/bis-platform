@@ -273,6 +273,13 @@ describe("record loaders: suggestions (item 8b-2)", () => {
     listPendingProposalsForContactMock.mockReset().mockResolvedValue([]);
   });
 
+  it("F-072: the record page's timeline reads the check-in answers; the drawer's Recent does not, so its pinned read budget holds (mutation: pass checkins in loadRecent, or drop it from loadTimeline -> FAILS)", async () => {
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ checkins: true });
+    await loadRecent(db, "acct1", "ct1");
+    expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("checkins");
+  });
+
   it("the record page's timeline reads the suggestions source; the drawer's Recent does not (owner decision 1; mutation: pass it in loadRecent -> FAILS)", async () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
     expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ suggestions: true });
