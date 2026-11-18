@@ -3972,6 +3972,13 @@ export const m = {
   "email.review.subject.es": "¿Le gustaría dejarle una reseña a {name}?",
   "email.review.button": "Leave a review",
   "email.review.button.es": "Dejar una reseña",
+  // F-072 PR 3: the after-the-job check-in email. One question, no review wording: the link comes AFTER the answer.
+  "email.checkin.subject": "{name}: how did we do?",
+  "email.checkin.subject.es": "¿Cómo le fue con {name}?",
+  "email.checkin.body": "Thanks for choosing {name}. One quick question: how did we do?",
+  "email.checkin.body.es": "Gracias por elegir a {name}. Una pregunta rápida: ¿cómo le fue?",
+  "email.checkin.button": "Tell us how we did",
+  "email.checkin.button.es": "Cuéntenos cómo nos fue",
   "email.noShow.subject": "Want to pick a new time with {name}?",
   "email.noShow.subject.es": "¿Quiere escoger otro horario con {name}?",
   "email.noShow.button": "Pick a new time",

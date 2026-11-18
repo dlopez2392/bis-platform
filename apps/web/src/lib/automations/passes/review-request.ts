@@ -1,16 +1,21 @@
 import {
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
-  getDueReviewRequestById, chooseBody, REVIEW_REQUEST_MAX_AGE_MS, type DueReviewRequest, type ReviewRequestConfig, type RecipientLanguage,
+  getDueReviewRequestById, chooseBody, REVIEW_REQUEST_MAX_AGE_MS, recentReviewAsks, emailKey, missingForMarketingEmail,
+  type DueReviewRequest, type ReviewRequestConfig, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { reviewRequestEmail } from "@/lib/email/templates/review-request";
+import { reviewCheckinEmail } from "@/lib/email/templates/review-checkin";
+import { checkinLink } from "@/lib/checkin/token";
+import { configuredOrigin } from "@/lib/email/origin";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { normalisePhone } from "@bis/db/phone";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { laterOf } from "../anchor";
 import { shouldSendReviewRequestNow } from "../review-request-gate";
+import { checkinTiming, CHECKIN_MAX_AGE_MS } from "../review-checkin-gate";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "../review-request-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
@@ -35,6 +40,18 @@ type Target =
  *   gate refused (NO fallback to email) → SMS cooldown → caps → send →
  *   STAMP → (sms) mark the message row sent.
  *
+ * THE CHECK-IN (F-072, docs/superpowers/plans/2026-11-17-review-requests.md): an account whose recipe config has
+ * `checkin: true`, on the EMAIL channel, sends "How did we do?" two hours after the anchor instead (`asCheckin`
+ * below): the same kind, so the opt-out, the hours, the footer and `outbound_suppressed` are the consent chain's
+ * and unchanged; no morning band and no deferral to the calendar follow-up (review-checkin-gate.ts); the words
+ * are ours, never the operator's; the account must have a mailing address (the marketing footer prints it); the
+ * link must be sealable; and a customer is asked at most once per 90 days, by contact AND by address (the
+ * database read plus a memory of this tick, which the stamp cannot cover until it lands). The held/released path
+ * is the same loop, so a held check-in is re-gated on release. An account WITHOUT the flag runs none of this.
+ * The check-in's own counters (`waitingForCheckin` (not yet two hours), `expiredCheckin` (past 36 h), `skippedRecentlyAsked`, `skippedNoMailingAddress`,
+ * `skippedNoLink`) appear in the result only when nonzero, so the cron's JSON for every account without it is
+ * byte-identical to before (route.test.ts is the proof).
+ *
  * Nothing new sends: `ctx.email` and `ctx.sms` (the send gate) come from the harness.
  * The SMS path is sendAutomationSms — write the message row, then send,
  * mark failed and write the attempt marker on a provider error — so a
@@ -47,6 +64,16 @@ export const reviewRequestPass: Pass = {
     return processReviewRequests(ctx, await listDueReviewRequests(ctx.db, ctx.now.toISOString()), { released: false });
   },
 };
+
+/** A customer is asked for a review at most once per this long (plan D4, danlo 2026-11-17). */
+const ASK_INTERVAL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** Who a row would be asking, as the keys the same-tick memory holds: the contact, and the address as the consent
+ *  ledger reads it (`emailKey`: case and a +tag are one inbox), each scoped to the account (separate tenants). */
+function askKeys(accountId: string, contactId: string, email: string | null): string[] {
+  const key = email ? emailKey(email) : "";
+  return [`${accountId}:contact:${contactId}`, ...(key ? [`${accountId}:address:${key}`] : [])];
+}
 
 /** One boolean — a shared type across the three band-gated passes would be a
  *  fourth file to keep in step for no benefit; each pass declares its own. */
@@ -66,12 +93,17 @@ export async function processReviewRequests(
     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
     waitingForMorning: 0, unresolvableTimezone: 0,
   };
+  // F-072's own counters: merged into the result only when nonzero (see the pass's comment).
+  const k = { waitingForCheckin: 0, expiredCheckin: 0, skippedRecentlyAsked: 0, skippedNoMailingAddress: 0, skippedNoLink: 0 };
 
   // Per-account memos for one tick: the sender gate and the daily count
   // are answered once per account, not once per row.
   const smsGates = new Map<string, SmsGate>();
   const sentToday = new Map<string, number>();
   let attemptsThisTick = 0;
+  // Who was asked (sent or held) earlier in THIS tick: two jobs completed together must send one email, and the
+  // database cannot see the first stamp until it lands (or ever, if it fails).
+  const askedThisTick = new Set<string>();
 
   for (const row of due) {
     const config = row.config;
@@ -90,6 +122,10 @@ export async function processReviewRequests(
     // THE CLOCK (0026): the later of the meeting end and "Mark completed".
     const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
 
+    // F-072. `checkin` turns the 90-day rule on for either channel; the check-in EMAIL itself is the email channel's.
+    const checkin = config.checkin === true;
+    const asCheckin = checkin && config.channel === "email";
+
     // Built only once the channel is known: the log subject's channel field
     // is the CONFIGURED one, never a guess.
     const subject: SmsHoldSubject = {
@@ -98,7 +134,7 @@ export async function processReviewRequests(
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
       // M7a PR-4 (plan G7a, re-review I2): a pause hold never runs past the list's own age window.
-      pauseDeadline: new Date(anchor.getTime() + REVIEW_REQUEST_MAX_AGE_MS),
+      pauseDeadline: new Date(anchor.getTime() + (asCheckin ? CHECKIN_MAX_AGE_MS : REVIEW_REQUEST_MAX_AGE_MS)),
     };
 
     // RULE 0, before the gate, same as the follow-up pass: no resolvable
@@ -112,6 +148,19 @@ export async function processReviewRequests(
       );
       await logSkipped(ctx, subject, REASONS.timezone);
       continue;
+    }
+
+    if (asCheckin) {
+      // THE CHECK-IN'S MOMENT: two hours after the anchor, and not older than 36 h. It runs on BOTH paths, as the
+      // review request's does: there is no band to skip on a release, so a held check-in is re-gated, not re-banded.
+      // Silent on a normal tick (the row is simply examined again next tick); on a release a real skip, or the row
+      // keeps its past `held_until` and parks the head of the queue.
+      const timing = checkinTiming(ctx.now, anchor, row.accountTimezone);
+      if (timing !== "due") {
+        if (timing === "late") k.expiredCheckin++; else k.waitingForCheckin++;
+        if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+        continue;
+      }
     }
 
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
@@ -130,7 +179,7 @@ export async function processReviewRequests(
     // untouched: an untouched released row keeps its past `held_until` and
     // parks the head of the queue for ever. On a normal tick it stays silent
     // — the row is simply due again tomorrow morning.
-    if (!shouldSendReviewRequestNow(
+    if (!asCheckin && !shouldSendReviewRequestNow(
       ctx.now, anchor, followupSentAt, row.accountTimezone, { skipBand: opts.released })) {
       c.waitingForMorning++;
       if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
@@ -142,6 +191,7 @@ export async function processReviewRequests(
     // leaving this app goes through (null = nothing we can text); the send
     // gate reads the stored number again itself. Email: the address or nothing.
     let target: Target;
+    let checkinUrl: string | null = null;
     if (config.channel === "sms") {
       const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
       if (!to) {
@@ -200,6 +250,33 @@ export async function processReviewRequests(
         await logSkipped(ctx, subject, REASONS.noEmail);
         continue;
       }
+      if (asCheckin) {
+        // The marketing footer prints the postal address, so a check-in without one is not sent (the referral ask's
+        // rule, asked through the same function). Before the link and the 90-day read: cheapest first.
+        if (missingForMarketingEmail(row.mailingAddress, null).mailingAddress) {
+          k.skippedNoMailingAddress++;
+          await logSkipped(ctx, subject, REASONS.noMailingAddress);
+          continue;
+        }
+        // The page link, sealed now, on the CONFIGURED origin only (plan D6): `ctx.origin` falls back to the request's
+        // own host, which for a cron is the deployment's vercel.app URL, and Gmail discards mail whose links point
+        // there. No link that works (APP_ORIGIN not configured, no secret, a production secret under 32 characters,
+        // an id that is not a uuid) means NO email: a dead or weakly signed link is worse than none.
+        // Console only on a normal tick (a deployment fault, not the customer's), a real skip on a release.
+        checkinUrl = checkinLink({
+          accountId: row.accountId, bookingId: row.bookingId, language: row.language, now: ctx.now,
+          origin: configuredOrigin(),
+        });
+        if (checkinUrl === null) {
+          k.skippedNoLink++;
+          console.error(
+            `review check-in skipped for booking ${row.bookingId}: no link can be made (APP_ORIGIN or `
+            + `CONSENT_TOKEN_SECRET unset or unusable) — set them; nothing is sent without its link`,
+          );
+          if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+          continue;
+        }
+      }
       target = { channel: "email", to: row.contactEmail };
     }
 
@@ -207,12 +284,43 @@ export async function processReviewRequests(
     // address, so only rows that would actually send count against them;
     // a skipped row is left unstamped and is simply due again. The TICK cap
     // is a per-tick queue, not logged (this row is due again next tick,
-    // twelve times before the band closes); the DAILY cap is logged — the
-    // client's own limit was reached today.
+    // twelve times before the band closes); the DAILY cap (below) is logged —
+    // the client's own limit was reached today. The tick cap is in memory and
+    // comes BEFORE the 90-day read, so a burst of due rows past it costs no
+    // database read at all.
     if (attemptsThisTick >= AUTOMATION_TICK_CAP) {
       c.skippedCap++;
       continue;
     }
+
+    // THE 90 DAYS (plan D4): a customer is asked for a review at most once per 90 days, by contact AND by address.
+    // The memory first (free, and the only thing that sees an earlier row of THIS tick), then the database. A read
+    // that fails sends nothing for the row: answering "not asked" on an error would send.
+    const keys = checkin ? askKeys(row.accountId, row.contactId, target.channel === "email" ? target.to : null) : [];
+    if (checkin) {
+      let asked = keys.some((key) => askedThisTick.has(key));
+      if (!asked) {
+        try {
+          asked = await recentReviewAsks(
+            ctx.db, row.accountId, { contactId: row.contactId, email: target.channel === "email" ? target.to : null },
+            new Date(ctx.now.getTime() - ASK_INTERVAL_MS).toISOString(),
+          );
+        } catch (e) {
+          c.failed++;
+          console.error(`review check-in: the 90-day read failed for booking ${row.bookingId}, nothing sent: ${loggableError(e)}`);
+          continue;
+        }
+      }
+      if (asked) {
+        k.skippedRecentlyAsked++;
+        // Silent on a normal tick (due again until it ages out); a real skip on a release, or it parks.
+        if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+        continue;
+      }
+    }
+
+    // CAPS, recipe passes only (caps.ts), continued: the DAILY cap, which reads the database, comes after the
+    // 90-day check above; the TICK cap (in memory) came first, see there.
     let today = sentToday.get(row.accountId);
     if (today === undefined) {
       today = await countReviewRequestsSince(
@@ -251,6 +359,8 @@ export async function processReviewRequests(
             language: chosen.language,
             onProviderFailure: () => stampReviewRequestSmsFailed(ctx.db, row.bookingId),
           });
+        } else if (asCheckin && checkinUrl !== null) {
+          await sendCheckinEmail(ctx, row, target.to, checkinUrl);
         } else {
           await sendEmail(ctx, row, config, target.to, body, chosen.language);
         }
@@ -265,8 +375,11 @@ export async function processReviewRequests(
           c.unstamped++;
           console.error(
             `review request sent but NOT stamped for booking ${row.bookingId} after `
-            + `${stamp.attempts} attempts — expect up to 11 more copies before the morning band `
-            + `closes: ${String(stamp.lastError)}`,
+            + (asCheckin
+              ? `${stamp.attempts} attempts — it stays due and is retried every tick until it ages out (36 h); the `
+                + `provider's idempotency key (review-checkin/<booking>) deduplicates the retries for 24 h: `
+              : `${stamp.attempts} attempts — expect up to 11 more copies before the morning band closes: `)
+            + String(stamp.lastError),
           );
         }
 
@@ -290,9 +403,12 @@ export async function processReviewRequests(
         // taken: a held row IS that day's send.
         attemptsThisTick--;
         c.held++;
+        // A held check-in IS that address's ask (it goes at the opening): its twin is not held too.
+        for (const key of keys) askedThisTick.add(key);
         continue;
       }
       c.sent++;
+      for (const key of keys) askedThisTick.add(key);
     } catch (e) {
       c.failed++;
       console.error(`review request send failed for booking ${row.bookingId}: ${loggableError(e)}`);
@@ -300,7 +416,9 @@ export async function processReviewRequests(
     }
   }
 
-  return c;
+  // The check-in's counters ride along only when they have something to say, so an account without the feature
+  // returns exactly the counters it always did.
+  return { ...c, ...Object.fromEntries(Object.entries(k).filter(([, n]) => n > 0)) };
 }
 
 /**
@@ -323,6 +441,23 @@ export const releaseReviewRequest: Releaser = async (ctx, row) => {
   }
   return verdict(await processReviewRequests(ctx, [found.due], { released: true }));
 };
+
+/** The check-in (F-072, plan D6): same kind and same From/Reply-To rules as the review request, our own words, the
+ *  customer's language, and the ONE sealed page link. `brand.name` is the row's `brandName`, never `accounts.name`. */
+async function sendCheckinEmail(ctx: PassContext, row: DueReviewRequest, to: string, checkinUrl: string): Promise<void> {
+  const brand = emailBrandNamed(row.branding, row.brandName);
+  const { subject, html, text } = reviewCheckinEmail({ brand, checkinUrl, locale: row.language });
+  await ctx.email.send({
+    accountId: row.accountId, kind: "automation.review_request", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
+    to, fromName: brand.name, fromAddress: row.fromEmail ?? undefined,
+    replyTo: normalizeReplyTo(row.replyToEmail),
+    subject, body: text, html, language: row.language,
+    // ONE fixed key per booking: a check-in stays due ~34 h (anything that failed after it landed, or a stamp that
+    // never did, is retried on the next tick with the same key and the provider deduplicates it for 24 h).
+    idempotencyKey: `review-checkin/${row.bookingId}`,
+  });
+}
 
 async function sendEmail(
   ctx: PassContext, row: DueReviewRequest, config: ReviewRequestConfig, to: string, body: string,

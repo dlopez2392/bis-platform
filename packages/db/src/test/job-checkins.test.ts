@@ -7,9 +7,10 @@ import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
-import { stampReviewRequested } from "../automations";
+import { stampReviewRequested, upsertAutomation, listDueReviewRequests, getDueReviewRequestById } from "../automations";
 import {
   recordCheckinAnswer, getCheckinForBooking, markReviewLinkOpened, ensureCheckinTask, checkinCounts,
+  listCheckinsMissingTask, notGreatBookingIds, hasNotGreatCheckin, accountsWithCheckin,
 } from "../job-checkins";
 
 /**
@@ -481,10 +482,10 @@ describe("app.keep_task_links re-emitted: every link the server sets, a signed-i
 // ---------------------------------------------------------------------------------------------------------------
 
 /** A completed job for a new customer of this account, through the app's own writers. */
-async function completedJob(db: SupabaseClient, accountId: string, hour: number, email?: string): Promise<{ bookingId: string; contactId: string }> {
+async function completedJob(db: SupabaseClient, accountId: string, hour: number, email?: string, day = 10): Promise<{ bookingId: string; contactId: string }> {
   const cal = await getOrCreateCalendar(db, accountId, "user_test");
   const { id: contactId } = await createContact(db, accountId, { firstName: `Jc${hour}`, ...(email ? { email } : {}) }, "user_test");
-  const at = (m: number) => new Date(Date.UTC(2027, 2, 10, hour, m));
+  const at = (m: number) => new Date(Date.UTC(2027, 2, day, hour, m));
   const b = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at(0), endsAt: at(30) }, "user_test");
   await setBookingStatus(db, accountId, b.id, "completed", "user_test");
   return { bookingId: b.id, contactId };
@@ -608,6 +609,95 @@ describe("markReviewLinkOpened and checkinCounts (plan D1, D8)", () => {
       expect(await checkinCounts(db, accountId, since)).toEqual({ asked: 4, answered: 3, great: 1, okay: 1, notGreat: 1, opened: 1 });
       expect(await checkinCounts(db, accountId, new Date(Date.now() + 60_000).toISOString()))
         .toEqual({ asked: 0, answered: 0, great: 0, okay: 0, notGreat: 0, opened: 0 });
+    });
+  });
+});
+
+/**
+ * F-072 PR 3: the reads the send, the sweep and the neighbours' guards use, against the real database. The same
+ * logic is proven without one in ../review-checkin-guards.test.ts; these prove the queries are valid PostgREST.
+ * NOT RUN where no database is reachable (the PR 3 report says so).
+ */
+describe("the check-in's PR 3 reads, live", () => {
+  const NOW_ISO = "2027-03-10T20:00:00.000Z";
+
+  it("listCheckinsMissingTask returns the not-great answers without a To-do, inside the window, bounded (probe: drop the subtraction -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const jobs = await Promise.all([9, 10, 11].map((h) => completedJob(db, accountId, h)));
+      const answers = await Promise.all([
+        recordCheckinAnswer(db, accountId, jobs[0]!.bookingId, "not_great"),
+        recordCheckinAnswer(db, accountId, jobs[1]!.bookingId, "not_great"),
+        recordCheckinAnswer(db, accountId, jobs[2]!.bookingId, "okay"),
+      ]);
+      const [a, b] = answers.map((r) => (r.status === "recorded" ? r.checkin : null));
+      await ensureCheckinTask(db, accountId, a!, { title: "Call", dueAt: NOW_ISO }, "checkin");
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      // A platform-wide read other runs share: this account's rows are contained or not, never an exact list.
+      const missing = (await listCheckinsMissingTask(db, since, 500)).map((c) => c.id);
+      expect(missing).toContain(b!.id);
+      expect(missing).not.toContain(a!.id);
+      expect(await listCheckinsMissingTask(db, new Date(Date.now() + 60_000).toISOString(), 50)).toEqual([]);
+    });
+  });
+
+  it("26 answered-with-To-do rows NEWER than one missing one: the missing one is still returned, because the filter is in the query and the limit bounds only task-missing rows (probe: take the newest 25 then subtract -> FAILS). CI must prove the embed filter.", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const first = await completedJob(db, accountId, 8, undefined, 12);
+      const missingAnswer = await recordCheckinAnswer(db, accountId, first.bookingId, "not_great");
+      if (missingAnswer.status !== "recorded") throw new Error("seed: not recorded");
+      for (let i = 0; i < 26; i++) {
+        const j = await completedJob(db, accountId, i % 20, undefined, 13 + Math.floor(i / 20));
+        const r = await recordCheckinAnswer(db, accountId, j.bookingId, "not_great");
+        if (r.status !== "recorded") throw new Error("seed: not recorded");
+        await ensureCheckinTask(db, accountId, r.checkin, { title: `Call ${i}`, dueAt: "2027-03-10T15:00:00.000Z" }, "checkin");
+      }
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const page = await listCheckinsMissingTask(db, since, 25);
+      expect(page.map((c) => c.id)).toContain(missingAnswer.checkin.id);
+      expect(page.filter((c) => c.accountId === accountId)).toHaveLength(1);
+    });
+  }, 120_000);
+
+  it("notGreatBookingIds and hasNotGreatCheckin see not_great ONLY, and only this account's booking", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const bad = await completedJob(db, accountId, 9);
+      const fine = await completedJob(db, accountId, 10);
+      await recordCheckinAnswer(db, accountId, bad.bookingId, "not_great");
+      await recordCheckinAnswer(db, accountId, fine.bookingId, "okay");
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const ids = await notGreatBookingIds(db, [accountId], since);
+      expect(ids.has(bad.bookingId)).toBe(true);
+      expect(ids.has(fine.bookingId)).toBe(false);
+      expect(await hasNotGreatCheckin(db, accountId, bad.bookingId)).toBe(true);
+      expect(await hasNotGreatCheckin(db, accountId, fine.bookingId)).toBe(false);
+      await withTestAccount(async (_db, otherAccountId) => {
+        expect(await hasNotGreatCheckin(db, otherAccountId, bad.bookingId)).toBe(false);
+      });
+    });
+  });
+
+  it("accountsWithCheckin is true only for the boolean true on the review_request recipe", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cfg = (checkin: unknown) => ({ channel: "email", reviewUrl: "https://g.page/r/x/review", checkin });
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(false);
+      await upsertAutomation(db, accountId, "review_request", { enabled: true, body: "", config: cfg("true") }, "user_test");
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(false);
+      await upsertAutomation(db, accountId, "review_request", { enabled: true, body: "", config: cfg(true) }, "user_test");
+      expect((await accountsWithCheckin(db, [accountId])).has(accountId)).toBe(true);
+      expect(await accountsWithCheckin(db, [])).toEqual(new Set());
+    });
+  });
+
+  it("a suppressed account with checkin: true is never due and never released (the outbound-suppressed case for the check-in path)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review", checkin: true } }, "user_test");
+      const { bookingId } = await completedJob(db, accountId, 9, "ana.checkin@example.com");
+      expect((await listDueReviewRequests(db, NOW_ISO)).map((r) => r.bookingId)).toContain(bookingId);
+      expect((await getDueReviewRequestById(db, bookingId)).due?.config?.checkin).toBe(true);
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueReviewRequests(db, NOW_ISO)).map((r) => r.bookingId)).not.toContain(bookingId);
+      expect((await getDueReviewRequestById(db, bookingId)).due).toBeNull();
     });
   });
 });

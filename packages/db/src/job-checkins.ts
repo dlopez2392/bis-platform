@@ -139,3 +139,64 @@ export async function checkinCounts(db: SupabaseClient, accountId: string, since
   ]);
   return { asked, answered, great, okay, notGreat, opened };
 }
+
+/**
+ * The ids of bookings, among THESE accounts', whose customer answered "not great" since `sinceIso` (plan D7b, owner
+ * answer Q5): the referral ask skips them. ONLY "not great": an "okay" or a "great" never blocks it. One bounded read
+ * scoped to the accounts the caller already holds rows for (never platform-wide) and capped at NOT_GREAT_READ_LIMIT,
+ * filtered by the caller against the rows it holds, so a long list of booking ids never travels in a URL. THROWS on
+ * a read error; the caller decides how to fail (the referral list fails closed for the tick).
+ */
+export const NOT_GREAT_READ_LIMIT = 1000;
+export async function notGreatBookingIds(db: SupabaseClient, accountIds: readonly string[], sinceIso: string): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set();
+  const { data, error } = await db.from("job_checkins").select("booking_id")
+    .in("account_id", [...accountIds]).eq("answer", "not_great").gte("answered_at", sinceIso).limit(NOT_GREAT_READ_LIMIT);
+  if (error) throw new Error(`notGreatBookingIds failed: ${error.message}`);
+  return new Set(((data ?? []) as { booking_id: string }[]).map((r) => r.booking_id));
+}
+
+/** The by-id twin a RELEASE reads: did this booking's customer answer "not great"? THROWS on a read error. */
+export async function hasNotGreatCheckin(db: SupabaseClient, accountId: string, bookingId: string): Promise<boolean> {
+  const { data, error } = await db.from("job_checkins").select("id")
+    .eq("account_id", accountId).eq("booking_id", bookingId).eq("answer", "not_great").maybeSingle();
+  if (error) throw new Error(`hasNotGreatCheckin failed: ${error.message}`);
+  return data !== null;
+}
+
+/**
+ * Which of these accounts have the check-in switched on (`automations.config.checkin === true` on their
+ * review_request recipe; only the boolean counts, as in `parseReviewRequestConfig`). The calendar follow-up reads it
+ * (plan D7a) for the few due bookings that were already asked; it lives here, not beside the recipe's parser,
+ * because booking.ts cannot import automations.ts (they import each other). Whether the recipe is currently enabled
+ * does not matter: a check-in that went out is a check-in that went out. THROWS on a read error.
+ */
+export async function accountsWithCheckin(db: SupabaseClient, accountIds: readonly string[]): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set();
+  const { data, error } = await db.from("automations").select("account_id, config")
+    .eq("recipe_key", "review_request").in("account_id", [...accountIds]);
+  if (error) throw new Error(`accountsWithCheckin failed: ${error.message}`);
+  const on = ((data ?? []) as { account_id: string; config: unknown }[])
+    .filter((a) => (a.config as { checkin?: unknown } | null)?.checkin === true);
+  return new Set(on.map((a) => a.account_id));
+}
+
+/**
+ * "Not great" answers answered since `sinceIso` whose To-do does not exist (plan D3, PR 2's review): the sweep's
+ * read. The answer page retries the To-do a few times and a replay repairs it, but a customer who never taps again
+ * needs this. The "no linked To-do" filter is IN THE QUERY (a PostgREST embed of tasks through
+ * the COMPOSITE key `tasks_review_checkin_fkey` — (account_id, review_checkin_id), so the hint must name the
+ * constraint, not the column — filtered `is null`, which PostgREST turns into an anti-join), so `limit` bounds the
+ * rows that still NEED a To-do and rows that have one can never crowd a missing one out of the page. Newest first.
+ * No RPC and no migration. THE EMBED FILTER IS PROVEN ONLY AGAINST A REAL DATABASE (test/job-checkins.test.ts, "26
+ * answered-with-To-do rows newer than one missing"); where that case cannot run, CI must prove it. If PostgREST
+ * ever refuses it the read THROWS, the sweep counts `checkinTasksFailed`, and the fallback is the earlier two-read
+ * shape (newest `limit` answers, then one `in` over their ids), which is correct but can be crowded. THROWS on error.
+ */
+export async function listCheckinsMissingTask(db: SupabaseClient, sinceIso: string, limit: number): Promise<JobCheckin[]> {
+  const { data, error } = await db.from("job_checkins").select(`${COLS}, tasks!tasks_review_checkin_fkey(id)`)
+    .eq("answer", "not_great").gte("answered_at", sinceIso).is("tasks", null)
+    .order("answered_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(`listCheckinsMissingTask failed: ${error.message}`);
+  return ((data ?? []) as Row[]).map(toCheckin);
+}

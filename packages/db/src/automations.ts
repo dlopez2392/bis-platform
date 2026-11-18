@@ -6,6 +6,7 @@ import { emailLedgerAddress } from "./email-address";
 import { emailKey } from "./contacts";
 import { readBlockedAddresses, readConsentState } from "./consent";
 import { recipientLanguage, type RecipientLanguage } from "./messaging";
+import { hasNotGreatCheckin, notGreatBookingIds } from "./job-checkins";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -260,6 +261,10 @@ export type DueReviewRequest = {
   language: RecipientLanguage;
   /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
   bodyEs: string | null;
+  /** 0048, as stored (null = not set), for the check-in's marketing footer (F-072, plan D4): the pass refuses a
+   *  check-in when it is blank after `.trim()`. Optional only so rows built before it existed (fixtures) still
+   *  type-check; the mappers below always set it, and an absent value reads as blank. */
+  mailingAddress?: string | null;
 };
 
 /**
@@ -332,6 +337,7 @@ function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe)
     config: parseReviewRequestConfig(auto.config),
     language: recipientLanguage(r.contacts?.language, info.accountLanguage),
     bodyEs: auto.bodyEs,
+    mailingAddress: info.mailingAddress,
   };
 }
 
@@ -1228,7 +1234,21 @@ export async function listDueReferralAsks(
     .order("ends_at", { ascending: true });
   if (error) throw new Error(`listDueReferralAsks failed: ${error.message}`);
 
-  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueReferralAsks", "booking");
+  const owned = ownAccountContactOnly((data ?? []) as any[], "listDueReferralAsks", "booking");
+  if (owned.length === 0) return [];
+  // F-072 (plan D7b, owner answer Q5): a customer who said the job was "not great" is not asked whether they know
+  // anyone. ONLY not-great; the rest of the ladder is untouched. The read is skipped when nothing is due.
+  // Scoped to the accounts in play and bounded. A read that fails FAILS CLOSED FOR THIS TICK (nothing is asked, the
+  // rows are due again next tick, the error is logged), never open: asking a customer who said "not great" whether
+  // they know anyone is the one thing this guard exists to stop, and a thrown error would take the whole pass down.
+  let notGreat: Set<string>;
+  try {
+    notGreat = await notGreatBookingIds(db, [...new Set(owned.map((r) => r.account_id as string))], windowStart);
+  } catch (e) {
+    console.error(`listDueReferralAsks: the not-great answers could not be read, no referral ask is due this tick: ${String(e)}`);
+    return [];
+  }
+  const rows = owned.filter((r) => !notGreat.has(r.id));
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -1252,6 +1272,8 @@ export async function getDueReferralAskById(
   // The contact must be this booking's own account's (ownAccountContactOnly).
   if (ownAccountContactOnly([data], "getDueReferralAskById", "booking").length === 0) return { due: null, why: "gone" };
   const accountId = (data as any).account_id as string;
+  // F-072 D7b: a "not great" answer since the hold means the ask no longer goes (the list excludes it the same way).
+  if (await hasNotGreatCheckin(db, accountId, bookingId)) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, accountId, "referral_ask");
   if (!auto) return { due: null, why: "off" };
   // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying

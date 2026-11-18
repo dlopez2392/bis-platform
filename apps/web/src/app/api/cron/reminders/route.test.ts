@@ -75,6 +75,9 @@ vi.mock("@bis/db", async () => {
   stampReviewRequested: async () => undefined,
   countReviewRequestsSince: async () => 0,
   stampReviewRequestSmsFailed: async () => undefined,
+  // F-072: the check-in's To-do sweep runs under the same key, every tick: no not-great answer is waiting here.
+  // Registering a read and NOT mocking it makes the key `errored: 1` in every exact body below.
+  listCheckinsMissingTask: async () => [],
   // The no-show nudge pass (Milestone B): same shape, one idle read.
   listDueNoShowNudges: async () => [],
   stampNoShowNudged: async () => undefined,

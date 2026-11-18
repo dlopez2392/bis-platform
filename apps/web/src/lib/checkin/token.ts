@@ -1,5 +1,6 @@
 import { consentTokenSecrets, isUuid } from "@/lib/consent/token";
 import { openSigned, sealSigned } from "@/lib/signed-token";
+import { isProductionEnv } from "@/lib/email/environment";
 
 /**
  * The after-the-job check-in's link (F-072, plan D1). Signed, not encrypted: it holds two ids, a language and a
@@ -53,6 +54,33 @@ export function openCheckinToken(token: unknown, secrets: readonly (string | nul
 export type CheckinTokenRead =
   | { ok: true; payload: CheckinTokenPayload }
   | { ok: false; why: "bad_token" | "not_configured" };
+
+/** The shortest secret production seals with: the email gate's own floor for the consent link, and the brief's. */
+const MIN_SECRET_LENGTH = 32;
+
+const cleanOrigin = (origin: string | null | undefined): string | null => {
+  const o = origin?.trim().replace(/\/+$/, "");
+  return o && /^https?:\/\/[^/\s]+$/.test(o) ? o : null;
+};
+
+/**
+ * The link the check-in email carries: `<origin>/r/<token>`, sealed with the deployment's CURRENT secret. Null when
+ * no link that works can be made: no secret, no usable origin (the cron's own `vercel.app` origin is discarded by
+ * Gmail, so the pass also refuses an empty one), an id that is not a uuid, or, in production, a secret under 32
+ * characters. The caller (the review-request pass) sends nothing rather than mail a dead or weakly signed link,
+ * as `briefOffLinks` does for the brief (brief/token.ts).
+ */
+export function checkinLink(a: {
+  accountId: string; bookingId: string; language: "en" | "es"; now: Date;
+  origin: string | null | undefined; env?: NodeJS.ProcessEnv;
+}): string | null {
+  const env = a.env ?? process.env;
+  const secret = consentTokenSecrets(env).current;
+  const origin = cleanOrigin(a.origin);
+  if (!secret || !origin || !isUuid(a.accountId) || !isUuid(a.bookingId)) return null;
+  if (isProductionEnv(env) && secret.length < MIN_SECRET_LENGTH) return null;
+  return `${origin}/r/${sealCheckinToken({ v: 1, a: a.accountId, b: a.bookingId, l: a.language, i: a.now.getTime() }, secret)}`;
+}
 
 /** Opens a token with the deployment's secrets. `not_configured` when none is set, so the page can answer
  *  "temporarily unavailable" before it touches the database; `bad_token` for anything that does not open. */
