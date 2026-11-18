@@ -88,6 +88,8 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "operator.cancel_notice": ["operator", "any", "none"],
   "operator.move_notice": ["operator", "any", "none"],
   "operator.lead_alert": ["operator", "any", "none"],
+  // F-072: a customer answered "not great" on the after-the-job check-in; operator mail to the calendar's alert list.
+  "operator.checkin_alert": ["operator", "any", "none"],
   "operator.call_alert": ["operator", "any", "none"],
   "operator.phone_change_alert": ["operator", "any", "none"],
   "operator.weekly_report": ["operator", "any", "none"],
@@ -111,9 +113,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the thirty-three send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, S-06's reply forward, item 8c's undo notice, F-046's staff confirmation and moved email, F-032's owner-line lockout, and F-082's daily brief) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the thirty-four send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, S-06's reply forward, item 8c's undo notice, F-046's staff confirmation and moved email, F-032's owner-line lockout, and F-082's daily brief, and F-072's check-in alert) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(33);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(34);
   });
 
   it("the transactional class (item 8c, owner Q2) holds exactly three kinds: the undo notice and F-046's two (mutation: classify automation.reminder as transactional → FAILS)", () => {
@@ -208,6 +210,7 @@ const EMAIL_STOPS_WHILE_PAUSED: Record<EmailKind, boolean> = {
   "operator.cancel_notice": false,
   "operator.move_notice": false,
   "operator.lead_alert": false,
+  "operator.checkin_alert": false,
   "operator.call_alert": false,
   "operator.phone_change_alert": false,
   "operator.weekly_report": false,

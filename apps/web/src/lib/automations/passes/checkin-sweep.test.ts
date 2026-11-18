@@ -12,10 +12,14 @@ const dbm = vi.hoisted(() => ({
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbm }));
 
+// The owner's alert has its own tests (checkin/alert.test.ts); here only WHEN the sweep asks for it is read.
+const alertMock = vi.hoisted(() => ({ alertOwnerOfNotGreat: vi.fn() }));
+vi.mock("@/lib/checkin/alert", () => alertMock);
+
 import { answerCheckin } from "@/lib/checkin/flow";
 import { fakeDb } from "@/lib/checkin/fake-db";
 import type { PassContext } from "../context";
-import { CHECKIN_SWEEP_LIMIT, CHECKIN_SWEEP_WINDOW_MS, sweepCheckinTasks, reviewRequestsPass } from "./checkin-sweep";
+import { CHECKIN_SWEEP_ALERT_BUDGET_MS, CHECKIN_SWEEP_LIMIT, CHECKIN_SWEEP_WINDOW_MS, sweepCheckinTasks, reviewRequestsPass } from "./checkin-sweep";
 import { reviewRequestPass } from "./review-request";
 
 const ACCT = "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f";
@@ -34,13 +38,92 @@ beforeEach(() => {
   for (const f of Object.values(dbm)) f.mockReset();
   dbm.listCheckinsMissingTask.mockResolvedValue([]);
   dbm.ensureCheckinTask.mockResolvedValue({ id: "t1", created: true });
+  alertMock.alertOwnerOfNotGreat.mockReset().mockResolvedValue({ sent: 1, failed: 0 });
   vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+describe("the owner's alert from the sweep (F-072, owner decision 2026-11-17)", () => {
+  const alerts = () => alertMock.alertOwnerOfNotGreat.mock.calls;
+
+  it("a To-do the SWEEP created alerts the owner, once per check-in, through the tick's own gate (mutation: never call it -> FAILS)", async () => {
+    const sendSpy = vi.fn().mockResolvedValue({ providerMessageId: "m1" });
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a"), checkin("b")]);
+    await sweepCheckinTasks({ ...ctx(), email: { isFake: true, send: sendSpy } });
+    expect(alerts().map((c) => c[1])).toEqual([checkin("a"), checkin("b")]);
+    expect(alerts()[0]![0]).toBe(db);
+    // The sender it hands over IS the tick's gate, and the tick's instant rides with it.
+    const deps = alerts()[0]![2] as { send: (r: unknown) => Promise<unknown>; now: Date };
+    await deps.send({ probe: 1 });
+    expect(sendSpy).toHaveBeenCalledWith({ probe: 1 });
+    expect(deps.now).toEqual(NOW);
+  });
+
+  it("a To-do that already existed (created: false) never alerts: the page, or an earlier tick, did (mutation: alert on every ensureCheckinTask call -> FAILS)", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
+    dbm.ensureCheckinTask.mockResolvedValue({ id: "t1", created: false });
+    expect(await sweepCheckinTasks(ctx())).toEqual({});
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("a To-do that cannot be made alerts nobody (the next tick retries, and alerts then)", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
+    dbm.ensureCheckinTask.mockRejectedValue(new Error("insert failed"));
+    await sweepCheckinTasks(ctx());
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("no addresses is counted under its own name, a failed send under its own, and neither stops the next check-in", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a"), checkin("b"), checkin("c")]);
+    alertMock.alertOwnerOfNotGreat
+      .mockResolvedValueOnce({ sent: 0, failed: 0, skipped: "no_recipients" })
+      .mockResolvedValueOnce({ sent: 0, failed: 1 })
+      .mockResolvedValueOnce({ sent: 2, failed: 0 });
+    expect(await sweepCheckinTasks(ctx())).toEqual({
+      checkinTasksOpened: 3, checkinAlertsNoRecipients: 1, checkinAlertsFailed: 1, checkinAlertsSent: 1,
+    });
+  });
+
+  it("an alert that throws anyway is counted failed and the To-do stands (mutation: let it throw out of the loop -> FAILS)", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a"), checkin("b")]);
+    alertMock.alertOwnerOfNotGreat.mockRejectedValueOnce(new Error("mail down"));
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 2, checkinAlertsFailed: 1, checkinAlertsSent: 1 });
+    expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("a suppressed account (a demo tenant) is its own skip, never a failure", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
+    alertMock.alertOwnerOfNotGreat.mockResolvedValue({ sent: 0, failed: 0, skipped: "suppressed" });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1, checkinAlertsSuppressed: 1 });
+  });
+
+  it("ONE shared time budget for the tick's alerts: once it is spent, the remaining To-dos are still made, their alerts are skipped for time and counted (mutation: no budget -> FAILS)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW);
+      const many = Array.from({ length: 10 }, (_, i) => checkin(`t${i}`, "ct-a"));
+      dbm.listCheckinsMissingTask.mockResolvedValue(many);
+      // Each alert takes 6 s of wall clock (a slow provider that still answers inside the single alert's own cap).
+      alertMock.alertOwnerOfNotGreat.mockImplementation(async () => { vi.setSystemTime(Date.now() + 6000); return { sent: 1, failed: 0 }; });
+      const out = await sweepCheckinTasks(ctx());
+      const tried = Math.ceil(CHECKIN_SWEEP_ALERT_BUDGET_MS / 6000);
+      expect(alertMock.alertOwnerOfNotGreat).toHaveBeenCalledTimes(tried);
+      expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(10);
+      expect(out).toEqual({ checkinTasksOpened: 10, checkinAlertsSent: tried, checkinAlertsSkippedForTime: 10 - tried });
+      expect(CHECKIN_SWEEP_ALERT_BUDGET_MS).toBeLessThanOrEqual(25_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a failed or missing alert never reddens the heartbeat: the To-do is the record", () => {
+    expect(reviewRequestsPass.beatFailure!({ checkinAlertsFailed: 3, checkinAlertsNoRecipients: 2 })).toBeNull();
+  });
 });
 
 describe("sweepCheckinTasks", () => {
   it("opens the To-do for each not-great answer that has none: due now, titled for the customer, as the system (mutation: skip the call -> FAILS)", async () => {
     dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a"), checkin("b")]);
-    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 2 });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 2, checkinAlertsSent: 2 });
     expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(2);
     expect(dbm.ensureCheckinTask).toHaveBeenCalledWith(
       db, ACCT, checkin("a"), { title: "Call Ana García: they said the job was not great", dueAt: NOW.toISOString() }, "checkin-sweep", "system");
@@ -56,7 +139,7 @@ describe("sweepCheckinTasks", () => {
 
   it("a full page is counted checkinSweepPageFull (there may be more task-missing rows than this tick looked at)", async () => {
     dbm.listCheckinsMissingTask.mockResolvedValue(Array.from({ length: CHECKIN_SWEEP_LIMIT }, (_, i) => checkin(`a${i}`, "ct-a")));
-    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: CHECKIN_SWEEP_LIMIT, checkinSweepPageFull: 1 });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: CHECKIN_SWEEP_LIMIT, checkinAlertsSent: CHECKIN_SWEEP_LIMIT, checkinSweepPageFull: 1 });
   });
 
   it("the To-do's title reads the contact in the CHECK-IN's account, never another's (mutation: drop taskTitle's account filter -> FAILS)", async () => {
@@ -86,7 +169,7 @@ describe("sweepCheckinTasks", () => {
   it("one To-do that cannot be made is counted and does not stop the next (error isolation, honest counter)", async () => {
     dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a"), checkin("b")]);
     dbm.ensureCheckinTask.mockRejectedValueOnce(new Error("insert failed")).mockResolvedValueOnce({ id: "t2", created: true });
-    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1, checkinTasksFailed: 1 });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1, checkinTasksFailed: 1, checkinAlertsSent: 1 });
     expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(2);
   });
 
@@ -109,7 +192,7 @@ describe("sweepCheckinTasks", () => {
     dbm.listCheckinsMissingTask.mockImplementation(async () => (tasks.has("a") ? [] : [answered]));
     dbm.ensureCheckinTask.mockReset().mockImplementation(async (_db, _acct, c: JobCheckin) => { tasks.add(c.id); return { id: "t1", created: true }; });
     // A later tick: the sweep makes it, once.
-    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1 });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1, checkinAlertsSent: 1 });
     expect(await sweepCheckinTasks(ctx())).toEqual({});
     expect([...tasks]).toEqual(["a"]);
   });
@@ -139,7 +222,7 @@ describe("the reviewRequests key: the check-in pass, then the sweep", () => {
   it("adds the sweep's counters beside the pass's when it did something", async () => {
     main.mockResolvedValue({ sent: 1 });
     dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
-    expect(await reviewRequestsPass.run(ctx())).toEqual({ sent: 1, checkinTasksOpened: 1 });
+    expect(await reviewRequestsPass.run(ctx())).toEqual({ sent: 1, checkinTasksOpened: 1, checkinAlertsSent: 1 });
   });
 
   it("the sweep runs even when the pass itself fails outright, and the failure still reaches the harness", async () => {
