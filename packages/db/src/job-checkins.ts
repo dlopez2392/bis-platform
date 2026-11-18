@@ -185,7 +185,8 @@ export async function accountsWithCheckin(db: SupabaseClient, accountIds: readon
  * "Not great" answers answered since `sinceIso` whose To-do does not exist (plan D3, PR 2's review): the sweep's
  * read. The answer page retries the To-do a few times and a replay repairs it, but a customer who never taps again
  * needs this. The "no linked To-do" filter is IN THE QUERY (a PostgREST embed of tasks through
- * `tasks.review_checkin_id`, filtered `is null`, which PostgREST turns into an anti-join), so `limit` bounds the
+ * the COMPOSITE key `tasks_review_checkin_fkey` — (account_id, review_checkin_id), so the hint must name the
+ * constraint, not the column — filtered `is null`, which PostgREST turns into an anti-join), so `limit` bounds the
  * rows that still NEED a To-do and rows that have one can never crowd a missing one out of the page. Newest first.
  * No RPC and no migration. THE EMBED FILTER IS PROVEN ONLY AGAINST A REAL DATABASE (test/job-checkins.test.ts, "26
  * answered-with-To-do rows newer than one missing"); where that case cannot run, CI must prove it. If PostgREST
@@ -193,7 +194,7 @@ export async function accountsWithCheckin(db: SupabaseClient, accountIds: readon
  * shape (newest `limit` answers, then one `in` over their ids), which is correct but can be crowded. THROWS on error.
  */
 export async function listCheckinsMissingTask(db: SupabaseClient, sinceIso: string, limit: number): Promise<JobCheckin[]> {
-  const { data, error } = await db.from("job_checkins").select(`${COLS}, tasks!review_checkin_id(id)`)
+  const { data, error } = await db.from("job_checkins").select(`${COLS}, tasks!tasks_review_checkin_fkey(id)`)
     .eq("answer", "not_great").gte("answered_at", sinceIso).is("tasks", null)
     .order("answered_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listCheckinsMissingTask failed: ${error.message}`);
