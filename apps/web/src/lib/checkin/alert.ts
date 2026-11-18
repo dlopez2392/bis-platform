@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { getBranding, type JobCheckin, type SupabaseClient } from "@bis/db";
-import { sendEmailOrThrow, type EmailRequest } from "@/lib/consent/email-gate";
+import { sendEmailOrThrow, EmailNotSent, type EmailRequest } from "@/lib/consent/email-gate";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { checkinAlertEmail } from "@/lib/email/templates/checkin-alert";
 import { configuredOrigin } from "@/lib/email/origin";
@@ -30,7 +31,7 @@ export type CheckinAlertOutcome = {
   sent: number;
   failed: number;
   /** Why nothing was attempted, or the attempt was abandoned. Absent when at least one address was tried. */
-  skipped?: "no_recipients" | "unreadable" | "timed_out";
+  skipped?: "no_recipients" | "unreadable" | "timed_out" | "suppressed";
 };
 
 export type CheckinAlertDeps = {
@@ -39,13 +40,19 @@ export type CheckinAlertDeps = {
   now?: Date;
 };
 
-/** The job's day, in the account's zone and language: weekday, month, day. Null when the zone is unusable or the
- *  instant is not a date: the sentence then names no day rather than a wrong one. */
+/** The job's day, in the account's zone and language, in the long form that reads inside a sentence: "Monday, June 14"
+ *  and, for Spanish, "lunes 14 de junio" (so "del lunes 14 de junio"). Null when the zone is unusable or the instant is
+ *  not a date: the sentence then names no day rather than a wrong one. */
 function jobDay(startsAt: unknown, timezone: string | null, locale: "en" | "es"): string | null {
   const zone = resolveAccountZone(timezone);
   const at = typeof startsAt === "string" ? new Date(startsAt) : null;
   if (!zone || !at || Number.isNaN(at.getTime())) return null;
-  return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", { timeZone: zone, weekday: "short", month: "short", day: "numeric" }).format(at);
+  if (locale !== "es") {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "long", month: "long", day: "numeric" }).format(at);
+  }
+  const parts = new Intl.DateTimeFormat("es-US", { timeZone: zone, weekday: "long", month: "long", day: "numeric" }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} de ${part("month")}`;
 }
 
 async function recipientsOf(db: SupabaseClient, checkin: JobCheckin): Promise<{ emails: string[]; startsAt: unknown }> {
@@ -103,6 +110,7 @@ async function alertNow(db: SupabaseClient, checkin: JobCheckin, deps: CheckinAl
   }
 
   const out: CheckinAlertOutcome = { sent: 0, failed: 0 };
+  let suppressed = 0;
   for (const to of prepared.emails) {
     try {
       await send({
@@ -110,15 +118,19 @@ async function alertNow(db: SupabaseClient, checkin: JobCheckin, deps: CheckinAl
         subject: prepared.subject, body: prepared.text, html: prepared.html, language: prepared.locale,
         ...(deps.now ? { now: deps.now } : {}),
         // One key per check-in AND address: the provider deduplicates a repeat of the same request, and one shared key
-        // across different recipients would read as a conflicting repeat.
-        idempotencyKey: `checkin-alert/${checkin.id}/${to.toLowerCase()}`,
+        // across different recipients would read as a conflicting repeat. The address is hashed so the key stays short
+        // (providers cap it at 256 characters) whatever an agency typed into the list.
+        idempotencyKey: `checkin-alert/${checkin.id}/${createHash("sha256").update(to.toLowerCase()).digest("hex").slice(0, 32)}`,
       });
       out.sent++;
     } catch (e) {
+      // An account the gate holds back on purpose (a demo tenant, accounts.outbound_suppressed) is a skip, not a fault.
+      if (e instanceof EmailNotSent && e.result.kind === "blocked" && e.result.reason === "suppressed_account") { suppressed++; continue; }
       out.failed++;
       console.error(`check-in alert: account ${checkin.accountId}, check-in ${checkin.id}: the send to ${to} failed: ${loggableError(e)}`);
     }
   }
+  if (out.sent === 0 && out.failed === 0 && suppressed > 0) out.skipped = "suppressed";
   return out;
 }
 

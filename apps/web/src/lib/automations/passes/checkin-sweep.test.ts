@@ -19,7 +19,7 @@ vi.mock("@/lib/checkin/alert", () => alertMock);
 import { answerCheckin } from "@/lib/checkin/flow";
 import { fakeDb } from "@/lib/checkin/fake-db";
 import type { PassContext } from "../context";
-import { CHECKIN_SWEEP_LIMIT, CHECKIN_SWEEP_WINDOW_MS, sweepCheckinTasks, reviewRequestsPass } from "./checkin-sweep";
+import { CHECKIN_SWEEP_ALERT_BUDGET_MS, CHECKIN_SWEEP_LIMIT, CHECKIN_SWEEP_WINDOW_MS, sweepCheckinTasks, reviewRequestsPass } from "./checkin-sweep";
 import { reviewRequestPass } from "./review-request";
 
 const ACCT = "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f";
@@ -88,6 +88,31 @@ describe("the owner's alert from the sweep (F-072, owner decision 2026-11-17)", 
     alertMock.alertOwnerOfNotGreat.mockRejectedValueOnce(new Error("mail down"));
     expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 2, checkinAlertsFailed: 1, checkinAlertsSent: 1 });
     expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("a suppressed account (a demo tenant) is its own skip, never a failure", async () => {
+    dbm.listCheckinsMissingTask.mockResolvedValue([checkin("a")]);
+    alertMock.alertOwnerOfNotGreat.mockResolvedValue({ sent: 0, failed: 0, skipped: "suppressed" });
+    expect(await sweepCheckinTasks(ctx())).toEqual({ checkinTasksOpened: 1, checkinAlertsSuppressed: 1 });
+  });
+
+  it("ONE shared time budget for the tick's alerts: once it is spent, the remaining To-dos are still made, their alerts are skipped for time and counted (mutation: no budget -> FAILS)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW);
+      const many = Array.from({ length: 10 }, (_, i) => checkin(`t${i}`, "ct-a"));
+      dbm.listCheckinsMissingTask.mockResolvedValue(many);
+      // Each alert takes 6 s of wall clock (a slow provider that still answers inside the single alert's own cap).
+      alertMock.alertOwnerOfNotGreat.mockImplementation(async () => { vi.setSystemTime(Date.now() + 6000); return { sent: 1, failed: 0 }; });
+      const out = await sweepCheckinTasks(ctx());
+      const tried = Math.ceil(CHECKIN_SWEEP_ALERT_BUDGET_MS / 6000);
+      expect(alertMock.alertOwnerOfNotGreat).toHaveBeenCalledTimes(tried);
+      expect(dbm.ensureCheckinTask).toHaveBeenCalledTimes(10);
+      expect(out).toEqual({ checkinTasksOpened: 10, checkinAlertsSent: tried, checkinAlertsSkippedForTime: 10 - tried });
+      expect(CHECKIN_SWEEP_ALERT_BUDGET_MS).toBeLessThanOrEqual(25_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a failed or missing alert never reddens the heartbeat: the To-do is the record", () => {

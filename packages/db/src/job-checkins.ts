@@ -89,7 +89,7 @@ export async function markReviewLinkOpened(db: SupabaseClient, accountId: string
  * The ONE To-do a "not great" answer opens (plan D3), on the check-in's own customer, linked by
  * `tasks.review_checkin_id` (unique: tasks_review_checkin_once). `ensureDocumentExpiryTask`'s shape: insert, and a
  * 23505 means it is already there, so any number of calls make one To-do; task.created is emitted only by the call
- * that made it. Refuses any other answer, before a write. The title is the caller's (bilingual copy lives in web).
+ * that made it (a failed event is logged and the call still answers created: see the comment at the emit). Refuses any other answer, before a write. The title is the caller's (bilingual copy lives in web).
  */
 export async function ensureCheckinTask(
   db: SupabaseClient, accountId: string, checkin: JobCheckin, input: { title: string; dueAt: string },
@@ -101,7 +101,14 @@ export async function ensureCheckinTask(
   }).select("id").single();
   if (!error && data) {
     const id = (data as { id: string }).id;
-    await emit(db, accountId, "task.created", actorId, { taskId: id, contactId: checkin.contactId, checkinId: checkin.id }, actorType);
+    // The To-do exists, so it was CREATED by this call whatever happens to its event: the owner's email waits for
+    // exactly this answer. The 23505 branch below never re-emits, so a throw here could not be repaired by a retry; it
+    // would only make every later call say "already there" and lose the email. Logged, with ids and no customer text.
+    try {
+      await emit(db, accountId, "task.created", actorId, { taskId: id, contactId: checkin.contactId, checkinId: checkin.id }, actorType);
+    } catch (e) {
+      console.error(`ensureCheckinTask: account ${accountId}, check-in ${checkin.id}: the To-do ${id} was made but its task.created event was not recorded: ${e instanceof Error ? e.message : String(e)}`);
+    }
     return { id, created: true };
   }
   if (error?.code !== "23505") throw new Error(`ensureCheckinTask failed: ${error?.message ?? "no row"}`);

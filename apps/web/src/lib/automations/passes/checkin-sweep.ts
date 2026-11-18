@@ -18,8 +18,9 @@ import { reviewRequestPass } from "./review-request";
  *
  * A To-do the sweep itself creates also emails the booking calendar's alert list (checkin/alert.ts, owner decision
  * 2026-11-17), exactly as the answer page does for one it creates, and for the same reason: `created` is true once.
- * Counted `checkinAlertsSent`, `checkinAlertsNoRecipients` and `checkinAlertsFailed` (none of them reddens the
- * heartbeat: the To-do is the record, the email is the nudge).
+ * Counted `checkinAlertsSent`, `checkinAlertsNoRecipients`, `checkinAlertsSuppressed` (a demo tenant: deliberate),
+ * `checkinAlertsSkippedForTime` (the tick's shared alert budget was spent) and `checkinAlertsFailed` (none of them
+ * reddens the heartbeat: the To-do is the record, the email is the nudge).
  *
  * It runs INSIDE the `reviewRequests` key (not as a pass of its own: a new key would change the cron's JSON for
  * every account and add a node to the fan-out) and reports through that key, only when it did something, so an
@@ -28,11 +29,15 @@ import { reviewRequestPass } from "./review-request";
  */
 export const CHECKIN_SWEEP_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const CHECKIN_SWEEP_LIMIT = 25;
+/** ONE time budget for every owner alert in a tick (the pass route's maxDuration is 90 s and one alert may take 5 s,
+ *  so 25 of them could not all fit): checked before each alert starts, so the last one in flight runs past it by at
+ *  most CHECKIN_ALERT_BUDGET_MS. The To-dos are all still made; an alert skipped for time is counted. */
+export const CHECKIN_SWEEP_ALERT_BUDGET_MS = 20_000;
 
 export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters> {
   const out = {
     checkinTasksOpened: 0, checkinTasksFailed: 0, checkinSweepPageFull: 0,
-    checkinAlertsSent: 0, checkinAlertsNoRecipients: 0, checkinAlertsFailed: 0,
+    checkinAlertsSent: 0, checkinAlertsNoRecipients: 0, checkinAlertsFailed: 0, checkinAlertsSuppressed: 0, checkinAlertsSkippedForTime: 0,
   };
   let missing;
   try {
@@ -43,6 +48,7 @@ export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters>
   }
   // A full page means there may be more task-missing rows than this tick looked at (the next tick takes them).
   if (missing.length >= CHECKIN_SWEEP_LIMIT) out.checkinSweepPageFull = 1;
+  let alertMs = 0;
   for (const checkin of missing) {
     try {
       const title = await taskTitle(ctx.db, checkin.accountId, checkin.contactId);
@@ -52,14 +58,21 @@ export async function sweepCheckinTasks(ctx: PassContext): Promise<PassCounters>
         out.checkinTasksOpened++;
         // The owner's email, ONLY for a To-do THIS call made (a To-do the page already made was mailed then). It goes
         // through the tick's own gate; it never throws, and a failure never undoes the To-do.
+        if (alertMs >= CHECKIN_SWEEP_ALERT_BUDGET_MS) {
+          if (out.checkinAlertsSkippedForTime++ === 0) console.error(`check-in sweep: the tick's alert time (${CHECKIN_SWEEP_ALERT_BUDGET_MS} ms) is spent; the remaining owner alerts are skipped (their To-dos exist)`);
+          continue;
+        }
         let outcome: CheckinAlertOutcome;
+        const startedAt = Date.now();
         try {
           outcome = await alertOwnerOfNotGreat(ctx.db, checkin, { send: (req) => ctx.email.send(req), now: ctx.now });
         } catch (e) {
           console.error(`check-in sweep: the owner alert for check-in ${checkin.id} (account ${checkin.accountId}) threw (the To-do exists): ${loggableError(e)}`);
           outcome = { sent: 0, failed: 1 };
         }
-        if (outcome.skipped === "no_recipients") out.checkinAlertsNoRecipients++;
+        alertMs += Date.now() - startedAt;
+        if (outcome.skipped === "suppressed") out.checkinAlertsSuppressed++;
+        else if (outcome.skipped === "no_recipients") out.checkinAlertsNoRecipients++;
         else if (outcome.sent > 0) out.checkinAlertsSent++;
         else out.checkinAlertsFailed++;
       }

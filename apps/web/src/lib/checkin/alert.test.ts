@@ -5,6 +5,7 @@ import type { Branding, JobCheckin } from "@bis/db";
 const dbm = vi.hoisted(() => ({ getBranding: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbm }));
 
+import { EmailNotSent } from "@/lib/consent/email-gate";
 import { alertOwnerOfNotGreat, CHECKIN_ALERT_BUDGET_MS } from "./alert";
 import { fakeDb, type FakeRow as Row } from "./fake-db";
 
@@ -22,11 +23,14 @@ const CONTACT = "11111111-2222-4333-8444-555555555555";
 const BRANDING: Branding = { brandName: "Rio Roofing", brandLogoPath: null, brandColor: "#0e7490", brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null };
 const checkin: JobCheckin = { id: "chk-1", accountId: ACCT, bookingId: BOOKING, contactId: CONTACT, answer: "not_great", answeredAt: "2027-06-15T12:00:00Z", reviewLinkOpenedAt: null };
 
+const PRIVATE_EMAIL = "ana.private@customer.example";
+const PRIVATE_PHONE = "+19565550123";
+
 const world = (over: Partial<Record<string, Row[]>> = {}) => fakeDb({
   // 03:00Z is the evening of the 14th in Chicago: the day is the ACCOUNT's, not UTC's.
   bookings: [{ id: BOOKING, account_id: ACCT, calendar_id: CAL, starts_at: "2027-06-15T03:00:00Z" }],
   calendars: [{ id: CAL, account_id: ACCT, notify_emails: ["owner@rio.example", "office@rio.example"] }],
-  contacts: [{ id: CONTACT, account_id: ACCT, first_name: "Ana", last_name: "García" }],
+  contacts: [{ id: CONTACT, account_id: ACCT, first_name: "Ana", last_name: "García", email: PRIVATE_EMAIL, phone: PRIVATE_PHONE }],
   accounts: [{ id: ACCT, language: "en", timezone: "America/Chicago" }],
   ...over,
 });
@@ -52,9 +56,55 @@ describe("alertOwnerOfNotGreat", () => {
       accountId: ACCT, kind: "operator.checkin_alert", fromName: "Rio Roofing", language: "en",
       subject: "Ana García said the job was not great",
     });
-    expect(req.body).toContain("Ana García said the job on Mon, Jun 14 was not great.");
+    expect(req.body).toContain("Ana García said the job on Monday, June 14 was not great.");
     expect(req.html).toContain(`href="https://app.example.com/dashboard/accounts/${ACCT}/contacts/${CONTACT}"`);
     expect(req).not.toHaveProperty("fromAddress");
+  });
+
+  it("shows neither the customer's email address nor phone number anywhere in the subject, the text or the html (mutation: read email or phone into the name -> FAILS)", async () => {
+    await alertOwnerOfNotGreat(world().db, checkin, { send });
+    for (const [req] of send.mock.calls) {
+      for (const part of [req.subject, req.body, req.html ?? ""]) {
+        expect(part).not.toContain(PRIVATE_EMAIL);
+        expect(part).not.toContain("customer.example");
+        expect(part).not.toContain("5550123");
+      }
+    }
+  });
+
+  it("reads the customer in the check-in's account: a same-id contact elsewhere, with another name, is never used (mutation: drop the contacts account filter -> FAILS)", async () => {
+    const { db } = world({ contacts: [
+      { id: CONTACT, account_id: OTHER, first_name: "Wrong", last_name: "Person" },
+      { id: CONTACT, account_id: ACCT, first_name: "Ana", last_name: "García" },
+    ] });
+    await alertOwnerOfNotGreat(db, checkin, { send });
+    expect(send.mock.calls[0]![0].subject).toBe("Ana García said the job was not great");
+    expect(send.mock.calls[0]![0].body).not.toContain("Wrong");
+  });
+
+  it("an address whose key would be long still gets a short, deterministic, distinct key (the address is hashed)", async () => {
+    const long = `${"x".repeat(300)}@rio.example`;
+    const { db } = world({ calendars: [{ id: CAL, account_id: ACCT, notify_emails: [long, "owner@rio.example"] }] });
+    await alertOwnerOfNotGreat(db, checkin, { send });
+    await alertOwnerOfNotGreat(db, checkin, { send });
+    const keys = send.mock.calls.map((c) => c[0].idempotencyKey as string);
+    expect(keys.every((k) => k.length <= 256 && k.startsWith("checkin-alert/chk-1/"))).toBe(true);
+    expect(keys.some((k) => k.includes("xxxx"))).toBe(false);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys.slice(2)).toEqual(keys.slice(0, 2));
+  });
+
+  it("an account the gate holds back (suppressed_account, a demo tenant) is a deliberate skip, not a failure, and not logged as an error", async () => {
+    send.mockRejectedValue(new EmailNotSent({ kind: "blocked", reason: "suppressed_account" }));
+    expect(await alertOwnerOfNotGreat(world().db, checkin, { send })).toEqual({ sent: 0, failed: 0, skipped: "suppressed" });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("any other gate block is still a failure, logged", async () => {
+    send.mockRejectedValue(new EmailNotSent({ kind: "blocked", reason: "suppressed" }));
+    expect(await alertOwnerOfNotGreat(world().db, checkin, { send })).toEqual({ sent: 0, failed: 2 });
+    expect(console.error).toHaveBeenCalled();
   });
 
   it("every send carries an idempotency key made from the check-in's id, distinct per address (Resend would call one shared key a duplicate) (mutation: drop the key -> FAILS)", async () => {
@@ -116,7 +166,7 @@ describe("alertOwnerOfNotGreat", () => {
     const req = send.mock.calls[0]![0];
     expect(req.language).toBe("es");
     expect(req.subject).toBe("Ana García dijo que el trabajo no estuvo bien");
-    expect(req.body).toContain("Ana García dijo que el trabajo del lun, 14 de jun no estuvo bien.");
+    expect(req.body).toContain("Ana García dijo que el trabajo del lunes 14 de junio no estuvo bien.");
     expect(req.html).toContain("Abrir este contacto");
   });
 
