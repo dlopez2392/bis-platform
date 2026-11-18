@@ -304,7 +304,7 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
       // The pinned list, in source order (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS); 8b-2's
       // suggestions, item 8c's ai_acts and F-115 Task 4's changes, all read only when asked.
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts", "changes"]);
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "checkins", "suggestions", "ai_acts", "changes"]);
     }));
 });
 
