@@ -77,6 +77,7 @@ import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
 import { GoogleCardStates, GOOGLE_CARD_SECTION } from "./google-card-states";
+import { CheckinCountsStates, CHECKIN_COUNTS_SECTION } from "./checkin-counts-states";
 import { AgendaDemo } from "./agenda-demo";
 import { JobDemo } from "./job-demo";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
@@ -985,6 +986,11 @@ export default async function StyleguidePage({
           {/* S-22 slice 1: Google Calendar busy times, every state. Connect and Reconnect are the one primary where
               they show; Disconnect is always ghost; status is dot + word. */}
           <GoogleCardStates />
+        </Section>
+
+        <Section title={CHECKIN_COUNTS_SECTION} file="accounts/[accountId]/automations/checkin-counts.tsx">
+          {/* F-072 PR 4: the after-the-job check-in's counts line on the Review requests card, every state. */}
+          <CheckinCountsStates />
         </Section>
 
         {/* F-082 PR 4: the daily brief card on Mis preferencias: off and on rows, empty, error, skeleton, Spanish. */}

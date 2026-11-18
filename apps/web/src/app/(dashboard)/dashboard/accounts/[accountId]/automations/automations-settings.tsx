@@ -22,7 +22,19 @@ import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "@/lib/automations/review-request-copy";
 import type { ActionResult } from "./actions";
 
-type StoredForm = { enabled: boolean; channel: ReviewRequestChannel; reviewUrl: string; body: string };
+type StoredForm = { enabled: boolean; channel: ReviewRequestChannel; reviewUrl: string; body: string; checkin: boolean };
+
+/**
+ * The address "Open link" opens: http(s) only, normalised (`href`, as the pass sends it), else null. Never the raw
+ * field value: a `javascript:` or `data:` string typed into the box must not become an anchor's href. Local, not the
+ * pass's parser: that one lives in the barrel whose database client must stay out of this client bundle.
+ */
+function openableHref(raw: string): string | null {
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch { return null; }
+}
 
 /**
  * What the form shows for a stored row. Reads the RAW jsonb leniently on
@@ -37,11 +49,29 @@ function formDefaults(row: AutomationRow | null): StoredForm {
     channel: cfg.channel === "sms" ? "sms" : "email",
     reviewUrl: typeof cfg.reviewUrl === "string" ? cfg.reviewUrl : "",
     body: row?.body ?? "",
+    // Only the boolean true is on, as the pass's parser reads it (F-072, plan D5).
+    checkin: cfg.checkin === true,
   };
 }
 
+/**
+ * The message fields (body and its Spanish twin). Hidden, not unmounted, while the check-in is in play: ON and by
+ * EMAIL. On Text the check-in is neither drawn nor submitted, so the box is back. Its own component so the rule can be
+ * driven with every (switch, channel) pair, which a static render of the card cannot do (the channel is client state).
+ */
+export function ReviewMessageFields({ checkin, channel, children }: {
+  checkin: boolean; channel: ReviewRequestChannel; children?: React.ReactNode;
+}) {
+  const hidden = checkin && channel === "email";
+  return (
+    <div data-testid="review-message-fields" hidden={hidden} className={hidden ? undefined : "grid gap-4 md:grid-cols-2"}>
+      {children}
+    </div>
+  );
+}
+
 export function AutomationsSettings({
-  automation, brandName, smsGate, saveAction,
+  automation, brandName, smsGate, saveAction, counts,
 }: {
   automation: AutomationRow | null;
   /** Already the CUSTOMER-FACING name (brandDisplayName, page.tsx) — what
@@ -49,6 +79,8 @@ export function AutomationsSettings({
   brandName: string;
   smsGate: SmsGate;
   saveAction: (formData: FormData) => Promise<ActionResult>;
+  /** The check-in counts line, rendered on the server (checkin-counts-line.tsx, inside Suspense) and drawn under the form. */
+  counts?: React.ReactNode;
 }) {
   const stored = formDefaults(automation);
   // Controlled, so the counter recomputes on every keystroke — the
@@ -58,6 +90,11 @@ export function AutomationsSettings({
   const [channel, setChannel] = useState<ReviewRequestChannel>(stored.channel);
   const [reviewUrl, setReviewUrl] = useState(stored.reviewUrl);
   const [body, setBody] = useState(stored.body);
+  // F-072 (plan D5): the check-in is an EMAIL thing, so on the Text channel it is neither drawn nor submitted (the
+  // save would refuse it), and while it is on the operator's message steps aside: the words are ours, fixed and
+  // bilingual, because a paragraph typed here is exactly the gating the check-in exists to remove.
+  const [checkin, setCheckin] = useState(stored.checkin);
+  const openHref = openableHref(reviewUrl);
 
   // THE COUNTER COUNTS BODY PLUS LINK PLUS THE OPT-OUT SENTENCE, through the
   // ONE composer the pass uses and the SAME `withOptOut` the send path
@@ -136,9 +173,36 @@ export function AutomationsSettings({
               placeholder={m["automations.review.urlPlaceholder"]}
             />
             <p className="text-xs text-muted-foreground">{m["automations.review.urlHint"]}</p>
+            {openHref ? (
+              // No server call: a plain anchor, so the agency sees exactly what customers will land on. noopener and
+              // noreferrer, because the page it opens is Google's, not ours.
+              <a
+                href={openHref} target="_blank" rel="noopener noreferrer" data-testid="review-open-link"
+                title={m["automations.review.openLinkHint"]}
+                className="inline-flex min-h-11 items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8"
+              >
+                {m["automations.review.openLink"]}
+                <span className="sr-only">{m["automations.review.openLinkNewTab"]}</span>
+              </a>
+            ) : null}
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          {channel === "email" ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="review-checkin" name="checkin" checked={checkin}
+                  onCheckedChange={(v) => setCheckin(v === true)}
+                />
+                <Label htmlFor="review-checkin">{m["automations.review.checkin.label"]}</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">{m["automations.review.checkin.hint"]}</p>
+            </div>
+          ) : null}
+
+          {/* Hidden, not unmounted, while the check-in is on: the text still submits with the form, so a save never
+              wipes what the operator wrote, and turning the switch off brings it straight back. */}
+          <ReviewMessageFields checkin={checkin} channel={channel}>
             <div className="space-y-1.5">
               <Label htmlFor="review-body">{m["automations.bodyEn.label"]}</Label>
               <Textarea
@@ -173,10 +237,13 @@ export function AutomationsSettings({
               composeEs={(text) => (channel === "sms" ? withOptOut(composeReviewRequestSms(text, reviewUrl.trim()), "es") : text)}
               sms={channel === "sms"}
             />
-          </div>
+          </ReviewMessageFields>
 
           <SubmitButton pending={pending}>{m["automations.review.save"]}</SubmitButton>
         </form>
+        {/* Only for an account that has the check-in on (and by email): for any other the line would say "no check-ins
+            yet" about a feature it never had. The STORED state, not the live switch: the counts describe what is saved. */}
+        {stored.checkin && stored.channel === "email" ? counts : null}
       </CardContent>
     </Card>
   );

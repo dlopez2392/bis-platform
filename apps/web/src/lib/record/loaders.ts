@@ -108,6 +108,9 @@ export async function loadTimeline(
       // (record-timeline-changes.test.ts); PR E turns the switch on and ships the renderer
       // (change-rows.ts, change-item.tsx) that makes a "change" row worth showing.
       changes: true,
+      // F-072 (plan D2): the customer's answer to the after-the-job check-in. Asked here, not by loadRecent: the
+      // drawer's read budget is pinned (summary/route.reads.test.ts).
+      checkins: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
     });
   } catch (e) {

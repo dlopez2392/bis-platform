@@ -106,7 +106,7 @@ test.describe("the Automations page", () => {
     await page.getByRole("link", { name: "Automations" }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/automations$`));
     await expect(page.getByText("Review requests", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Review link")).toBeVisible();
+    await expect(page.getByLabel("Review link", { exact: true })).toBeVisible();
 
     // The residual the spec names: the live counter. Switch to Text message,
     // type a link, and the count must be what SENDS: the default body, the

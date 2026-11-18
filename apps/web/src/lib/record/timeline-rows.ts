@@ -65,6 +65,14 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   merge: "timeline.what.merge", suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
   // F-115 part 1 (S-04), plan Task 4.
   changes: "timeline.what.changes",
+  // F-072 (plan D2).
+  checkins: "timeline.what.checkins",
+};
+
+// F-072 (plan D2): the answer as a dot and a word (rule 3). "Okay" is neither good nor a problem; "not great" is the
+// one that asks the owner to act, so it is the warning.
+const CHECKIN_ANSWER: Readonly<Record<"great" | "okay" | "not_great", readonly [MessageKey, TimelineTone]>> = {
+  great: ["checkin.answer.great", "good"], okay: ["checkin.answer.okay", "muted"], not_great: ["checkin.answer.not_great", "warn"],
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -206,6 +214,16 @@ function phrase(
       status: entry.share.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.share.category}`),
     };
+    // F-072 (plan D2): "answered the check-in", the answer as the status, the job's day and (a "not great" only) the
+    // To-do's state as the detail. A booking the reader cannot see leaves the day out; nothing is invented.
+    case "checkin": {
+      const [word, tone] = CHECKIN_ANSWER[entry.checkin.answer];
+      const parts = [
+        ...(entry.checkin.bookingStartsAt ? [tr.text("timeline.checkinJob", { day: formatDateInZone(entry.checkin.bookingStartsAt, zone, tr.locale) })] : []),
+        ...(entry.checkin.answer === "not_great" && entry.checkin.todo ? [tr.text(entry.checkin.todo === "done" ? "timeline.checkinTodoDone" : "timeline.checkinTodoOpen")] : []),
+      ];
+      return { verb: tr.text("timeline.checkin"), status: { tone, word: tr.text(word) }, detail: parts.length > 0 ? parts.join(" · ") : null };
+    }
     // item 8c: the act-kind registry's own sentence ("booked Thu, Oct 22, 10:00 AM CDT"), under the AI mark
     // (authorOf). No status word: whether it can still be undone is the row's view (`timelineRows`, `act`).
     case "aiAct": return { ...describeAct(entry.act, { tr, zone }), status: null };

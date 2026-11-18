@@ -80,8 +80,20 @@ export async function saveReviewRequestAction(
   // Validated on WRITE with the same parser the pass applies on READ. A junk
   // link is refused even while the recipe is off (a javascript: URL must never
   // be stored), and turning the recipe on requires a link.
-  const parsed = parseReviewRequestConfig({ channel, reviewUrl });
-  if (reviewUrl && !parsed) return { ok: false, error: m["automations.review.urlInvalid"] };
+  //
+  // F-072 (plan D5, "carry the flag on save"): the check-in switch is `config.checkin`, and this action REBUILDS the
+  // config, so the flag must be passed through the same parser or a save would drop it. Only the box's own value
+  // "on" turns it on, and a save without it clears it (the parser emits the key only when it is on). The three
+  // refusals each say what to do: the Text channel cannot carry the check-in, there is nothing to offer after the
+  // question without a link, and the page the link is shown on is https, so an http: link is refused FOR the switch
+  // (the same http: link stays storable with it off, as accounts may hold one). Agency-only: the check above.
+  const checkin = formData.get("checkin") === "on";
+  if (checkin && channel !== "email") return { ok: false, error: m["automations.review.checkin.needsEmail"] };
+  const base = parseReviewRequestConfig({ channel, reviewUrl });
+  if (reviewUrl && !base) return { ok: false, error: m["automations.review.urlInvalid"] };
+  if (checkin && !base) return { ok: false, error: m["automations.review.checkin.needsUrl"] };
+  const parsed = checkin ? parseReviewRequestConfig({ channel, reviewUrl, checkin: true }) : base;
+  if (checkin && !parsed) return { ok: false, error: m["automations.review.checkin.needsHttps"] };
   if (enabled && !parsed) return { ok: false, error: m["automations.review.urlRequired"] };
 
   let brandName: string;

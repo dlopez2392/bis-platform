@@ -282,12 +282,12 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "merge" | "suggestions" | "ai_acts" | "changes";
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "merge" | "checkins" | "suggestions" | "ai_acts" | "changes";
 /** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`),
  *  `ai_acts` only when asked (`opts.aiActs`, item 8c) and `changes` only when asked (`opts.changes`,
- *  F-115 part 1 Task 4), so what a page read is its own `sources`, never this list. `merge` (F-006
+ *  F-115 part 1 Task 4) and `checkins` only when asked (`opts.checkins`, F-072), so what a page read is its own `sources`, never this list. `merge` (F-006
  *  part 1, plan Task 9) is unconditional, like every source before it. */
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts", "changes"];
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "checkins", "suggestions", "ai_acts", "changes"];
 
 /** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
  *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
@@ -312,6 +312,8 @@ export type TimelineTask = {
   document_request_id?: string | null;
   /** S-07 3a (0084): the file whose expiry this To-do is about; the automation opened it. Optional, so no task fixture changes. */
   document_expiry_id?: string | null;
+  /** F-072 (job_checkins): the "not great" answer this To-do is for; the automation opened it. Optional, so no task fixture changes. */
+  review_checkin_id?: string | null;
 };
 export type TimelineDeal = {
   id: string; name: string; status: string; monetary_value: number | string; created_at: string; created_by: string | null;
@@ -327,6 +329,9 @@ export type TimelineMessage = {
    *  closed the column). */
   author_kind: AuthorKind; author_id: string | null;
 };
+/** F-072 (plan D2): the customer's answer to the after-the-job check-in. `bookingStartsAt` is the job's own day (null when
+ *  the booking could not be read); `todo` is the "not great" To-do's state, null for any other answer or when it does not exist. */
+export type TimelineCheckin = { answer: "great" | "okay" | "not_great"; bookingStartsAt: string | null; todo: "open" | "done" | null };
 /** S-06 part 3 (spec §7): one website chat on the customer's thread. */
 export type TimelineChat = { conversationId: string; count: number; matchedExisting: boolean };
 /** Contact archive (0103, spec §4.2, §6.2): one row of `contact_archive_log`. `action` "archived" is
@@ -382,6 +387,8 @@ export type TimelineEntry =
    *  the merge row's id as a string. `contactId` is always the KEPT record (`keep_id`): the other side
    *  is a tombstone with no timeline of its own, which is why the kept record's page reads it. */
   | { kind: "merge"; id: string; at: string; contactId: string; merge: TimelineMerge }
+  /** F-072 (plan D2): one row per answered check-in, at `answered_at`, read from `job_checkins` so RLS decides. `id` is the check-in's. The author mark is the customer. */
+  | { kind: "checkin"; id: string; at: string; contactId: string; checkin: TimelineCheckin }
   /** F-006 part 1: a SECOND row for a merge since undone, at `undone_at`, from the same table. The kind
    *  keeps its key apart from the merge row's. */
   | { kind: "mergeUndone"; id: string; at: string; contactId: string; merge: TimelineMerge }
@@ -490,6 +497,44 @@ async function listContactArchiveLog(
 }
 
 /**
+ * F-072 (plan D2): the `checkins` source, one row per ANSWERED check-in from `job_checkins` (a row exists only once
+ * the customer answered), paged like every uuid source. Under the caller's RLS (members read their own account's
+ * rows). Two small follow-up reads, bounded by the page: the job's own day (`bookings.starts_at`) and, for a "not
+ * great" answer, its To-do's state (`tasks.review_checkin_id`, done when `completed_at` is set). A booking or To-do
+ * the reader's RLS cannot see reads as null, never as a failure; a failed READ throws (listTimelinePage's settle).
+ */
+export async function listContactCheckins(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
+): Promise<TimelineEntry[]> {
+  const q = forContacts(
+    db.from("job_checkins").select("id, contact_id, booking_id, answer, answered_at").eq("account_id", accountId),
+    "contact_id", who,
+  );
+  const { data, error } = await withTimelinePage(q, "answered_at", page);
+  if (error) throw new Error(`listContactCheckins failed: ${error.message}`);
+  type Row = { id: string; contact_id: string; booking_id: string; answer: TimelineCheckin["answer"]; answered_at: string };
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0) return [];
+  // Only a "not great" answer has a To-do; with none on the page there is nothing to ask (never an empty `in.()`).
+  const notGreatIds = rows.filter((r) => r.answer === "not_great").map((r) => r.id);
+  const [bookings, todos] = await Promise.all([
+    db.from("bookings").select("id, starts_at").eq("account_id", accountId).in("id", rows.map((r) => r.booking_id)),
+    notGreatIds.length === 0
+      ? Promise.resolve({ data: [] as unknown[], error: null })
+      : db.from("tasks").select("review_checkin_id, completed_at").eq("account_id", accountId).in("review_checkin_id", notGreatIds),
+  ]);
+  if (bookings.error) throw new Error(`listContactCheckins bookings failed: ${bookings.error.message}`);
+  if (todos.error) throw new Error(`listContactCheckins to-dos failed: ${todos.error.message}`);
+  const startsAt = new Map(((bookings.data ?? []) as { id: string; starts_at: string }[]).map((b) => [b.id, b.starts_at]));
+  const todoState = new Map(((todos.data ?? []) as { review_checkin_id: string; completed_at: string | null }[])
+    .map((t) => [t.review_checkin_id, t.completed_at ? "done" as const : "open" as const]));
+  return rows.map((r): TimelineEntry => ({
+    kind: "checkin", id: r.id, at: r.answered_at, contactId: r.contact_id,
+    checkin: { answer: r.answer, bookingStartsAt: startsAt.get(r.booking_id) ?? null, todo: r.answer === "not_great" ? (todoState.get(r.id) ?? null) : null },
+  }));
+}
+
+/**
  * F-006 part 1 (plan Task 9): the `merge` source, two reads of `contact_merges` scoped to the kept
  * record(s) only (`contact_merges_read`, 0106: a tombstone carries no merge row of its own — its merge
  * is told from the record that kept it), each paged like every other source: one on `merged_at` (every
@@ -564,7 +609,7 @@ async function listContactMergeLog(
  */
 export async function listTimelinePage(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean; aiActs?: boolean; changes?: boolean } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean; aiActs?: boolean; changes?: boolean; checkins?: boolean } = {},
 ): Promise<TimelinePage> {
   // A set with no one in it (a group none of whose members this reader can see) has nothing to
   // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
@@ -681,6 +726,10 @@ export async function listTimelinePage(
     // F-006 part 1 (plan Task 9): one row per merge, and a second for one since undone, unconditional
     // like every source above it.
     settle("merge", () => listContactMergeLog(db, accountId, who, page)),
+    // F-072 (plan D2): one row per answered after-the-job check-in, only when asked (`opts.checkins`): the record
+    // pages ask; the drawer's Recent does not, because its read budget is pinned (route.reads.test.ts) and a quick
+    // look is not where an answer needs to be.
+    ...(opts.checkins === true ? [settle("checkins", () => listContactCheckins(db, accountId, who, page))] : []),
     // item 8b-2 (spec 5.4): one row per accepted suggestion, only when asked (owner decision 1, 2026-10-19:
     // the record page's timeline, not the drawer's Recent and not the household page).
     ...(opts.suggestions === true
@@ -765,7 +814,7 @@ export async function listTimelinePage(
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */
 export async function listContactTimelinePage(
   db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; suggestions?: boolean; aiActs?: boolean } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; suggestions?: boolean; aiActs?: boolean; checkins?: boolean } = {},
 ): Promise<TimelinePage> {
   return listTimelinePage(db, accountId, [contactId], before, opts);
 }

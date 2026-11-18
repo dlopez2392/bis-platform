@@ -153,6 +153,8 @@ export async function loadGroupTimeline(
       // F-115 part 1 (S-04), plan Task 5: ON — the household's/business's own timeline now shows its
       // "change" rows too (a removed member, a place's own edits), same source as the contact page.
       changes: true,
+      // F-072 (plan D2): a member's answer to the after-the-job check-in is part of the story here too.
+      checkins: true,
     });
   } catch (e) {
     log("activity", accountId, e);

@@ -48,6 +48,17 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(html).toContain('data-timeline-item="booking"');
     expect(html).toContain("data-timeline-skeleton");
   });
+  it("F-072: a check-in row for each answer, a not-great one with its To-do open and done, all customer-marked (mutation: drop a row -> FAILS)", () => {
+    const start = html.indexOf("data-sg-checkin-rows");
+    expect(start).toBeGreaterThan(-1);
+    const section = html.slice(start, start + 8000);
+    expect(section.match(/data-timeline-item="checkin"/g)).toHaveLength(4);
+    expect(section.match(/data-author-mark="customer"/g)).toHaveLength(4);
+    for (const key of ["checkin.answer.great", "checkin.answer.okay", "checkin.answer.not_great", "timeline.checkinTodoOpen", "timeline.checkinTodoDone"] as const) {
+      expect(section, key).toContain(m[key]);
+    }
+    expect(section).toContain('data-timeline-status="muted"');
+  });
   it("a timeline row can name the member it is about (S-03 part 2b; mutation: drop the subject -> FAILS)", () => {
     expect(html).toMatch(/<a[^>]*data-timeline-subject[^>]*>Dan López<\/a>/);
   });
