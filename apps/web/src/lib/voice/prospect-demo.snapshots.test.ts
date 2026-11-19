@@ -10,11 +10,11 @@ import { CUSTOMER_TOOL_NAMES } from "../tools/customer/specs";
 
 const FIXTURE = fileURLToPath(new URL("./prospect-demo.prompt-samples.json", import.meta.url));
 const SAMPLES = ["landscaping|en|closed", "insurance|both|open", "events|es|open"];
-/** sha256 (digestPrompts) over the 15 prompts that are not SAMPLES, in enumeration order: F-023 PR 4's re-baseline. */
+/** sha256 (digestPrompts) over the 15 prompts that are not SAMPLES, in enumeration order: re-baselined 2026-11-19, when the demo's wording pointed to its notice. */
 const NOTICE_HEADING = "## This conversation is a preview in a web browser, not the phone line";
 /** Every way the prompt has said "take a message" or "they will be called back", in English and in Spanish. */
 const MESSAGE_WORDS = /take a message|take their details|call (them|you) back|(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)|le (van a|vamos a) llamar/i;
-const REST_DIGEST ="60c0821d7215adb365244ea9b2b45247c847f22e59c87f1e5df15a4fd87feb12";
+const REST_DIGEST ="0a85f216d8108c70a6eb5df817d9a48f3e3feef3c8f3d72d9b3418895957592d";
 /** A Monday, 9:00 AM in Chicago: the weekday row decides open or closed. */
 const NOW = new Date("2026-11-16T15:00:00Z");
 
