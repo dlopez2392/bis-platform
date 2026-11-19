@@ -1,7 +1,10 @@
-// apps/web/src/lib/owner-line/tools/read.ts
+// apps/web/src/lib/tools/staff/read.ts
 // The three reads (spec §5), each through the APP's own readers with the client the factory made, so the role filter
 // is RLS's (token) or the account scope (F2), never re-implemented here (plan SC-2). Counts are computed here.
 // calls_and_messages counts what the dashboard's "Calls answered" tile counts, with the tile's own reads (Q-E).
+// F-023 (plan §3.3): moved here from lib/owner-line/tools/read.ts. The reads take a StaffReadContext and know nothing
+// of the owner line's session, so any staff surface can run them from its own context; whoever builds that context
+// owns the checks before it (the owner line: PIN, live re-check, the factory's client, Technicians refused).
 import {
   listCalls, listCallReasons, listAgendaBookings, listAccountWork, ANSWERED_CALL_OUTCOMES,
   type SupabaseClient, type CallListRow,
@@ -12,19 +15,19 @@ import { workRowLabel } from "@/lib/work/row-label";
 import { makeTr, type Tr } from "@/lib/record/copy";
 // The agenda's own words for how a job meets and where it stands (review m-5): one source, never a second map.
 import { meetingWord, statusWord } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calendar/agenda-view";
-import { resolveRange } from "../range";
+import { resolveRange } from "@/lib/owner-line/range";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 
-export type OwnerReadContext = { db: SupabaseClient; accountId: string; timezone: string; locale: Locale; now: Date };
+export type StaffReadContext = { db: SupabaseClient; accountId: string; timezone: string; locale: Locale; now: Date };
 export const CALLS_SPOKEN = 20;
 export const APPOINTMENTS_SPOKEN = 25;
 export const TODO_SPOKEN = 15;
 const CALL_PAGE = 100;
 const CALL_PAGES = 10;
 
-function when(iso: string, c: OwnerReadContext, withDay: boolean): string {
+function when(iso: string, c: StaffReadContext, withDay: boolean): string {
   return new Intl.DateTimeFormat(c.locale === "es" ? "es-US" : "en-US", {
     timeZone: c.timezone, hour: "numeric", minute: "2-digit",
     ...(withDay ? { weekday: "long", month: "long", day: "numeric" } : {}),
@@ -68,7 +71,7 @@ export type NeedsAttentionResult = {
   items: { what: string; customer: string | null; due: string | null }[];
 };
 
-export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<CallsAndMessagesResult> {
+export async function callsAndMessages(c: StaffReadContext, args: Record<string, unknown>): Promise<CallsAndMessagesResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const [answered, spam] = await Promise.all([
@@ -111,7 +114,7 @@ export async function callsAndMessages(c: OwnerReadContext, args: Record<string,
   };
 }
 
-export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<AppointmentsResult> {
+export async function appointments(c: StaffReadContext, args: Record<string, unknown>): Promise<AppointmentsResult> {
   const r = resolveRange(args, c.timezone, c.now);
   if (!r.ok) return { ok: false, error: r.error };
   const { rows, truncated } = await listAgendaBookings(c.db, c.accountId, r.fromIso, r.toIso);
@@ -127,7 +130,7 @@ export async function appointments(c: OwnerReadContext, args: Record<string, unk
   };
 }
 
-export async function needsAttention(c: OwnerReadContext): Promise<NeedsAttentionResult> {
+export async function needsAttention(c: StaffReadContext): Promise<NeedsAttentionResult> {
   const rows = await listAccountWork(c.db, c.accountId);
   const shown = rows.slice(0, TODO_SPOKEN);
   // Names through the SAME client (so RLS, or the account scope, bounds them too): tasks/page.tsx:183-195's shape.
