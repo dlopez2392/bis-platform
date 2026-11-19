@@ -25,5 +25,14 @@
     "must": ["can't|cannot|only"] },
   { "id": "10-callback-number", "locale": "en", "lines": ["Who do I need to call back, and at what number?"],
     "stub": { "needs_attention": { "ok": true, "count": 1, "more": 0, "items": [{ "what": "Call back Maria López at (956) 555-0142", "customer": "Maria López", "due": null }] } },
-    "must": [] }
+    "must": [] },
+  { "id": "11-lookup-none", "locale": "en", "lines": ["What's the latest with Rosa Garza?"],
+    "stub": { "lookup_customer": { "ok": true, "count": 0, "matches": [] } },
+    "must": ["don't see that customer"] },
+  { "id": "12-lookup-es", "locale": "es", "lines": ["¿Qué hay de nuevo con María López?"],
+    "stub": { "lookup_customer": { "ok": true, "count": 1, "matches": [{ "name": "María López", "phone": "+19565550177", "lastVisit": "jueves, 1 de octubre, 11:00 a.m.", "nextVisit": "jueves, 12 de noviembre, 10:00 a.m.", "openTodos": 1 }] } },
+    "must": [] },
+  { "id": "13-lookup-none-es", "locale": "es", "lines": ["¿Qué hay de nuevo con Rosa Garza?"],
+    "stub": { "lookup_customer": { "ok": true, "count": 0, "matches": [] } },
+    "must": ["No veo a ese cliente en su lista."] }
 ]

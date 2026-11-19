@@ -129,6 +129,8 @@ export {
 export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
 export { createStaffJob, listAgendaBookings, readAgendaJob, jobWasTold, countAwaitingOutcomeBefore, claimJobHold, stampJobNoticeSent, setJobNotice, listDueJobHolds, deleteUnsettledStaffJob, undoStaffMove, editJobDetails, AGENDA_ROW_CAP, type BookingMeetingType, type NoticeWanted, type StaffJobInput, type StaffMoveJob, type AgendaBookingRow, type JobHoldClaim, type UndoAddOutcome, type UndoStaffMoveOutcome, type JobDetails } from "./booking";
 export { countContactBookingsMade, listContactUpcomingBookings, countBookingsMadeFor, type UpcomingBooking } from "./booking";
+// F-023 PR 5: the owner line's lookup_customer reads a customer's last visit from the record timeline's own read.
+export { listContactBookings } from "./booking";
 export { rescheduleRoots, listFeedBookings, FEED_PAST_DAYS, FEED_FUTURE_DAYS, FEED_FUTURE_CAP, FEED_PAST_CAP, type FeedBookingRow } from "./booking";
 export {
   CALENDAR_FEED_FETCH_MAX, CALENDAR_FEED_FETCH_WINDOW_SECONDS, CALENDAR_FEED_UNDO_SECONDS,

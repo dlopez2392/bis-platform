@@ -70,4 +70,14 @@ describe("the corpus items cover what Task 14 asks (plan Task 14; spec §7)", ()
     expect(items.find((i) => i.id === "01-failing-tool")!.must).toEqual(["I couldn't read that just now."]);
     expect(items.find((i) => i.id === "05-failing-tool-es")!.must).toEqual(["No pude leer eso en este momento."]);
   });
+  it("lookup_customer's two items (owner-line plan Task 17): finding no one must be said in the tool's own words; one match in Spanish", () => {
+    const none = items.find((i) => i.id.includes("lookup-none"))!;
+    expect(none.stub).toEqual({ lookup_customer: { ok: true, count: 0, matches: [] } });
+    expect(none.must).toEqual(["don't see that customer"]);
+    expect(items.find((i) => i.id === "13-lookup-none-es")!.must).toEqual(["No veo a ese cliente en su lista."]);
+    const es = items.find((i) => i.id.includes("lookup-es"))!;
+    expect(es.locale).toBe("es");
+    expect((es.stub.lookup_customer as { count: number; matches: unknown[] })).toMatchObject({ ok: true, count: 1 });
+    expect((es.stub.lookup_customer as { matches: unknown[] }).matches).toHaveLength(1);
+  });
 });

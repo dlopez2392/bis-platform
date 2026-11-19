@@ -14,7 +14,7 @@ describe("the owner-line session (spec §4.4)", () => {
   });
   it("registers ONLY the owner tools: no booking, no lead capture, no transfer (mutation: concat toolSchemas(...) -> FAILS)", () => {
     const names = buildOwnerLineSessionConfig(P).tools.map((t) => t.name);
-    expect(names).toEqual(["calls_and_messages", "appointments", "needs_attention"]);
+    expect(names).toEqual(["calls_and_messages", "appointments", "needs_attention", "lookup_customer"]);
     const receptionist = toolSchemas("full", "in_person", true).map((t: { name: string }) => t.name);
     expect(names.some((n) => (receptionist as string[]).includes(n))).toBe(false);
   });
@@ -43,6 +43,13 @@ describe("the owner-line session (spec §4.4)", () => {
     expect(i).toMatch(/cannot book, cancel, move, text, call anyone, or change anything/);
     expect(i).toMatch(/Every number and every name you say must come from a tool result/);
     expect(i).toMatch(/couldnt_read/);
+  });
+  it("names every tool the session holds, the customer lookup included, in both languages (owner-line plan Task 17)", () => {
+    for (const locale of ["en", "es"] as const) {
+      const c = buildOwnerLineSessionConfig({ ...P, locale });
+      expect(c.instructions).toContain("lookup_customer for one customer");
+      for (const t of c.tools) expect(c.instructions, t.name).toContain(t.name);
+    }
   });
   it("uses the receptionist's model, voice, transcription and turn detection, so a real call sounds the same", () => {
     const c = buildOwnerLineSessionConfig(P);

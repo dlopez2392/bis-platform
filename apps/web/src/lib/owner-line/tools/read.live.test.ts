@@ -14,7 +14,7 @@ refuseProduction(process.env, "lib/owner-line/tools/read.live.test.ts");
 
 import {
   serviceDb, createAccount, createContact, getOrCreateCalendar, createBooking, ensureCallbackTask, deleteAccountCascade,
-  setOwnerLineSwitch,
+  setOwnerLineSwitch, withAuthor,
 } from "@bis/db";
 import { dayKeyInZone } from "@/lib/booking/availability";
 import { callbackTaskTitle } from "@/lib/voice/call-card";
@@ -37,6 +37,8 @@ const SHARED_PHONE = "+19565550177";
 const A_SECOND_PHONE = "+19565550178";
 // Review I-1: a field on B's call that none of A's carries. A's calls are leads; B's is a message.
 const B_OUTCOME_WORDS = m["ownerLine.tool.outcome.message"];
+// lookup_customer: a surname no other row in the replica carries, so "found nothing" means scope, not chance.
+const LOOKUP_B_ONLY_LAST = `Ruiz${RUN}`;
 type Who = { id: string; sub: string };
 type Acct = { id: string; org: string; phoneId: string; people: Partial<Record<"owner" | "staff" | "tech", Who>> };
 const made: Acct[] = [];
@@ -85,7 +87,9 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
       // A NEW contact every time (review I-4): an existing one would merge two customers the Technician must tell apart.
       expect(made.existing, `createContact on ${a.org} with ${phone}`).toBe(false);
       const k = made.id;
-      if (assignedTo) await must(db.from("contacts").update({ assigned_to: assignedTo }).eq("id", k).select("id"), "assign");
+      // A server write names its author since 0113 (record_changes_enforce): a seed is an automation, as in actions.live.test.ts.
+      if (assignedTo) await must(withAuthor(db.from("contacts").update({ assigned_to: assignedTo }).eq("id", k).select("id"),
+        { authorKind: "automation", authorId: null }, "seed"), "assign");
       const callId = (await must<{ id: string }>(db.from("calls").insert({ account_id: a.id, phone_number_id: a.phoneId, contact_id: k,
         caller_e164: phone, outcome, reason: only || null }).select("id").single(), "call")).id;
       const cal = await getOrCreateCalendar(db, a.id, "user_test");
@@ -104,6 +108,13 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
     await customer(A, A.people.tech!.id, 0, SHARED_PHONE);
     await customer(A, null, 2, A_SECOND_PHONE);
     await customer(B, null, 0, SHARED_PHONE, B_ONLY, "message");
+    // lookup_customer (owner-line plan Task 17): a customer who EXISTS in A, unassigned, with no call, booking or To
+    // do (so no other tool's count moves), and one who exists only in B. Each must be answered like no one at all
+    // where this person cannot see them.
+    for (const [a, firstName, lastName] of [[A, "Rosa", "Garza"], [B, "Elena", LOOKUP_B_ONLY_LAST]] as const) {
+      const k = await createContact(db, a.id, { firstName, lastName }, "voice", "ai");
+      expect(k.existing, `${firstName} on ${a.org}`).toBe(false);
+    }
   });
 
   afterAll(async () => {
@@ -118,7 +129,8 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
     accountId: asAccount.id, userId: who.id, role, clerkUserId: who.sub, clerkOrgId: asAccount.org,
     firstName: null, actorName: null, locale: "en", timezone: ZONE,
   });
-  type Out = { ok: boolean; count?: number; error?: string; calls?: { outcome: string }[]; items?: { what: string }[] };
+  type Out = { ok: boolean; count?: number; error?: string; calls?: { outcome: string }[]; items?: { what: string }[];
+    matches?: { name: string | null; phone: string }[] };
   const run = (s: OwnerLineSession, tool: string, args: Record<string, unknown>) => runOwnerTool({
     session: s, now: () => new Date(), recheck: recheckOwnerSession, client: (x, n) => ownerLineReadClient(x, n),
   }, tool, args) as Promise<Out>;
@@ -137,9 +149,13 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
       expect(out.items!.map((x) => x.what).sort()).toEqual(phones.map((p) => callbackTaskTitle(p, null)).sort());
       for (const p of phones) expect(callbackTaskTitle(p, null)).toContain(p);
     }
+    // lookup_customer finds A's same-named customers by name, each its own phone: B's (same name, same phone as A's
+    // first) would make the list one too long, and its count is the list's own.
+    if (tool === "lookup_customer") expect(out.matches!.map((x) => x.phone).sort()).toEqual([...phones].sort());
   };
-  const TOOLS = [["calls_and_messages"], ["appointments"], ["needs_attention"]] as const;
-  const args = (tool: string) => (tool === "needs_attention" ? {} : range());
+  const TOOLS = [["calls_and_messages"], ["appointments"], ["needs_attention"], ["lookup_customer"]] as const;
+  const args = (tool: string) => (tool === "needs_attention" ? {} : tool === "lookup_customer" ? { term: "Maria López" } : range());
+  const NOBODY = { ok: true, count: 0, matches: [] };
 
   it.each(TOOLS)("Owner of A, %s: A's two, and not one word of B's same-named customer", async (tool) => {
     const out = await run(session(A, A.people.owner!, "owner"), tool, args(tool));
@@ -172,5 +188,33 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
     expect(out).toMatchObject({ ok: true, count: 1 });
     expect(JSON.stringify(out)).not.toContain(B_ONLY);
     seenOnA(tool, out, [SHARED_PHONE]);   // the assigned customer's number only
+  });
+
+  // lookup_customer's own scope cases (owner-line plan Task 17), adapted to this seed: A's two Marias have two phones
+  // (review I-4), so the shared phone finds ONE of A's, where Task 17 (written before I-4) expected two.
+  const look = (s: OwnerLineSession, term: string) => run(s, "lookup_customer", { term });
+  it("the Owner of A never finds B's customer with the same name and phone: the shared phone finds A's one", async () => {
+    const found = await look(session(A, A.people.owner!, "owner"), SHARED_PHONE);
+    expect(found).toMatchObject({ ok: true, count: 1 });
+    expect(found.matches!.map((x) => x.phone)).toEqual([SHARED_PHONE]);
+  });
+  it("the Owner of A asking for B's own customer hears the same bytes as for no one at all (non-confirming, a second account)", async () => {
+    const owner = session(A, A.people.owner!, "owner");
+    const bOnly = await look(owner, `Elena ${LOOKUP_B_ONLY_LAST}`);
+    const nobody = await look(owner, `Nobody Atall${RUN}`);
+    expect(bOnly).toEqual(NOBODY);
+    expect(JSON.stringify(bOnly)).toBe(JSON.stringify(nobody));
+    // ...and B's Owner does find her, so the empty answer on A is the account's wall, not a search that finds no one.
+    expect(await look(session(B, B.people.owner!, "owner"), `Elena ${LOOKUP_B_ONLY_LAST}`)).toMatchObject({ ok: true, count: 1 });
+  });
+  it("the Owner of A finds the unassigned Rosa Garza: the Technician's case below is scope, not absence", async () => {
+    expect(await look(session(A, A.people.owner!, "owner"), "Rosa Garza")).toMatchObject({ ok: true, count: 1 });
+  });
+  it.skipIf(OWNER_LINE_DATA_PATH !== "token")("a Technician looking up an UNASSIGNED customer hears the same as for no one at all; the assigned one is found", async () => {
+    const tech = session(A, A.people.tech!, "technician");
+    expect(await look(tech, "Maria López")).toMatchObject({ ok: true, count: 1 });   // the assigned Maria only
+    const rosa = await look(tech, "Rosa Garza");
+    expect(rosa).toEqual(NOBODY);
+    expect(JSON.stringify(rosa)).toBe(JSON.stringify(await look(tech, `Nobody Atall${RUN}`)));
   });
 });

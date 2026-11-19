@@ -1300,7 +1300,7 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     return e;
   };
   const acceptBody = (i = 0) => JSON.parse(String((fetchMock.mock.calls[i]![1] as RequestInit).body)) as { tools: { name: string }[]; instructions: string };
-  const OWNER_TOOLS = ["calls_and_messages", "appointments", "needs_attention"];
+  const OWNER_TOOLS = ["calls_and_messages", "appointments", "needs_attention", "lookup_customer"];
   let logSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => { logSpy = vi.spyOn(console, "log").mockImplementation(() => {}); });
   afterEach(() => { logSpy.mockRestore(); });
