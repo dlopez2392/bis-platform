@@ -421,8 +421,8 @@ describe("POST /api/voice/web/session — today's status and the closed days (S-
 describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 snapshot)", () => {
   const FIXTURE = fileURLToPath(new URL("./route.prompt-samples.json", import.meta.url));
   const SAMPLES = ["no-module|hours_then_message|en|open", "insurance_pc|message_only|es|closed", "events|hours_then_message|both|closed"];
-  /** sha256 (digestPrompts) over the 57 prompts that are not SAMPLES, in enumeration order: re-baselined 2026-11-19, when the demo's wording pointed to its notice. */
-  const REST_DIGEST = "8ddf99a419dc04169a69e763279e7b6ce6ca1ce65594ef95f14021ca6f94280f";
+  /** sha256 (digestPrompts) over the 57 prompts that are not SAMPLES, in enumeration order: re-baselined 2026-11-19, when the website demo's wording pointed to its notice and lost the callback line. */
+  const REST_DIGEST = "2aed22e5853307c555d577a75fa8cfbd845513c89887ebaaefb3515f63a3ea1d";
   /** A Tuesday, 10:00 AM in Chicago. */
   const NOW = new Date("2027-06-01T15:00:00Z");
   const HOURS = { none: null, open: { tue: [["08:00", "18:00"]] }, closed: { tue: [["13:00", "18:00"]], wed: [["08:00", "12:00"]] } };
