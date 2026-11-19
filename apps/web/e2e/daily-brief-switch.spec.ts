@@ -1,7 +1,17 @@
-import { test, expect } from "./fixtures/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, listMySubscriptions, unsubscribeFromBrief } from "@bis/db";
 import { readClientFixture } from "./support";
+
+// The Undo of ONE named toast. By the second Undo three or four toasts are stacked, and sonner re-lays the stack
+// while a new one slides in, so a pointer click on the front Undo was intercepted by its neighbour until the test
+// timed out (CI, #389 and #395, 2026-11-18/19). The toast is found by its own words and its button is clicked
+// directly: this spec proves the Undo ACTION, not the stack's animation.
+async function undoOn(page: Page, toastText: string) {
+  const toast = page.locator("[data-sonner-toast]").filter({ hasText: toastText }).first();
+  await expect(toast).toBeVisible();
+  await toast.getByRole("button", { name: "Undo" }).dispatchEvent("click");
+}
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -55,7 +65,7 @@ test.describe.serial("daily brief switch (F-082 PR 4)", () => {
     await expect.poll(async () => (await mySubs()).length).toBe(1);
 
     // Undo of the ON removes it again.
-    await page.getByRole("button", { name: "Undo" }).first().click();
+    await undoOn(page, "Daily brief on for");
     await expect(sw).toHaveAttribute("aria-checked", "false");
     await expect.poll(async () => (await mySubs()).length).toBe(0);
 
@@ -65,7 +75,7 @@ test.describe.serial("daily brief switch (F-082 PR 4)", () => {
     await sw.click();
     await expect(sw).toHaveAttribute("aria-checked", "false");
     await expect.poll(async () => (await mySubs()).length).toBe(0);
-    await page.getByRole("button", { name: "Undo" }).first().click();
+    await undoOn(page, "Daily brief off for");
     await expect(sw).toHaveAttribute("aria-checked", "true");
     await expect.poll(async () => (await mySubs()).length).toBe(1);
 
