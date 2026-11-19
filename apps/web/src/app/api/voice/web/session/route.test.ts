@@ -91,6 +91,7 @@ import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/l
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 import { fileURLToPath } from "node:url";
 import { checkSnapshots, readSnapshot } from "@/lib/voice/prompt-snapshots.fixture";
+import { CUSTOMER_TOOL_NAMES } from "@/lib/tools/customer/specs";
 
 const ORIGIN = "https://bis-rgv.com";
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
@@ -466,5 +467,12 @@ describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 
     const first = r.mismatched[0];
     if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
     expect(r.mismatched).toEqual([]);
+  });
+
+  // The F-023 §2 defect's regression test: this route mints `tools: []`, so the prompt may name no tool.
+  it("names no customer tool, in any combination: the session has none", async () => {
+    const named = Object.entries(await allMinted())
+      .flatMap(([key, text]) => CUSTOMER_TOOL_NAMES.filter((n) => text.includes(n)).map((n) => `${key}: ${n}`));
+    expect(named).toEqual([]);
   });
 });

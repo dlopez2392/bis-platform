@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { parseProspectDemo, buildProspectDemoSession, type ProspectDemoForm } from "./prospect-demo";
 import { checkSnapshots, readSnapshot } from "./prompt-snapshots.fixture";
+import { CUSTOMER_TOOL_NAMES } from "../tools/customer/specs";
 
 const FIXTURE = fileURLToPath(new URL("./prospect-demo.snapshots.json", import.meta.url));
 /** A Monday, 9:00 AM in Chicago: the weekday row decides open or closed. */
@@ -49,5 +50,12 @@ describe("the prospect demo's whole instructions, byte for byte (F-023 PR 4)", (
     const first = r.mismatched[0];
     if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
     expect(r.mismatched).toEqual([]);
+  });
+
+  // The F-023 §2 defect's regression test: the session is minted with `tools: []`, so its prompt may name no tool.
+  it("names no customer tool, in any combination: the session has none", () => {
+    const named = Object.entries(allInstructions())
+      .flatMap(([key, text]) => CUSTOMER_TOOL_NAMES.filter((n) => text.includes(n)).map((n) => `${key}: ${n}`));
+    expect(named).toEqual([]);
   });
 });

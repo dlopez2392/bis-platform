@@ -17,6 +17,8 @@ import { TRADE_MODULE_IDS, type TradeModuleId } from "./modules";
 import type { OpenHours } from "../booking/slots";
 import type { EffectiveStatus } from "../business-status/status";
 import { checkSnapshots, readSnapshot } from "./prompt-snapshots.fixture";
+import { offeredTools } from "./tools/offered";
+import { CUSTOMER_TOOL_NAMES, type CustomerToolName } from "../tools/customer/specs";
 
 const FIXTURE = fileURLToPath(new URL("./system-prompt.snapshots.json", import.meta.url));
 /** A Tuesday, 10:00 AM in Chicago. */
@@ -88,6 +90,11 @@ const CHAT_INPUTS = chatInputs();
 function prompts(inputs: Record<string, VoicePromptInput>): Record<string, string> {
   return Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, buildSystemPrompt(i, NOW)]));
 }
+/** Built once and read by both describes below: the file runs alongside the whole suite, so it stays cheap. */
+let phonePrompts: Record<string, string> | undefined;
+const PHONE_PROMPTS = () => (phonePrompts ??= prompts(PHONE_INPUTS));
+/** The phone inputs with one language and one disclosure (neither changes a line naming a tool): 720. */
+const SURFACE_INPUTS = Object.entries(PHONE_INPUTS).filter(([, i]) => i.languages === "both" && !i.disclosed);
 
 describe("the whole system prompt, byte for byte (F-023 PR 4: captured before the prompt read its offered tools)", () => {
   it("covers 4320 phone combinations and 180 web chat combinations (guards the comparison from an empty loop)", () => {
@@ -96,7 +103,7 @@ describe("the whole system prompt, byte for byte (F-023 PR 4: captured before th
   });
 
   it("every phone and web chat prompt is exactly the captured one", () => {
-    const actual = { ...prompts(PHONE_INPUTS), ...prompts(CHAT_INPUTS) };
+    const actual = { ...PHONE_PROMPTS(), ...prompts(CHAT_INPUTS) };
     const r = checkSnapshots(FIXTURE, "dictionary", actual);
     expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the fixture; run again without it").toBe(false);
     expect(r.missingKeys).toEqual([]);
@@ -105,5 +112,39 @@ describe("the whole system prompt, byte for byte (F-023 PR 4: captured before th
     const first = r.mismatched[0];
     if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
     expect(r.mismatched).toEqual([]);
+  }, 30_000); // 4500 prompts, under a second idle: room so a loaded runner cannot time it out
+});
+
+/** Every customer tool the prompt names. */
+function named(prompt: string): CustomerToolName[] {
+  return CUSTOMER_TOOL_NAMES.filter((n) => prompt.includes(n));
+}
+
+// F-023 PR 4 (plan §3.5): a line naming a tool appears only when the session is offered that tool. The phone inputs
+// are also run as each other surface, the profiles those surfaces never send included (booking on, a transfer
+// number), so the rule is checked on the inputs, not only on what today's routes happen to pass.
+describe("the prompt names only the tools its session is offered (F-023 PR 4)", () => {
+  it("the phone, in every combination", () => {
+    const wrong = Object.entries(PHONE_INPUTS).flatMap(([k, i]) => {
+      const offered = offeredTools(i);
+      return named(PHONE_PROMPTS()[k]!).filter((n) => !offered.has(n)).map((n) => `${k}: ${n}`);
+    });
+    expect(wrong).toEqual([]);
+  });
+
+  it("a browser demo (web_voice) names no tool at all, whatever the profile says", () => {
+    expect(SURFACE_INPUTS.length).toBe(720);
+    const wrong = SURFACE_INPUTS.flatMap(([k, i]) =>
+      named(buildSystemPrompt({ ...i, medium: "web_voice" }, NOW)).map((n) => `${k}: ${n}`));
+    expect(wrong).toEqual([]);
+  });
+
+  it("the web chat names capture_lead and nothing else, apart from the one line that says the phone's two do not exist here", () => {
+    const ONLY = "- capture_lead is the ONLY tool you have here.";
+    const wrong = [...SURFACE_INPUTS, ...Object.entries(CHAT_INPUTS)].flatMap(([k, i]) => {
+      const p = buildSystemPrompt({ ...i, medium: "web" }, NOW).split("\n").filter((l) => !l.startsWith(ONLY)).join("\n");
+      return named(p).filter((n) => n !== "capture_lead").map((n) => `${k}: ${n}`);
+    });
+    expect(wrong).toEqual([]);
   });
 });

@@ -539,8 +539,14 @@ function digestOf(prompts: string[]): string {
  * Re-pinned 2026-11-13 (with the two below) when `base.callerNumber` moved to a 555 number: the
  * old fixture still reproduced all three old digests on this code, and every new prompt was that
  * old prompt with only the number's digits changed, so these are the same commits' prompts.
+ * Re-pinned 2026-11-18 (with the two below) by F-023 PR 4, which names only offered tools: every
+ * "web_voice" prompt in these sets lost the tool lines a demo session has no tool for, and every
+ * "web" prompt with booking on or a transfer number (neither of which the chat route ever sends)
+ * lost the lines naming tools the chat is not sent. Not one phone prompt in any of the three sets
+ * changed (compared prompt by prompt with main 4b7e9147's builder; system-prompt.snapshots.test.ts
+ * pins every phone combination in full).
  */
-const PRE_S47B_DIGEST = "40c0076bd571fc17f84d732bb5044329d587ff67d1cec86e7cc6d615a8309e3f";
+const PRE_S47B_DIGEST = "6dddfee48ef168e3ba1489e249b64e0827aa8bcd05e5b30fc81ad2852dd3d891";
 
 describe("buildSystemPrompt — no trade module is byte-identical to before S-47b", () => {
   it("covers 1728 combinations (guards the digest from an empty loop)", () => {
@@ -649,8 +655,9 @@ function everyS47cBaseInput(): VoicePromptInput[] {
       out.push(tradeModule === undefined ? i : { ...i, tradeModule });
   return out;
 }
-/** sha256 over all 5184 prompts as they were at 044b1ab2, BEFORE S-47c touched system-prompt.ts. */
-const PRE_S47C_DIGEST = "7832e41821847fc52e57d9725512202a92b25dbd8523fd5bb1f87c9714aa2a86";
+/** sha256 over all 5184 prompts as they were at 044b1ab2, BEFORE S-47c touched system-prompt.ts. Re-pinned by F-023
+ *  PR 4 (see PRE_S47B_DIGEST): only web_voice prompts and web prompts with booking on or a transfer number changed. */
+const PRE_S47C_DIGEST = "21d850a024c8a6c151b0346bf9ccab354a60d39a541c43ee6e2035848050e22d";
 
 describe("buildSystemPrompt — no hours and no list is byte-identical to before S-47c (C3)", () => {
   it("covers 5184 combinations (guards the digest from an empty loop)", () => {
@@ -712,8 +719,9 @@ function everyS47dBaseInput(): VoicePromptInput[] {
         });
   return out;
 }
-/** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). */
-const PRE_S47D_DIGEST = "877233b912801aeda113555a75f49c42a57bd6cf78ad34ac15cb7c88fab8c9d0";
+/** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). Re-pinned
+ *  by F-023 PR 4 (see PRE_S47B_DIGEST): only web_voice prompts and web prompts with booking on or a transfer number changed. */
+const PRE_S47D_DIGEST = "f2f6f24ee80c1d0b04bb366d434369419037961d3f8ca48208ae7661492ee2f3";
 
 describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
   it("covers 31104 combinations (guards the digest from an empty loop)", () => {
