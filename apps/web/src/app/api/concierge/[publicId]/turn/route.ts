@@ -645,12 +645,14 @@ export async function POST(
     // resolves, and without it the invocation stalls until Vercel kills it.
     // Throws on every refusal or failure (the kill switch, a transport
     // failure, a non-2xx, the timeout), already logged by the gateway with ids
-    // only; the two callers below decide what a throw costs, as they did when
-    // this was a direct fetch.
+    // only; the first completion's throw becomes `unavailable()` below, and the
+    // follow-up's is the tool turn's "failed" (no second reply).
     const accountId = profile.account_id;
     const ref = `conversation ${conversationId}`;
     let reply = "";
-    let toolCalled = false;
+    // Whether capture_lead's handler RAN this turn: the old `toolArgs` gate (review of #396: a refused, never-offered
+    // tool name is a tool call too, and must not let an earlier turn's lead read as this turn's capture).
+    let captureRan = false;
     // Lead capture, at most once per conversation, and BEFORE `spoken` is
     // decided (Important 1, review of commit 129b43f). The old code decided
     // `spoken` from `toolArgs` alone, before this ran — so a model that
@@ -675,6 +677,7 @@ export async function POST(
     // The tool handler (the `run` below): capture_lead's whole rule set, unchanged by the move into the shared
     // tool turn (lib/ai/tool-turn.ts). What it returns is what the model hears as the tool's result.
     const captureLead = async (_name: string, _args: Record<string, unknown>, toolArgs: string) => {
+      captureRan = true;
       if (!conversation.submission_id) {
         const parsed = parseCaptureLead(toolArgs);
         const visitorSaid = [...conversation.transcript.filter((t) => t.role === "visitor").map((t) => t.text), text];
@@ -764,7 +767,6 @@ export async function POST(
       // Plain text before it goes anywhere: the bubble shows markdown as
       // stray symbols, and the transcript is what the operator reads later.
       reply = plainText(turn.text);
-      toolCalled = turn.toolCalled;
       if (turn.followup === "failed") log("capture follow-up failed", { conversationId, filed, error: String(turn.error) });
       else if (turn.followup === "skipped") log("capture follow-up skipped: no time left", { conversationId, filed, timeLeft: turn.timeLeft });
     } catch (e) {
@@ -778,12 +780,12 @@ export async function POST(
     // promises nothing otherwise, never a claim about the details this
     // visitor just handed over.
     //
-    // `toolCalled` is required too (Minor 1, second-round review of 108b822):
+    // `captureRan` is required too (Minor 1, second-round review of 108b822):
     // `filed` alone can be true from a PRIOR turn's submission, so an empty
     // reply with NO tool call THIS turn (the model simply failed to answer)
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
-    const spoken = reply || ((toolCalled && filed) ? strings.captured : strings.unavailable);
+    const spoken = reply || ((captureRan && filed) ? strings.captured : strings.unavailable);
     // I2, second half: the web_chat task's cap, CONCIERGE_MAX_REPLY_TOKENS (500),
     // already bounds a completion to roughly 2,000-2,500 characters of
     // English, so this slice does not CREATE the bound — it TIGHTENS it,
@@ -842,7 +844,7 @@ export async function POST(
     // rule, lines 113-123: lib/billing/usage imports @bis/db at its module
     // scope) sits inside the callback's own try, so neither a ledger failure
     // nor a failed import rejects the background work.
-    const answered = Boolean(reply || (toolCalled && filed));
+    const answered = Boolean(reply || (captureRan && filed));
     if (answered && !hadAnsweredTurn(conversation.transcript)) {
       after(async () => {
         try {
