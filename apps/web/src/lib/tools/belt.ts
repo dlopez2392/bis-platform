@@ -35,8 +35,13 @@ export function realtimeShape<S extends ToolSpec>(spec: S): RealtimeTool<S> {
   return { type: "function", name: spec.name, description: spec.description, parameters: spec.parameters };
 }
 
-/** The chat-completions shape the gateway sends (lib/ai/gateway.ts's AiTool). */
-export function chatShape(spec: ToolSpec): AiTool {
+export type ChatTool<S extends ToolSpec = ToolSpec> = {
+  type: "function"; function: { name: S["name"]; description: S["description"]; parameters: S["parameters"] };
+};
+
+/** The chat-completions shape the gateway sends (lib/ai/gateway.ts's AiTool). Typed by its spec, as realtimeShape is,
+ *  so a caller can still read a parameter's own words (concierge/prompt.ts's CAPTURE_LEAD_TOOL). */
+export function chatShape<S extends ToolSpec>(spec: S): ChatTool<S> & AiTool {
   return { type: "function", function: { name: spec.name, description: spec.description, parameters: spec.parameters } };
 }
 

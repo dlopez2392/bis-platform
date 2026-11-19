@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { STAFF_TOOL_SPECS, STAFF_TOOL_NAMES, type StaffToolName } from "./staff/specs";
 import type { OwnerToolName } from "@/lib/owner-line/tools/schemas";
 import { toolSchemas } from "@/lib/voice/tools/schemas";
+import { CUSTOMER_TOOL_SPECS, CUSTOMER_TOOL_NAMES } from "./customer/specs";
 
 const phoneNames = new Set<string>();
 for (const mode of ["full", "manage", "none"] as const) {
@@ -37,5 +38,11 @@ describe("the staff catalogue", () => {
     expect(phoneNames).toContain("take_message");
     expect(phoneNames).toContain("transfer_to_human");
     expect(STAFF_TOOL_NAMES.filter((n) => phoneNames.has(n))).toEqual([]);
+  });
+
+  it("shares no name with the customer catalogue, which is every name a phone session can be given (PR 2)", () => {
+    expect(new Set(CUSTOMER_TOOL_NAMES)).toEqual(phoneNames);
+    expect(CUSTOMER_TOOL_SPECS.every((s) => s.audience === "customer")).toBe(true);
+    expect(STAFF_TOOL_NAMES.filter((n) => (CUSTOMER_TOOL_NAMES as readonly string[]).includes(n))).toEqual([]);
   });
 });

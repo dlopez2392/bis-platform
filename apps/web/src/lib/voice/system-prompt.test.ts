@@ -529,25 +529,39 @@ function everyExistingInput(): VoicePromptInput[] {
                   });
   return out;
 }
+/** The phone's prompts (no medium, or "phone") and the other surfaces' (web chat, browser demos), digested apart, so
+ *  a change on one surface never hides behind, or re-pins, the other (F-023 PR 4). */
+function digestsByMedium(inputs: VoicePromptInput[], build: (i: VoicePromptInput) => string): { phone: string; webAndDemos: string } {
+  const phone: string[] = [];
+  const other: string[] = [];
+  for (const i of inputs) (i.medium === undefined || i.medium === "phone" ? phone : other).push(build(i));
+  return { phone: digestOf(phone), webAndDemos: digestOf(other) };
+}
 function digestOf(prompts: string[]): string {
   const h = createHash("sha256");
   for (const p of prompts) h.update(`${p}\u0000`);
   return h.digest("hex");
 }
 /**
- * sha256 over all 1728 prompts as they were at 6c123483, BEFORE S-47b touched system-prompt.ts.
- * Re-pinned 2026-11-13 (with the two below) when `base.callerNumber` moved to a 555 number: the
- * old fixture still reproduced all three old digests on this code, and every new prompt was that
- * old prompt with only the number's digits changed, so these are the same commits' prompts.
+ * sha256 over all 1728 prompts, split by medium (digestsByMedium).
+ * `phone`: the phone's 864 prompts as they were at 6c123483, BEFORE S-47b touched system-prompt.ts. (Re-pinned
+ * 2026-11-13, with the two below, when `base.callerNumber` moved to a 555 number: the old fixture still reproduced
+ * all three old digests on this code, and every new prompt was that old prompt with only the number's digits
+ * changed. Split out 2026-11-18 by F-023 PR 4: computed from main 4b7e9147's builder, whose whole-set digest still
+ * equalled the old one, and unchanged at F-023 PR 4.)
+ * `webAndDemos`: the web chat's and the browser demos' 864, re-pinned 2026-11-18 by F-023 PR 4, which names only
+ * offered tools: every "web_voice" prompt lost the tool lines a demo has no tool for, and every "web" prompt with
+ * booking on or a transfer number (neither of which the chat route sends) lost the lines naming tools the chat is
+ * not sent. The same split and the same history hold for the two digests below.
  */
-const PRE_S47B_DIGEST = "40c0076bd571fc17f84d732bb5044329d587ff67d1cec86e7cc6d615a8309e3f";
+const PRE_S47B_DIGEST = { phone: "4943d1f82cb5b667f6e68a792968074d514ad06677e6a557213f1622551dca43", webAndDemos: "5c5d5808f24742649f3b1fa3c58079a42cf358b1de089aa4bc3147e5ed195f05" };
 
 describe("buildSystemPrompt — no trade module is byte-identical to before S-47b", () => {
   it("covers 1728 combinations (guards the digest from an empty loop)", () => {
     expect(everyExistingInput().length).toBe(1728);
   });
   it("with no tradeModule key, every combination is byte-identical to 6c123483 (mutation: push an unconditional \"\" before TOOLS -> FAILS)", () => {
-    expect(digestOf(everyExistingInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47B_DIGEST);
+    expect(digestsByMedium(everyExistingInput(), (i) => buildSystemPrompt(i, now))).toEqual(PRE_S47B_DIGEST);
   });
 });
 
@@ -557,7 +571,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
   const EVT = "TRADE RULES — EVENTS AND VENUES:";
 
   it("tradeModule: null is byte-identical to before, across all 1728 combinations (mutation: treat null as a module -> FAILS)", () => {
-    expect(digestOf(everyExistingInput().map((i) => buildSystemPrompt({ ...i, tradeModule: null }, now)))).toBe(PRE_S47B_DIGEST);
+    expect(digestsByMedium(everyExistingInput(), (i) => buildSystemPrompt({ ...i, tradeModule: null }, now))).toEqual(PRE_S47B_DIGEST);
   });
 
   it("sits right after the HARD LIMITS lines: the anchor, a blank line, the heading; and removing it gives back the prompt without it (48 combinations)", () => {
@@ -649,15 +663,17 @@ function everyS47cBaseInput(): VoicePromptInput[] {
       out.push(tradeModule === undefined ? i : { ...i, tradeModule });
   return out;
 }
-/** sha256 over all 5184 prompts as they were at 044b1ab2, BEFORE S-47c touched system-prompt.ts. */
-const PRE_S47C_DIGEST = "7832e41821847fc52e57d9725512202a92b25dbd8523fd5bb1f87c9714aa2a86";
+/** sha256 over all 5184 prompts, split by medium. `phone`: as they were at 044b1ab2, BEFORE S-47c touched
+ *  system-prompt.ts (split out by F-023 PR 4 from main 4b7e9147's builder, unchanged since). `webAndDemos`:
+ *  re-pinned at F-023 PR 4, because the web_voice and web inputs changed (see PRE_S47B_DIGEST). */
+const PRE_S47C_DIGEST = { phone: "69fceb4f9db84464c8a7574a4f7eddb8a63ab238182372dc5eafb492bc68e494", webAndDemos: "396a6fd81f6885a4c872b5f677cf950c40feae7dfb657299293e50403ade7eb3" };
 
 describe("buildSystemPrompt — no hours and no list is byte-identical to before S-47c (C3)", () => {
   it("covers 5184 combinations (guards the digest from an empty loop)", () => {
     expect(everyS47cBaseInput().length).toBe(5184);
   });
   it("with neither new key, every combination is byte-identical to 044b1ab2 (mutation: push an unconditional \"\" after the Services line -> FAILS)", () => {
-    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47C_DIGEST);
+    expect(digestsByMedium(everyS47cBaseInput(), (i) => buildSystemPrompt(i, now))).toEqual(PRE_S47C_DIGEST);
   }, 30_000); // 5184 prompts, ~1.2s idle: room so a loaded runner cannot time it out
 });
 
@@ -692,10 +708,10 @@ const lastLine = (p: string) => p.split("\n").at(-1);
 
 describe("buildSystemPrompt — S-47c digests", () => {
   it("null, empty and false new fields are byte-identical too, across all 5184 (mutations: treat [] as a list -> FAILS; treat {} as hours -> FAILS; close the price line when priceListUnavailable is false -> FAILS)", () => {
-    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: null, priceList: null }, now)))).toBe(PRE_S47C_DIGEST);
-    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: {}, priceList: [] }, now)))).toBe(PRE_S47C_DIGEST);
+    expect(digestsByMedium(everyS47cBaseInput(), (i) => buildSystemPrompt({ ...i, businessHours: null, priceList: null }, now))).toEqual(PRE_S47C_DIGEST);
+    expect(digestsByMedium(everyS47cBaseInput(), (i) => buildSystemPrompt({ ...i, businessHours: {}, priceList: [] }, now))).toEqual(PRE_S47C_DIGEST);
     // C20's closed line (with its overriding sentence) appears only when priceListUnavailable is true: false and absent stay byte-identical.
-    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, priceListUnavailable: false }, now)))).toBe(PRE_S47C_DIGEST);
+    expect(digestsByMedium(everyS47cBaseInput(), (i) => buildSystemPrompt({ ...i, priceListUnavailable: false }, now))).toEqual(PRE_S47C_DIGEST);
   }, 30_000); // 3 x 5184 prompts: ~3.3s idle; it timed out at the 5s default once under load (Task 4 mutation run)
 });
 
@@ -712,15 +728,18 @@ function everyS47dBaseInput(): VoicePromptInput[] {
         });
   return out;
 }
-/** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). */
-const PRE_S47D_DIGEST = "877233b912801aeda113555a75f49c42a57bd6cf78ad34ac15cb7c88fab8c9d0";
+/** sha256 over all 31,104 prompts, split by medium. `phone`: as they were at main 5e9c07a7, BEFORE S-47d touched
+ *  system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there; split out by
+ *  F-023 PR 4 from main 4b7e9147's builder, unchanged since). `webAndDemos`: re-pinned at F-023 PR 4, because the
+ *  web_voice and web inputs changed (see PRE_S47B_DIGEST). */
+const PRE_S47D_DIGEST = { phone: "407431c8cdd71dadd5c390e864bedc5099f5d7c14f41c0d539bef22834a7edb8", webAndDemos: "0d20bf81aba63536453cfcc418793fc7df82f86941f92b0fe951ecf498a875aa" };
 
 describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
   it("covers 31104 combinations (guards the digest from an empty loop)", () => {
     expect(everyS47dBaseInput().length).toBe(31104);
   });
   it("with neither new key, every combination is byte-identical to 5e9c07a7", () => {
-    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47D_DIGEST);
+    expect(digestsByMedium(everyS47dBaseInput(), (i) => buildSystemPrompt(i, now))).toEqual(PRE_S47D_DIGEST);
   }, 60_000);
 });
 
@@ -837,7 +856,9 @@ describe("buildSystemPrompt — closed now and the offer of a person (C14, spec 
       expect(p).not.toContain("the business is closed right now, so do not offer this");
     }
     const demo = buildSystemPrompt({ ...PHONE, medium: "web_voice", businessHours: CLOSED_H }, now);
-    expect(demo).toContain(PUT_THROUGH); // today's demo wording, untouched
+    // F-023 PR 4: a demo has no transfer_to_human (its session is minted with tools: []), so it never offers one,
+    // whatever handoffAvailable says. Until then this line pinned the offer of a transfer that could not happen.
+    expect(demo).not.toContain(PUT_THROUGH);
   });
   // C19 (owner, 2026-10-23; asked as OQ1 in the first draft): under Always take a message nothing about transfers changes with the hours.
   it("C19: Always take a message, closed: the offers and the TOOLS line are today's (mutation: drop the afterHours term from closedNow -> FAILS)", () => {
@@ -926,9 +947,9 @@ const DEMO_TODAY = "AFTER HOURS — The business is closed right now (see TODAY 
 
 describe("buildSystemPrompt — S-47d byte identity (spec 5.4.4)", () => {
   it("null, [] and an open status are byte-identical too, across all 31104 (mutations: an unconditional \"\" before the TODAY slot -> FAILS; treat [] as closed days -> FAILS)", () => {
-    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, businessStatus: null, closedDays: null }, now)))).toBe(PRE_S47D_DIGEST);
-    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, closedDays: [] }, now)))).toBe(PRE_S47D_DIGEST);
-    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, businessStatus: S_OPEN, closedDays: [] }, now)))).toBe(PRE_S47D_DIGEST);
+    expect(digestsByMedium(everyS47dBaseInput(), (i) => buildSystemPrompt({ ...i, businessStatus: null, closedDays: null }, now))).toEqual(PRE_S47D_DIGEST);
+    expect(digestsByMedium(everyS47dBaseInput(), (i) => buildSystemPrompt({ ...i, closedDays: [] }, now))).toEqual(PRE_S47D_DIGEST);
+    expect(digestsByMedium(everyS47dBaseInput(), (i) => buildSystemPrompt({ ...i, businessStatus: S_OPEN, closedDays: [] }, now))).toEqual(PRE_S47D_DIGEST);
   }, 180_000);
   it("an open status alone adds nothing even where the closure path would word the opening differently: a DST-gap opening (mutation: closures built for an open status with no closed days -> FAILS)", () => {
     // Sunday, March 14, 2027, 1:30 AM CST: the 2:30 AM opening falls in the spring-forward gap. S-47c says the
