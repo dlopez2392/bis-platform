@@ -1,9 +1,9 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import {
   isPersonLanguageValue, serviceDb, readMyOwnerLineEnrollment, readOwnerLineSwitch, readAccountTimezone,
-  OWNER_LINE_VERIFY_MINUTES, listMySubscriptions, type PersonLanguage,
+  OWNER_LINE_VERIFY_MINUTES, listMySubscriptions, readAiAppsSwitch, type PersonLanguage, type AiAppsSwitchState,
 } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
 import { THEME_COOKIE } from "@/lib/branding/theme-mode";
@@ -20,6 +20,9 @@ import { OwnerLineCardError } from "@/components/owner-line/owner-line-card-erro
 import {
   startOwnerLineVerificationAction, setOwnerLinePinAction, removeOwnerLinePinAction, removeOwnerLineCellAction,
 } from "./owner-line-actions";
+import { AiAppsUseCard, AiAppsUseCardError } from "@/components/ai-apps/ai-apps-use-card";
+import { aiAppsUseRows, mcpServerUrl, type AiAppsUseRow } from "@/lib/ai-apps/view";
+import { originFrom } from "@/lib/email/origin";
 import { PreferencesPanel } from "@/components/preferences/preferences-panel";
 import { DailyBriefCard, DailyBriefCardError } from "@/components/preferences/daily-brief-card";
 import { dailyBriefRows, type DailyBriefRowView } from "@/components/preferences/daily-brief-view";
@@ -58,6 +61,12 @@ export const dynamic = "force-dynamic";
  * Each card fails on its own (DESIGN rule 5 extended to the card; design review Critical 1): one business's failed
  * read is logged by account id and shows that card's error state, and a failed memberships read shows one error
  * state in the cards' place. The preference cards above never depend on any of it.
+ *
+ * MCP PR C (plan 2026-11-19-mcp-server.md 3.6): "Use BIS from your AI app" for a person who is an Owner or Staff of a
+ * business (OWNER_LINE_ROLES, D1; a Technician gets none, the agency and an impersonation session get none): the
+ * server address, how to connect, and per business whether its Owner has switched AI apps on. Each business's switch
+ * is read on its own and fails to "could not read", never to "off". Its own error card stands in for a failed
+ * memberships read; the cards above never depend on it.
  *
  * `?locale=pseudo` (QA only, `requestPseudoMode`) reaches the cards, the way team/page.tsx wires it, so their copy
  * can be checked at +35% length.
@@ -119,6 +128,7 @@ export default async function PreferencesPage({
   // The daily brief card (F-082 PR 4) rides the same memberships read: `null` rows is its error state, [] its empty
   // state. The agency and an impersonation session get no card at all (it is a person's own opt-in).
   let briefRows: DailyBriefRowView[] | null | undefined;
+  let aiRows: AiAppsUseRow[] | null | undefined;
   if (!actor) {
     const db = serviceDb();
     let memberships: MyMembership[] | null;
@@ -137,11 +147,26 @@ export default async function PreferencesPage({
         briefRows = null;
       }
     }
+    if (!isAgency) {
+      if (memberships === null) aiRows = null;
+      else {
+        const reads = await Promise.all(memberships.filter((mb) => OWNER_LINE_ROLES.includes(mb.role)).map(async (mb) => {
+          try {
+            return [mb.accountId, await readAiAppsSwitch(db, mb.accountId)] as const;
+          } catch (e) {
+            console.error(`preferences: AI apps switch read failed, accountId ${mb.accountId}: ${loggableError(e)}`);
+            return null;
+          }
+        }));
+        aiRows = aiAppsUseRows(memberships, new Map(reads.filter((r): r is readonly [string, AiAppsSwitchState] => r !== null)));
+      }
+    }
     slots = memberships === null
       ? [{ kind: "error", mb: null }]
       : (await Promise.all(memberships.map((mb) => ownerLineSlot(db, mb, locale)))).filter((c): c is OwnerLineSlot => c !== null);
   }
 
+  const aiUrl = aiRows ? mcpServerUrl(originFrom(await headers())) : null;
   return (
     <div data-prefs-page>
       <PreferencesPanel
@@ -175,6 +200,15 @@ export default async function PreferencesPage({
               removePin={removeOwnerLinePinAction.bind(null, slot.mb.accountId, locale)}
               removeCell={removeOwnerLineCellAction.bind(null, slot.mb.accountId, locale)} />
           ))}
+        </section>
+      ) : null}
+      {aiRows === null || (aiRows !== undefined && aiRows.length > 0) ? (
+        <section id="ai-apps" lang={locale} className="max-w-3xl px-6 pb-6">
+          {aiRows === null ? (
+            <AiAppsUseCardError locale={locale} pseudo={pseudo} />
+          ) : (
+            <AiAppsUseCard url={aiUrl} rows={aiRows} locale={locale} pseudo={pseudo} />
+          )}
         </section>
       ) : null}
     </div>

@@ -83,12 +83,15 @@ const section = vi.hoisted(() => ({
 }));
 vi.mock("@/components/team/team-section", () => ({ TeamSection: section.TeamSection }));
 vi.mock("@/components/access-log/bis-access-section", () => ({ BisAccessSection: section.BisAccessSection }));
+// MCP PR C: the AI apps card is an async server component in its own boundary, like TeamSection (its reads have their own test).
+vi.mock("@/components/ai-apps/ai-apps-section", () => ({ AiAppsSection: () => null, AiAppsSkeleton: () => null }));
 
 const { default: TeamPage } = await import("./page");
 const { TeamSkeleton } = await import("@/components/team/team-card");
 const { BisAccessFrame } = await import("@/components/access-log/bis-access-frame");
 const { BisAccessSkeleton } = await import("@/components/access-log/bis-access-skeleton");
 const { OwnerLineSwitchCard, OwnerLineSwitchCardError } = await import("@/components/owner-line/owner-line-switch-card");
+const { AiAppsSection, AiAppsSkeleton } = await import("@/components/ai-apps/ai-apps-section");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -248,6 +251,27 @@ describe("the Team page: owner line switch card (F-032 Task 6)", () => {
     const lines = err.mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => l.startsWith("team page: account a1 owner-line switch read failed:")), lines.join("\n")).toBe(true);
     err.mockRestore();
+  });
+});
+
+// MCP PR C (plan 2026-11-19-mcp-server.md 3.6): the AI apps card, after the owner line's switch and before BIS access,
+// in its own Suspense so a slow or failed read costs the card only.
+describe("the Team page: AI apps card (MCP PR C)", () => {
+  it("mounts AiAppsSection for THIS account in its own Suspense with the skeleton fallback, between the owner line card and the BIS access frame (mutations: drop it -> FAILS; render it outside Suspense -> FAILS)", async () => {
+    const els = all(await page());
+    const boundary = els.find((e) => e.type === Suspense && (e.props.children as ReactElement).type === AiAppsSection)!;
+    expect(boundary, "no Suspense around AiAppsSection").toBeTruthy();
+    expect((boundary.props.fallback as ReactElement).type).toBe(AiAppsSkeleton);
+    const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+    expect(child.props).toMatchObject({ accountId: "a1", viewer: "owner", locale: "en", pseudo: false });
+    expect(typeof child.props.setSwitch).toBe("function");
+    expect(els.indexOf(boundary)).toBeGreaterThan(els.findIndex((e) => e.type === OwnerLineSwitchCard));
+    expect(els.indexOf(boundary)).toBeLessThan(els.findIndex((e) => e.type === BisAccessFrame));
+  });
+  it("the agency is passed as the agency, so the card offers it no switch (mutation: viewer always owner -> FAILS)", async () => {
+    guard.isAgency = true;
+    const child = all(await page()).find((e) => e.type === AiAppsSection)!;
+    expect(child.props.viewer).toBe("agency");
   });
 });
 

@@ -20,7 +20,10 @@ vi.mock("next/navigation", () => ({
   redirect: (to: string) => { throw new Error(`NEXT_REDIRECT ${to}`); },
   useRouter: () => ({ refresh: () => {} }),
 }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined }),
+  headers: async () => new Headers({ host: "app.example.test", "x-forwarded-proto": "https" }),
+}));
 vi.mock("@/lib/preferences/person-prefs", () => ({ loadMyPreferences: async () => ({ language: null, theme: null }) }));
 vi.mock("@/lib/branding/tenant-theme-reader", () => ({
   getTenantAccessState: async () => ({ status: "none" }),
@@ -44,6 +47,9 @@ const reads = vi.hoisted(() => ({
   subs: [] as { accountId: string; lastSentDay: string | null }[],
   subsCalls: [] as string[],
   subsFail: false,
+  aiOn: {} as Record<string, boolean>,
+  aiFailFor: null as string | null,
+  aiCalls: [] as string[],
 }));
 vi.mock("@/lib/owner-line/memberships", () => ({
   listMyMemberships: async (_db: unknown, clerkUserId: string) => {
@@ -65,6 +71,11 @@ vi.mock("@bis/db", async (importOriginal) => ({
     if (reads.failFor === accountId) throw new Error("readMyOwnerLineEnrollment failed: permission denied");
     return reads.enrollment[accountId] ?? null;
   },
+  readAiAppsSwitch: async (_db: unknown, accountId: string) => {
+    reads.aiCalls.push(accountId);
+    if (reads.aiFailFor === accountId) throw new Error("readAiAppsSwitch failed: boom");
+    return { enabledAt: reads.aiOn[accountId] ? "2026-11-19T20:00:00Z" : null, changedAt: null, changedBy: null };
+  },
   readOwnerLineSwitch: async (_db: unknown, accountId: string) => {
     reads.log.push(`switch:${accountId}`);
     return { enabledAt: "2026-11-09T19:00:00Z", changedAt: "2026-11-09T19:00:00Z", changedByKind: "owner" };
@@ -76,6 +87,7 @@ const { default: PreferencesPage } = await import("./page");
 const { OwnerLineCard } = await import("@/components/owner-line/owner-line-card");
 const { OwnerLineCardError } = await import("@/components/owner-line/owner-line-card-error");
 const { DailyBriefCard, DailyBriefCardError } = await import("@/components/preferences/daily-brief-card");
+const { AiAppsUseCard, AiAppsUseCardError } = await import("@/components/ai-apps/ai-apps-use-card");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -105,6 +117,9 @@ beforeEach(() => {
   reads.subs = [];
   reads.subsCalls = [];
   reads.subsFail = false;
+  reads.aiOn = {};
+  reads.aiFailFor = null;
+  reads.aiCalls = [];
   delete process.env.BIS_I18N_QA;
 });
 
@@ -241,5 +256,64 @@ describe("Mis preferencias: the daily brief card (F-082 PR 4)", () => {
     els = await page();
     expect(brief(els)).toEqual([]);
     expect(reads.subsCalls).toEqual([]);
+  });
+});
+
+// MCP PR C (plan 2026-11-19-mcp-server.md 3.6): "Use BIS from your AI app" for Owners and Staff.
+describe("Mis preferencias: the AI apps card (MCP PR C)", () => {
+  const use = (els: ReactElement<Record<string, unknown>>[]) => els.filter((e) => e.type === AiAppsUseCard);
+  const rowsOf = (c: ReactElement<Record<string, unknown>>) => c.props.rows as { accountId: string; state: string; role: string }[];
+
+  it("one row per Owner/Staff business with its Owner's switch, a Technician's business absent and never read (mutation: include Technician -> FAILS)", async () => {
+    reads.memberships = [mb("a1", "owner"), mb("a2", "staff"), mb("a3", "technician")];
+    reads.aiOn = { a2: true, a3: true };
+    const [card] = use(await page());
+    expect(rowsOf(card!).map((r) => [r.accountId, r.role, r.state])).toEqual([["a1", "owner", "off"], ["a2", "staff", "on"]]);
+    expect(reads.aiCalls.sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("the address is the app's origin plus /api/mcp, from the request's own host (mutation: hard-code a host -> FAILS)", async () => {
+    reads.memberships = [mb("a1", "owner")];
+    expect(use(await page())[0]!.props.url).toBe("https://app.example.test/api/mcp");
+  });
+
+  it("a person with only Technician memberships gets no card and no error (mutation: show an empty card -> FAILS)", async () => {
+    reads.memberships = [mb("a3", "technician")];
+    const els = await page();
+    expect(use(els)).toEqual([]);
+    expect(els.filter((e) => e.type === AiAppsUseCardError)).toEqual([]);
+    expect(els.find((e) => e.props.id === "ai-apps")).toBeUndefined();
+  });
+
+  it("one business's failed switch read is 'unknown' for that row only, never 'off' (mutation: treat a failed read as off -> FAILS)", async () => {
+    reads.memberships = [mb("a1", "owner"), mb("a2", "owner")];
+    reads.aiFailFor = "a1";
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const [card] = use(await page());
+    expect(rowsOf(card!).map((r) => [r.accountId, r.state])).toEqual([["a1", "unknown"], ["a2", "off"]]);
+    expect(err.mock.calls.map((c) => String(c[0])).some((l) => l.includes("a1"))).toBe(true);
+    err.mockRestore();
+  });
+
+  it("a failed memberships read is the card's own error state and the page still renders (mutation: let it throw -> FAILS)", async () => {
+    reads.membershipsFail = true;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const els = await page();
+    expect(els.filter((e) => e.type === AiAppsUseCardError)).toHaveLength(1);
+    expect(use(els)).toEqual([]);
+    err.mockRestore();
+  });
+
+  it("the agency and an impersonation session get no card and no switch read (mutation: ignore actor -> FAILS)", async () => {
+    reads.memberships = [mb("a1", "owner")];
+    authState.actor = { sub: "user_bis_staff" };
+    let els = await page();
+    expect(use(els)).toEqual([]);
+    authState.actor = undefined;
+    authState.appRole = "agency_admin";
+    els = await page();
+    expect(use(els)).toEqual([]);
+    expect(els.filter((e) => e.type === AiAppsUseCardError)).toEqual([]);
+    expect(reads.aiCalls).toEqual([]);
   });
 });

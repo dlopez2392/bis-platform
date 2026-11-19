@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { TeamSkeleton } from "@/components/team/team-card";
 import { TeamSection } from "@/components/team/team-section";
 import { OwnerLineSwitchCard, OwnerLineSwitchCardError } from "@/components/owner-line/owner-line-switch-card";
+import { AiAppsSection, AiAppsSkeleton } from "@/components/ai-apps/ai-apps-section";
 import { BisAccessFrame } from "@/components/access-log/bis-access-frame";
 import { BisAccessSection } from "@/components/access-log/bis-access-section";
 import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
@@ -17,6 +18,7 @@ import { m } from "@/lib/messages";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { serviceDb, readOwnerLineSwitch, readAccountTimezone } from "@bis/db";
 import { setOwnerLineSwitchAction } from "./owner-line-actions";
+import { setAiAppsSwitchAction } from "./ai-apps-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,10 @@ export const dynamic = "force-dynamic";
  * it ever runs. The card renders the STATE `setOwnerLineSwitchAction`
  * returns, never a re-fetch: that action does not revalidate (the
  * billing-pause scanner forbids it while paused).
+ *
+ * MCP PR C (plan 2026-11-19-mcp-server.md 3.6): the "AI apps" card follows it, in its OWN Suspense and boundary
+ * (`AiAppsSection`), so its reads (switch, the Owner's name, the last 20 reads) never cost the page. Owner only to
+ * switch (D2): the agency reaches the page through requireAccountOwner above and sees the card read-only.
  *
  * Those two reads fail SOFT, like the language read above (design review Critical 2): a failure is logged by
  * account and costs only the switch card, whose place shows its own error state. The zone is read with the switch
@@ -117,6 +123,10 @@ export default async function TeamPage({
         ) : (
           <OwnerLineSwitchCardError locale={locale} pseudo={pseudo} />
         )}
+        <Suspense fallback={<AiAppsSkeleton />}>
+          <AiAppsSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} pseudo={pseudo}
+            setSwitch={setAiAppsSwitchAction.bind(null, accountId, locale)} />
+        </Suspense>
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
             <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={localeParam} />
