@@ -89,6 +89,8 @@ vi.mock("@/lib/business-status/status", async (importOriginal) => {
 import { POST } from "./route";
 import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/lib/voice/web-demo";
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
+import { fileURLToPath } from "node:url";
+import { checkSnapshots, readSnapshot } from "@/lib/voice/prompt-snapshots.fixture";
 
 const ORIGIN = "https://bis-rgv.com";
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
@@ -407,5 +409,62 @@ describe("POST /api/voice/web/session — today's status and the closed days (S-
       expect(res.status).toBe(200);
       expect(instructions()).toContain("TODAY: The business is closed because of a storm, until further notice.");
     });
+  });
+});
+
+// F-023 PR 4: the demo's whole instructions (prompt + webDemoNotice) as this route mints them, byte for byte:
+// trade module (none + both) × languages × after-hours setting × hours (none, open now, closed now) = 54, plus an
+// open-ended storm row × module × after-hours = 6. See lib/voice/prompt-snapshots.fixture.ts for the encoding.
+describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 snapshot)", () => {
+  const FIXTURE = fileURLToPath(new URL("./route.snapshots.json", import.meta.url));
+  /** A Tuesday, 10:00 AM in Chicago. */
+  const NOW = new Date("2027-06-01T15:00:00Z");
+  const HOURS = { none: null, open: { tue: [["08:00", "18:00"]] }, closed: { tue: [["13:00", "18:00"]], wed: [["08:00", "12:00"]] } };
+  const STORM_ROW = {
+    account_id: "acct1", state: "storm" as const, late_minutes: null, until: null,
+    set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.stubEnv("APP_ORIGIN", "https://app.bis-rgv.com");
+    vi.stubEnv("SOFIA_WEB_DISPLAY_NUMBER", "(956) 555-0999");
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function minted(profile: Record<string, unknown>, statusRow: unknown = null): Promise<string> {
+    fetchMock.mockClear();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, ...profile });
+    getBusinessStatusRowMock.mockResolvedValue(statusRow);
+    expect((await POST(req())).status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
+    return (JSON.parse(String(init.body)) as { session: { instructions: string } }).session.instructions;
+  }
+
+  async function allMinted(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const trade_module of [null, "insurance_pc", "events"] as const)
+      for (const after_hours of ["hours_then_message", "message_only"] as const) {
+        for (const languages of ["en", "es", "both"] as const)
+          for (const [hours, business_hours] of Object.entries(HOURS))
+            out[`${trade_module ?? "no-module"}|${after_hours}|${languages}|${hours}`] =
+              await minted({ trade_module, after_hours, languages, business_hours });
+        out[`${trade_module ?? "no-module"}|${after_hours}|en|storm`] =
+          await minted({ trade_module, after_hours, languages: "en", business_hours: null }, STORM_ROW);
+      }
+    return out;
+  }
+
+  it("every combination is exactly the captured one (60 of them)", async () => {
+    const actual = await allMinted();
+    expect(Object.keys(actual).length).toBe(60);
+    const r = checkSnapshots(FIXTURE, "lines", actual);
+    expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the fixture; run again without it").toBe(false);
+    expect(r.missingKeys).toEqual([]);
+    expect(r.extraKeys).toEqual([]);
+    const first = r.mismatched[0];
+    if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
+    expect(r.mismatched).toEqual([]);
   });
 });
