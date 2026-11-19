@@ -62,7 +62,7 @@ describe("runOffered: the one guard every runner goes through", () => {
     expect(g.run).not.toHaveBeenCalled();
   });
 
-  it("the catalogue is asked BEFORE the offered list: a name offered but outside the catalogue is still unknown", async () => {
+  it("the catalogue check is never skipped: a name offered but outside the catalogue is still unknown", async () => {
     const g = guard({ name: "book_appointment", offered: ["a", "book_appointment" as Name] });
     expect(await g.out).toBe("unknown");
     expect(g.run).not.toHaveBeenCalled();
