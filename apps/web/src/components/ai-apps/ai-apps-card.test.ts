@@ -18,17 +18,19 @@ const card = (o: Partial<Parameters<typeof AiAppsCard>[0]> = {}) => renderToStat
 }));
 
 describe("AiAppsCard", () => {
-  it("the Owner gets one switch named for the business, with the state as dot + word (mutation: drop role=switch -> FAILS)", () => {
-    const html = card();
-    expect(html.match(/role="switch"/g)).toHaveLength(1);
-    expect(html).toContain('aria-checked="true"');
-    expect(html).toContain('aria-label="AI apps for this business"');
-    expect(html).toContain(">On<");
+  it("the Owner gets one labelled button, ghost 'Turn off' when on and the default 'Turn on' when off, with the state as dot + word (mutation: drop the button -> FAILS)", () => {
+    const on = card();
+    expect(on.match(/<button/g)).toHaveLength(1);
+    expect(on).toContain(">Turn off<");
+    expect(on).not.toContain('role="switch"');
+    expect(on).toContain(">On<");
+    expect(card({ state: NEVER, log: [] })).toContain(">Turn on<");
+    expect(card({ state: NEVER, log: [] })).toContain(">Off<");
+    const html = on;
     expect(html).toContain("What they read is sent to that app");
   });
   it("the agency sees the state and who changed it, and no control at all (mutation: render the switch for the agency -> FAILS)", () => {
     const html = card({ viewer: "agency" });
-    expect(html).not.toContain('role="switch"');
     expect(html).not.toContain("<button");
     expect(html).toContain("Only the business&#x27;s Owner can change this.");
     expect(html).toContain("Turned on by Maria Lopez, Nov 19, 2:00 PM.");
@@ -37,7 +39,6 @@ describe("AiAppsCard", () => {
     const html = card({ state: NEVER, changedByName: null, log: [] });
     expect(html).toContain("It has never been turned on.");
     expect(html).not.toContain("Turned on by");
-    expect(html).toContain('aria-checked="false"');
   });
   it("with no name for the Owner it says 'the Owner', never blank (mutation: print null -> FAILS)", () => {
     expect(card({ changedByName: null })).toContain("Turned on by the Owner,");
@@ -56,7 +57,7 @@ describe("AiAppsCard", () => {
   it("a log that could not be read costs only the log, and the switch stays (rule 5 on the card)", () => {
     const html = card({ log: null });
     expect(html).toContain("data-ai-apps-log-error");
-    expect(html).toContain('role="switch"');
+    expect(html).toContain(">Turn off<");
   });
   it("says its language, and Spanish uses usted and the Spanish words (mutation: drop lang -> FAILS)", () => {
     const html = card({ locale: "es", viewer: "agency" });
@@ -98,7 +99,7 @@ describe("AiAppsUseCard (Mis preferencias)", () => {
     expect(html).not.toContain("/dashboard/accounts/b/team");
     expect(html).toContain("Ask the Owner to switch them on.");
     expect(html).toContain("AI apps are on");
-    expect(html).toContain("We couldn&#x27;t read this one.");
+    expect(html).toContain("We couldn&#x27;t read this one. Reload to try again.");
   });
   it("no address: says so and shows no copy button (mutation: render the button anyway -> FAILS)", () => {
     const html = useCard({ url: null });

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { makeTr } from "@/lib/record/copy";
 import { aiAppLogLine, whenLabel } from "@/lib/ai-apps/view";
@@ -71,12 +72,9 @@ export function AiAppsCard(props: {
             <span data-ai-apps-status>{tr.text(on ? "aiApps.on" : "aiApps.off")}</span>
           </span>
           {props.viewer === "owner" ? (
-            <button type="button" role="switch" aria-checked={on} disabled={pending}
-              aria-label={tr.text("aiApps.switch")} onClick={() => flip(!on)}
-              className={`relative h-6 w-11 shrink-0 rounded-full border border-[var(--line-strong)] transition-colors duration-150 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 ${on ? "bg-[var(--accent)]" : "bg-[var(--surface-2)]"}`}>
-              <span aria-hidden="true"
-                className={`absolute top-0.5 left-0.5 size-4.5 rounded-full ${on ? "bg-[var(--primary-foreground)]" : "bg-[var(--text-1)]"} transition-transform duration-150 motion-reduce:transition-none ${on ? "translate-x-5" : "translate-x-0"}`} />
-            </button>
+            <Button type="button" variant={on ? "ghost" : "default"} disabled={pending} onClick={() => flip(!on)}>
+              {tr.text(on ? "aiApps.turnOff" : "aiApps.turnOn")}
+            </Button>
           ) : (
             <p className="text-sm text-[var(--text-2)]">{tr.text("aiApps.agencyCannot")}</p>
           )}
