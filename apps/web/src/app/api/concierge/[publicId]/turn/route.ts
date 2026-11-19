@@ -198,7 +198,8 @@ export async function POST(
     getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount, readBillingStanding,
   } = await import("@bis/db");
   // Lazy for the same reason: the gateway imports `@bis/db` at its module scope.
-  const { aiComplete, aiOverheadMs, aiReadiness } = await import("@/lib/ai/gateway");
+  const { aiReadiness } = await import("@/lib/ai/gateway");
+  const { completeWithTool } = await import("@/lib/ai/tool-turn");
 
   const ipHash = hashIp(clientIp(req.headers));
   const origin = req.headers.get("origin");
@@ -648,31 +649,8 @@ export async function POST(
     // this was a direct fetch.
     const accountId = profile.account_id;
     const ref = `conversation ${conversationId}`;
-    async function complete(msgs: AiMessage[], timeoutMs: number, toolChoice?: "none") {
-      const answer = await aiComplete(db, {
-        accountId, task: "web_chat", messages: msgs, tools: [CAPTURE_LEAD_TOOL],
-        ...(toolChoice ? { toolChoice } : {}), timeoutMs, timezone, language: locale, ref,
-      });
-      if (!answer.ok) throw new Error(`ai ${answer.reason}`);
-      return answer;
-    }
-
     let reply = "";
-    let toolArgs: string | null = null;
-    let toolCallId = "";
-    try {
-      const message = await complete(messages, MODEL_TIMEOUT_MS);
-      // Plain text before it goes anywhere: the bubble shows markdown as
-      // stray symbols, and the transcript is what the operator reads later.
-      reply = plainText(message.text);
-      const call = message.toolCalls?.find((c) => c.name === "capture_lead");
-      toolArgs = call?.arguments ?? null;
-      toolCallId = call?.id ?? "";
-    } catch (e) {
-      log("model call failed", { error: String(e) });
-      return unavailable();
-    }
-
+    let toolCalled = false;
     // Lead capture, at most once per conversation, and BEFORE `spoken` is
     // decided (Important 1, review of commit 129b43f). The old code decided
     // `spoken` from `toolArgs` alone, before this ran — so a model that
@@ -694,62 +672,68 @@ export async function POST(
     // address (lib/voice/tools/placeholders.ts; every visitor line is in hand here). A dropped name is no name:
     // the "unusable" path. The model hears what was dropped and why, beside the outcome's own words.
     let dropped: Dropped[] = [];
-    if (toolArgs && !conversation.submission_id) {
-      const parsed = parseCaptureLead(toolArgs);
-      const visitorSaid = [...conversation.transcript.filter((t) => t.role === "visitor").map((t) => t.text), text];
-      const clean = parsed ? sanitizeWebLead(parsed, visitorSaid) : null;
-      dropped = clean?.dropped ?? [];
-      const lead = clean?.lead ?? null;
-      outcome = "unusable";
-      if (lead && !leadHasContact(lead)) {
-        // HELD, not filed (danlo, 2026-10-09): the one lead slot stays free
-        // for the capture that carries a way to reach them.
-        outcome = "needs_contact";
-        log("capture_lead held: no email or phone", { conversationId });
-      } else if (lead) {
-        filed = await fileLead({
-          db, accountId: profile.account_id,
-          // conversation.form_id, NOT profile.concierge_form_id (I1,
-          // whole-branch review). The conversation's own column is captured
-          // at conversation START — migration 0042's comment on it: "an
-          // operator changing the destination form mid-conversation must not
-          // strand a lead halfway." profile.concierge_form_id can also go
-          // NULL (FK `set null`) without 404ing an in-flight chat; the
-          // conversation's column is `restrict` and always resolves.
-          formId: conversation.form_id,
-          conversationId, attribution: conversation.attribution, locale, ipHash,
-          // originFrom(req.headers), NOT the raw `origin` above (I3,
-          // whole-branch review): the raw header is what
-          // `concierge_conversations.origin` stores, but it is spoofable
-          // and, from inside a sandboxed iframe, is the literal string
-          // "null" — which flowed straight into `enrich`'s dashboard link
-          // in the lead-alert email as "null/dashboard/accounts/…".
-          // `lib/email/origin.ts` checks APP_ORIGIN FIRST for exactly this
-          // reason, and the other `enrich` caller (f/[publicId]/actions.ts)
-          // already uses this helper.
-          origin: originFrom(req.headers), lead,
-        });
-        if (filed) {
-          outcome = "filed";
+    // The tool handler (the `run` below): capture_lead's whole rule set, unchanged by the move into the shared
+    // tool turn (lib/ai/tool-turn.ts). What it returns is what the model hears as the tool's result.
+    const captureLead = async (_name: string, _args: Record<string, unknown>, toolArgs: string) => {
+      if (!conversation.submission_id) {
+        const parsed = parseCaptureLead(toolArgs);
+        const visitorSaid = [...conversation.transcript.filter((t) => t.role === "visitor").map((t) => t.text), text];
+        const clean = parsed ? sanitizeWebLead(parsed, visitorSaid) : null;
+        dropped = clean?.dropped ?? [];
+        const lead = clean?.lead ?? null;
+        outcome = "unusable";
+        if (lead && !leadHasContact(lead)) {
+          // HELD, not filed (danlo, 2026-10-09): the one lead slot stays free
+          // for the capture that carries a way to reach them.
+          outcome = "needs_contact";
+          log("capture_lead held: no email or phone", { conversationId });
+        } else if (lead) {
+          filed = await fileLead({
+            db, accountId: profile.account_id,
+            // conversation.form_id, NOT profile.concierge_form_id (I1,
+            // whole-branch review). The conversation's own column is captured
+            // at conversation START — migration 0042's comment on it: "an
+            // operator changing the destination form mid-conversation must not
+            // strand a lead halfway." profile.concierge_form_id can also go
+            // NULL (FK `set null`) without 404ing an in-flight chat; the
+            // conversation's column is `restrict` and always resolves.
+            formId: conversation.form_id,
+            conversationId, attribution: conversation.attribution, locale, ipHash,
+            // originFrom(req.headers), NOT the raw `origin` above (I3,
+            // whole-branch review): the raw header is what
+            // `concierge_conversations.origin` stores, but it is spoofable
+            // and, from inside a sandboxed iframe, is the literal string
+            // "null" — which flowed straight into `enrich`'s dashboard link
+            // in the lead-alert email as "null/dashboard/accounts/…".
+            // `lib/email/origin.ts` checks APP_ORIGIN FIRST for exactly this
+            // reason, and the other `enrich` caller (f/[publicId]/actions.ts)
+            // already uses this helper.
+            origin: originFrom(req.headers), lead,
+          });
+          if (filed) {
+            outcome = "filed";
+          } else {
+            // `fileLead` answers false for a failed save AND for a lost race
+            // (two tabs on one conversation: the other turn claimed the one
+            // submission slot first). One re-read tells them apart; a lead on
+            // file is a lead on file, whichever turn wrote it.
+            const after = await getConciergeConversation(db, conversationId).catch(() => null);
+            if (after?.submission_id) { outcome = "already_on_file"; filed = true; }
+            else outcome = "failed";
+          }
         } else {
-          // `fileLead` answers false for a failed save AND for a lost race
-          // (two tabs on one conversation: the other turn claimed the one
-          // submission slot first). One re-read tells them apart; a lead on
-          // file is a lead on file, whichever turn wrote it.
-          const after = await getConciergeConversation(db, conversationId).catch(() => null);
-          if (after?.submission_id) { outcome = "already_on_file"; filed = true; }
-          else outcome = "failed";
+          log("capture_lead ignored: unusable arguments", { conversationId });
         }
-      } else {
-        log("capture_lead ignored: unusable arguments", { conversationId });
+    
       }
-    }
+      return withDroppedNote(captureResult(outcome), dropped, "web");
+    };
 
     // D-047: THE CAPTURE'S RESULT GOES BACK TO THE MODEL before the visitor
     // reads a word. Whatever the model wrote alongside its capture_lead call
     // was written BEFORE anything was filed, so it is discarded, never shown:
     // "I have passed your details on" beside a capture that failed is the
-    // defect. A second completion carries the real result as the tool's
+    // defect. A second completion (lib/ai/tool-turn.ts) carries the real result as the tool's
     // answer (`tool_choice: "none"`: it may not call the tool again) and its
     // words are the reply. The prompt's own rule ("never say you have ...
     // passed anything on unless capture_lead came back successful",
@@ -760,28 +744,32 @@ export async function POST(
     // call alone may take 20s). Too little left, or the call fails: no second
     // reply, and `spoken` below falls back to the fixed line for what really
     // happened, never to the pre-result words.
-    if (toolArgs) {
-      reply = "";
-      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt) - aiOverheadMs("web_chat");
-      const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
-      if (followupTimeout >= FOLLOWUP_MIN_MS) {
-        const result = withDroppedNote(captureResult(outcome), dropped, "web");
-        try {
-          const message = await complete([
-            ...messages,
-            {
-              role: "assistant", content: null,
-              toolCalls: [{ id: toolCallId, name: "capture_lead", arguments: toolArgs }],
-            },
-            { role: "tool", toolCallId, content: JSON.stringify(result) },
-          ], followupTimeout, "none");
-          reply = plainText(message.text);
-        } catch (e) {
-          log("capture follow-up failed", { conversationId, filed, error: String(e) });
-        }
-      } else {
-        log("capture follow-up skipped: no time left", { conversationId, filed, timeLeft });
-      }
+
+    try {
+      const turn = await completeWithTool({
+        db, tools: [CAPTURE_LEAD_TOOL],
+        input: { accountId, task: "web_chat", messages, timezone, language: locale, ref },
+        firstTimeoutMs: MODEL_TIMEOUT_MS,
+        budget: { startedAt, totalMs: TURN_BUDGET_MS, followupMaxMs: FOLLOWUP_TIMEOUT_MS, followupMinMs: FOLLOWUP_MIN_MS },
+        run: captureLead,
+        // Only capture_lead is offered, so this is a model naming a tool it was never given: nothing is filed.
+        refused: () => ({ ok: false, error: "Not recorded: that tool is not available here." }),
+        // A throw out of the handler: only its class is logged, and the model is told the save failed.
+        failed: (cls) => {
+          log("capture_lead failed", { conversationId, error: cls });
+          outcome = "failed";
+          return captureResult("failed");
+        },
+      });
+      // Plain text before it goes anywhere: the bubble shows markdown as
+      // stray symbols, and the transcript is what the operator reads later.
+      reply = plainText(turn.text);
+      toolCalled = turn.toolCalled;
+      if (turn.followup === "failed") log("capture follow-up failed", { conversationId, filed, error: String(turn.error) });
+      else if (turn.followup === "skipped") log("capture follow-up skipped: no time left", { conversationId, filed, timeLeft: turn.timeLeft });
+    } catch (e) {
+      log("model call failed", { error: String(e) });
+      return unavailable();
     }
 
     // A turn that calls a tool routinely comes back with `content: null`, so
@@ -790,12 +778,12 @@ export async function POST(
     // promises nothing otherwise, never a claim about the details this
     // visitor just handed over.
     //
-    // `toolArgs` is required too (Minor 1, second-round review of 108b822):
+    // `toolCalled` is required too (Minor 1, second-round review of 108b822):
     // `filed` alone can be true from a PRIOR turn's submission, so an empty
     // reply with NO tool call THIS turn (the model simply failed to answer)
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
-    const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
+    const spoken = reply || ((toolCalled && filed) ? strings.captured : strings.unavailable);
     // I2, second half: the web_chat task's cap, CONCIERGE_MAX_REPLY_TOKENS (500),
     // already bounds a completion to roughly 2,000-2,500 characters of
     // English, so this slice does not CREATE the bound — it TIGHTENS it,
@@ -854,7 +842,7 @@ export async function POST(
     // rule, lines 113-123: lib/billing/usage imports @bis/db at its module
     // scope) sits inside the callback's own try, so neither a ledger failure
     // nor a failed import rejects the background work.
-    const answered = Boolean(reply || (toolArgs && filed));
+    const answered = Boolean(reply || (toolCalled && filed));
     if (answered && !hadAnsweredTurn(conversation.transcript)) {
       after(async () => {
         try {
