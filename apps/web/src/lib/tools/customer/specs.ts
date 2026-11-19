@@ -3,7 +3,8 @@
 // sends them through lib/voice/tools/schemas.ts (toolSchemas → realtimeShape) and runs them in
 // lib/voice/tools/registry.ts; the web chat sends capture_lead's `web` variant (lib/concierge/prompt.ts → chatShape).
 // Platform semantics (booking ids, not Cal uids), ported from the reception demo. Every word here is pinned byte for
-// byte by customer-tool-schemas.fixture.json; a spec never names a tool its session may lack.
+// byte by customer-tool-schemas.fixture.json. What a session is SENT never names a tool it lacks: a base description
+// that does (check_availability names book_appointment) is sent only where that tool is offered, else its variant.
 import type { ToolSpec } from "../belt";
 
 /** The session facts a variant can be keyed by: the calendar's meeting type ("video"), the booking mode ("manage",
