@@ -140,7 +140,7 @@ describe("a tool the session was not given is refused in today's words, with not
 });
 
 describe("a tool the session WAS given is never refused by the guard", () => {
-  it("capture_lead, take_message and log_transcript run with booking off and no handoff target (mutation: offered = [] -> FAILS)", async () => {
+  it("log_transcript, on every session, runs with booking off and no handoff target (mutation: offered = [] -> FAILS)", async () => {
     const c = ctxFor("none", "in_person", false);
     const pre = emptyCallState();
     const logged = await runTool(pre, c, "log_transcript", ARGS.log_transcript);
