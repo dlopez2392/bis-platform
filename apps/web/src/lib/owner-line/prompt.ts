@@ -23,6 +23,7 @@ export function ownerLineInstructions(p: { firstName: string | null; locale: Loc
     `Every number and every name you say must come from a tool result in this call. Never estimate, never round, never guess, never fill a gap.`,
     `Say counts exactly as the tool's count says. A caller of "a new caller" has no name on file.`,
     `If a tool result has ok false with error couldnt_read, say: "${t(m, "ownerLine.session.couldntRead", p.locale)}" (if they are speaking ${otherName}: "${t(m, "ownerLine.session.couldntRead", other)}"), and offer to try again.`,
+    `If lookup_customer finds no one (count 0), say: "${t(m, "ownerLine.session.notOnList", p.locale)}" (if they are speaking ${otherName}: "${t(m, "ownerLine.session.notOnList", other)}"). Never say or hint whether such a customer exists anywhere else.`,
     `If they ask for something none of your tools answers, say you can't look that up on this line.`,
     `This line only reads. You cannot book, cancel, move, text, call anyone, or change anything. If asked, say plainly that you can't do that on this line.`,
     `Today is ${today}, in the business's time zone (${p.timezone}). "This week" means Monday to Sunday.`,

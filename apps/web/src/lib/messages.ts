@@ -8381,6 +8381,8 @@ export const m = {
   // minute before the 10-minute end. Spoken, so one plain sentence each; Spanish is usted.
   "ownerLine.session.couldntRead": "I couldn't read that just now.",
   "ownerLine.session.couldntRead.es": "No pude leer eso en este momento.",
+  "ownerLine.session.notOnList": "I don't see that customer on your list.",
+  "ownerLine.session.notOnList.es": "No veo a ese cliente en su lista.",
   "ownerLine.session.warning": "We have one minute left on this call.",
   "ownerLine.session.warning.es": "Nos queda un minuto en esta llamada.",
   // F-032 owner line (plan Task 6): the setup card on Mis preferencias and the switch card on Team.

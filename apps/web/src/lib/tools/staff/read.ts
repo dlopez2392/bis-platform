@@ -163,7 +163,7 @@ export const LOOKUP_MATCHES = 3;
 export type LookupCustomerResult =
   | { ok: false; error: "bad_term" }
   | { ok: true; count: number;
-      matches: { name: string | null; phone: string; lastVisit: string | null; nextVisit: string | null; openTodos: number }[] };
+      matches: { name: string | null; phone: string | null; lastVisit: string | null; nextVisit: string | null; openTodos: number }[] };
 
 /**
  * lookup_customer (spec §5; owner-line plan Task 17): up to three customers by name or phone, each as five fields and
@@ -189,7 +189,7 @@ export async function lookupCustomer(c: StaffReadContext, args: Record<string, u
     const last = history.filter((b) => b.status === "completed" && Date.parse(b.starts_at) < nowMs)
       .sort((a, b) => Date.parse(b.starts_at) - Date.parse(a.starts_at))[0];
     return {
-      name: nameOf(k), phone: k.phone ?? "",
+      name: nameOf(k), phone: k.phone ?? null,
       lastVisit: last ? when(last.starts_at, c, true) : null,
       nextVisit: next[0] ? when(next[0].starts_at, c, true) : null,
       openTodos: work.filter((w) => w.contactId === k.id).length,

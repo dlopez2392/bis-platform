@@ -14,7 +14,7 @@ refuseProduction(process.env, "lib/owner-line/tools/read.live.test.ts");
 
 import {
   serviceDb, createAccount, createContact, getOrCreateCalendar, createBooking, ensureCallbackTask, deleteAccountCascade,
-  setOwnerLineSwitch,
+  setOwnerLineSwitch, withAuthor,
 } from "@bis/db";
 import { dayKeyInZone } from "@/lib/booking/availability";
 import { callbackTaskTitle } from "@/lib/voice/call-card";
@@ -87,7 +87,9 @@ describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dia
       // A NEW contact every time (review I-4): an existing one would merge two customers the Technician must tell apart.
       expect(made.existing, `createContact on ${a.org} with ${phone}`).toBe(false);
       const k = made.id;
-      if (assignedTo) await must(db.from("contacts").update({ assigned_to: assignedTo }).eq("id", k).select("id"), "assign");
+      // A server write names its author since 0113 (record_changes_enforce): a seed is an automation, as in actions.live.test.ts.
+      if (assignedTo) await must(withAuthor(db.from("contacts").update({ assigned_to: assignedTo }).eq("id", k).select("id"),
+        { authorKind: "automation", authorId: null }, "seed"), "assign");
       const callId = (await must<{ id: string }>(db.from("calls").insert({ account_id: a.id, phone_number_id: a.phoneId, contact_id: k,
         caller_e164: phone, outcome, reason: only || null }).select("id").single(), "call")).id;
       const cal = await getOrCreateCalendar(db, a.id, "user_test");
