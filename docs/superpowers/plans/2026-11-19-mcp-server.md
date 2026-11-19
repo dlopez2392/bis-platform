@@ -200,4 +200,94 @@ the production click is skipped only when the migrations AND pipeline files are 
 
 ## 7. Spike notes
 
-(PR 0 fills this in.)
+Run 2026-11-19 on branch `spike/mcp-auth` (from main 98659526), throwaway code under `apps/web/spike/`,
+`apps/web/src/app/api/mcp/route.ts`, `apps/web/src/app/.well-known/**` and a matcher change in `proxy.ts`. Env:
+the main checkout's `apps/web/.env.local` (Clerk DEVELOPMENT instance `topical-redfish-40`, bis-ci) loaded into
+the process by `spike/with-env.mjs` (`process.loadEnvFile` in a launcher that spawns `next`, refusing a
+production ref); no `.env` file in the worktree. `node --env-file` does not work for `next dev` (Next copies
+it into NODE_OPTIONS, where Node forbids it). Versions: `@clerk/mcp-tools` 0.9.0, `@modelcontextprotocol/sdk`
+1.32.2 (resolved from ^1.29), `@clerk/nextjs` 7.6.1, `@clerk/testing` 2.x, `next` 16.3.6, Playwright 1.62.
+
+**1. DCR on the development instance: PROVEN, but not through `patch_instance_config`.** The Clerk MCP's
+instance config schema has no OAuth-application key (`get_instance_config_schema` lists 51 top-level keys, none
+for OAuth applications), so `patch_instance_config` cannot switch it. `check_mcp_server` READS the settings
+(`dynamic_oauth_client_registration:false`, `aud_claim_enabled:false`, `pkce_required:false` on dev). Clerk's
+`configure_mcp_server` (registers an MCP resource URL, turns on the audience claim and CIMD registration, not
+DCR) refused `http://localhost:3000/api/mcp`: "resource_url must use https." So the switch went through the
+Backend API with the DEV secret key (script `spike/oauth-settings.mjs`, refuses unless the key is `sk_test_`
+and the publishable key decodes to `topical-redfish-40`): `GET /v1/instance/oauth_application_settings` →
+200, `dynamic_oauth_client_registration:false` (the "dry run"); `PATCH` with `{dynamic_oauth_client_registration:
+true}` → 200, `true`. Production was only READ (`check_mcp_server instance=production`): DCR false,
+`pkce_required:true`, unchanged. Gap reported to Clerk (`submit_feedback` fbk_3MKXcn4DZnGI1u8kfU9KBR6AHIo).
+
+**2. Route + OAuth end to end with no human: PROVEN** (`spike/oauth-e2e.mjs`, against `next dev` and again
+against `next start`). `POST /api/mcp` no token → 401, `WWW-Authenticate: Bearer resource_metadata=
+"…/.well-known/oauth-protected-resource/api/mcp"` → PRM names `https://topical-redfish-40.clerk.accounts.dev` →
+its `/.well-known/oauth-authorization-server` → `registration_endpoint` `/oauth/register`. DCR (public client,
+`token_endpoint_auth_method:none`) → 201, scope `email offline_access profile`, no secret. Throwaway user
+`e2e-client-<13 digits>@example.com` (the e2e sweep's own shape), signed in by ticket with a testing token.
+Authorize with PKCE S256 → the app's localhost session does NOT carry over: Clerk sends the browser to the
+Account Portal (`topical-redfish-40.accounts.dev/sign-in`); a second ticket sign-in there, then
+`/oauth-consent` with **Allow / Deny** buttons. Playwright clicks Allow; nothing blocked automation (one trap:
+`setupClerkTestingToken`'s route re-fetches FAPI calls and follows the 303 itself, so the callback needs a real
+listener, not `context.route`). Callback state matches, code exchange → 200. Then with the access token:
+`initialize` 200 (protocol 2025-06-18), `tools/list` 200 (`whoami` only), `tools/call whoami` 200 returning
+exactly the throwaway user's id. The user is deleted by the script.
+Exported names that worked: `verifyClerkToken`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`,
+`metadataCorsOptionsRequestHandler` from `@clerk/mcp-tools/next`; `McpServer` (`…/sdk/server/mcp.js`,
+`registerTool`, the handler's `extra.authInfo`); `WebStandardStreamableHTTPServerTransport`
+(`…/sdk/server/webStandardStreamableHttp.js`, `{ sessionIdGenerator: undefined, enableJsonResponse: true }`,
+`handleRequest(req, { authInfo })`), one server + transport per request. Not run: `claude mcp add` (Claude
+Code's own client needs a person to click Allow); the script runs the same RFC 9728/8414/7591/7636 steps.
+
+**3. Session token and bad tokens: PROVEN refused.** Clerk SESSION JWT as bearer → 401. `garbage` → 401.
+No bearer → 401. The real access token with `exp` edited into the past (signature no longer matches) → 401.
+A genuinely expired OAuth token was not waited for (lifetime 24 h). **Finding:** with the app's matcher as it
+is, a three-part malformed bearer (`a.b.c`, `garbage.token.value`) makes `clerkMiddleware` throw
+`SyntaxError: Unexpected end of data` → **500** before any route runs, on EVERY matched path (`/`,
+`/dashboard`, `/api/nope`; reproduced under `next start`). Pre-existing, fails closed, not MCP-specific. The
+spike excludes `/api/mcp` from both matcher entries and authenticates in the route with
+`(await clerkClient()).authenticateRequest(req, { acceptsToken: "oauth_token" })` then
+`verifyClerkToken(state.toAuth(), token)`: `a.b.c` on `/api/mcp` → 401.
+
+**4. Token shape, scopes, audience: RECORDED.** Access tokens are JWTs (`oauth_jwt_access_tokens:true`),
+claims `client_id, exp, iat, iss, jti, nbf, scope, sub`; **no `aud`** (the `resource` parameter sent on
+authorize and token is ignored while `aud_claim_enabled` is false), lifetime 86 400 s, refresh token issued
+(`offline_access` is added by DCR's default). `verifyClerkToken(auth, token)` does NOT verify anything itself: it
+reads the `auth` object (`isAuthenticated`, `tokenType === "oauth_token"`, `clientId`, `scopes`, `userId`) and
+never looks at an audience, so any OAuth token this Clerk instance issued to ANY client would be accepted.
+Revocation: `POST /oauth/token/revoke` → 400 `unsupported_token_type`, "JWT access tokens cannot be revoked";
+the token still works after. **A deleted Clerk user's access token still answers `whoami` (200)**; only its
+refresh fails (400). So for up to 24 h the token outlives the person in Clerk: §3.2's per-request membership
+read from BIS's tables is the actual control, not the token.
+
+**5. Built server: PROVEN.** `next build` (with the env launcher) exit 0, compiled in 27 s, routes listed:
+`ƒ /api/mcp`, `ƒ /.well-known/oauth-protected-resource`, `ƒ /.well-known/oauth-protected-resource/api/mcp`,
+`ƒ /.well-known/oauth-authorization-server`. `next start` → the whole script again: `initialize` 200,
+`tools/list` 200, `whoami` 200 with the right user, every negative case as in 3. `GET /api/mcp` → 405. No
+memory trouble. Vercel's own runtime was not run (no bypass secret; as planned).
+
+**6. claude.ai: NOT RUN, as planned.** claude.ai's connector reaches only a public https URL; Preview sits
+behind Vercel Authentication and this repo has no protection-bypass secret, so the first claude.ai check is
+production (§6). Recorded, not worked around.
+
+**Changes §3.1–§3.2 need (for PR B):**
+- DCR is switched by the Backend API (`PATCH /v1/instance/oauth_application_settings`) or the dashboard, not by
+  the Clerk MCP config tools. For production, Clerk's `configure_mcp_server` with
+  `https://app.bis-rgv.com/api/mcp` is the better click: it turns on the `aud` claim and CIMD (the newer MCP
+  registration). danlo's decision; if taken, PR B checks `aud` equals the resource URL itself (verifyClerkToken
+  will not), and DCR may not be needed at all.
+- `/api/mcp` must be OUT of `proxy.ts`'s matcher (it is matched today, by both entries), and the route calls
+  `authenticateRequest(…, { acceptsToken: "oauth_token" })` itself; `auth()` needs the middleware. The test in
+  §3.1 pins the exclusion and a `a.b.c` bearer → 401.
+- The PRM path is `/.well-known/oauth-protected-resource/api/mcp` (route lives at `/api/mcp`), not `…/mcp`.
+  `protectedResourceHandlerClerk` hard-codes `resource` = the ORIGIN; PR B should build the document with
+  `generateClerkProtectedResourceMetadata({ publishableKey, resourceUrl: origin + "/api/mcp" })` so `resource`
+  names the endpoint (and matches an `aud` if turned on).
+- §3.2 step 1: tokens are 24 h, unrevocable JWTs that survive the person's Clerk deletion; say so, and keep the
+  membership + switch read on every call as the control (already the design). Opaque tokens would be revocable
+  but cost a Clerk call per request; not recommended.
+- Scopes are `profile email offline_access`; the server needs none of them beyond a valid token. Plan's
+  "profile/email" assumption holds, plus `offline_access`.
+- Separate, pre-existing: any matched route answers 500 to `Authorization: Bearer a.b.c`. Worth its own small
+  fix (or a Clerk report); not in this plan's scope.

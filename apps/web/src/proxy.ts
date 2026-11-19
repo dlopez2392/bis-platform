@@ -55,5 +55,5 @@ export default clerkMiddleware(async (auth, req) => {
  * are server actions posted to the page's own path, which this exclusion covers.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|r/|brief/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|api/mcp(?:/|$)|c/|f/|b/|u/|d/|s/|r/|brief/|.*\\..*).*)", "/(api(?!/mcp(?:/|$))|trpc)(.*)"],
 };
