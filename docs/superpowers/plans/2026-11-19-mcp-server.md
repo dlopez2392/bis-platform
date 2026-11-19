@@ -80,7 +80,7 @@ about WHICH business and WHAT role is read fresh from BIS's own tables on every 
    request are the control, never the token.
 2. `listMyMemberships(serviceDb(), clerkUserId)` → memberships, filtered to `OWNER_LINE_ROLES` and to accounts
    whose AI-app switch is on (§3.4). Empty → every tool answers `{ ok: false, error: "no_business" }` with one
-   sentence telling the person how to get access ("Ask the business's Owner to switch on AI apps in Settings").
+   sentence telling the person how to get access ("Ask the business's Owner to switch on AI apps on the Team page").
 3. The tool's `business` argument (an account id from `my_businesses`) must be in that list. Omitted → the only
    one if there is exactly one, else `{ ok:false, error:"choose_business", businesses:[…] }`. An id not in the
    list (another business, a typo, an archived account) gets the SAME answer as an omitted one with several
@@ -136,7 +136,7 @@ log row and so is never counted.
 
 ### 3.6 Turning it on (PR C, UI)
 
-- Settings → a card on the business's own settings page, Owner only: "AI apps" — one switch, the sentence
+- Team page (`/dashboard/accounts/[accountId]/team#ai-apps`, beside the owner line's switch), Owner switches, agency reads: "AI apps" — one switch, the sentence
   "Lets Owners and Staff ask about calls, appointments, To dos and customers from Claude or ChatGPT. What they
   read is sent to that app's maker.", who changed it and when, and the last 20 reads (`readAiAppLog`): who,
   which read, when. Reversible → immediate with an undo toast
