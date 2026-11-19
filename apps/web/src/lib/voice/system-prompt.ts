@@ -87,9 +87,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // profile with no transfer number gets the take-a-message sentence this
   // prompt has always carried, byte for byte — ON THE PHONE. The web has no
   // take_message tool at all, so it never reaches that fallback either way.
+  // F-023 PR 4: keyed on transfer_to_human being offered, which on the phone is
+  // `handoffAvailable` and on a browser demo is never.
   const wouldRatherTalkToAPerson = onWeb
     ? CAPTURE_LEAD_FOLLOWUP
-    : input.handoffAvailable && !closedNow
+    : offered.has("transfer_to_human") && !closedNow
       ? "offer to put them through to someone on the team"
       : "offer to take a message";
 
@@ -114,7 +116,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   const tradeBlock = tradeModuleBlock(input.tradeModule, {
     businessName: input.businessName,
     medium: input.medium ?? "phone",
-    handoffAvailable: input.handoffAvailable === true,
+    handoffAvailable: offered.has("transfer_to_human"),
     canBook: booking && !onWeb,
     languages: input.languages,
   });
@@ -230,8 +232,8 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   }
 
   // Named in the TOOLS list only when the tool is actually on the session
-  // (`toolSchemas`' third argument, session-config.ts:33) — the same
-  // `handoffAvailable` decides both, so the prompt can never advertise a
+  // (`toolSchemas`' third argument, session-config.ts:99, through
+  // `offeredTools`) — the same `handoffAvailable` decides both, so the prompt can never advertise a
   // tool the model was not given. The "do not ask them to hold" line is not
   // manners: the route speaks `handoffLine` for her the moment the tool
   // succeeds (`lib/voice/handoff.ts`), so a hold line of her own gets the
@@ -320,7 +322,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       // Not without a caller ID: find_my_booking refuses then, and the
       // caller-ID line above already says so.
       ...(manageable && input.callerNumber ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
-      ...(input.handoffAvailable ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
+      ...(offered.has("transfer_to_human") ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
     ].join(" ");
     if (onPhone) lines.push("", always);
     // Web chat and demo: today's conditional line when there are no structured hours; with hours, the definite
@@ -337,7 +339,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     // S-47d (spec 5.4.2): a closure with no hours takes the same branch, its lines pointing at TODAY.
     lines.push("", onPhone
       ? afterHoursClosedPhoneLine({
-        canBook: booking && !openEndedStorm, handoffAvailable: input.handoffAvailable === true,
+        canBook: booking && !openEndedStorm, handoffAvailable: offered.has("transfer_to_human"),
         hasTradeRules: tradeBlock.length > 0, see: hoursBlock ? "Right now" : "TODAY",
       })
       : onWeb

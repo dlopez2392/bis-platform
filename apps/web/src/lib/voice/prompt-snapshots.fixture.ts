@@ -1,69 +1,40 @@
-// F-023 PR 4: the whole system prompt, byte for byte, for every combination a surface can send. Captured from main
-// (4b7e9147) BEFORE the prompt learned which tools its session was offered, so a change of one character on the phone
-// line fails a test rather than reaching a call.
-//
-// Two encodings, both exact:
-//  - "dictionary" (the phone and the web chat, thousands of prompts): every distinct line once in `lines`, each prompt
-//    a list of indices into it. Never re-baselined; a change is a finding.
-//  - "lines" (the two demos, a few dozen prompts): each prompt as its own list of lines, so a deliberate re-baseline
-//    reads in a diff as the lines it removed.
-//
-// Writing: WRITE_PROMPT_SNAPSHOTS=1 rewrites the fixture a test names and then FAILS that test, so a run that writes
-// can never also be a green run.
+// F-023 PR 4: how the prompt snapshot tests pin a whole prompt without committing megabytes of it.
+//  - digestPrompts: sha256 over prompts in order, each followed by NUL. A group of prompts is pinned by one digest;
+//    a failure names the group, and the changed text is seen by rebuilding that group at the base commit and diffing.
+//  - checkSamples: a few prompts kept as full text (one JSON array of lines per prompt), so a deliberate change reads
+//    in a diff as the lines it changed. WRITE_PROMPT_SNAPSHOTS=1 rewrites the file a test names and then FAILS that
+//    test, so a run that writes can never also be a green run.
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
-export type DictionaryFile = { encoding: "dictionary"; lines: string[]; prompts: Record<string, number[]> };
-export type LinesFile = { encoding: "lines"; prompts: Record<string, string[]> };
-export type SnapshotFile = DictionaryFile | LinesFile;
-
-export function decodePrompt(file: SnapshotFile, key: string): string | undefined {
-  if (file.encoding === "lines") return file.prompts[key]?.join("\n");
-  const idx = file.prompts[key];
-  return idx?.map((i) => file.lines[i]).join("\n");
+export function digestPrompts(prompts: readonly string[]): string {
+  const h = createHash("sha256");
+  for (const p of prompts) h.update(`${p}\u0000`);
+  return h.digest("hex");
 }
 
-/** The fixture's JSON text: one dictionary line or one prompt per line of the file. */
-export function encodeSnapshots(encoding: SnapshotFile["encoding"], prompts: Record<string, string>): string {
-  const keys = Object.keys(prompts);
-  if (encoding === "lines") {
-    const body = keys.map((k) => `    ${JSON.stringify(k)}: [\n${prompts[k]!.split("\n").map((l) => `      ${JSON.stringify(l)}`).join(",\n")}\n    ]`);
-    return `{\n  "encoding": "lines",\n  "prompts": {\n${body.join(",\n")}\n  }\n}\n`;
-  }
-  const lines: string[] = [];
-  const index = new Map<string, number>();
-  const encoded = keys.map((k) => {
-    const ids = prompts[k]!.split("\n").map((l) => {
-      let i = index.get(l);
-      if (i === undefined) { i = lines.length; lines.push(l); index.set(l, i); }
-      return i;
-    });
-    return `    ${JSON.stringify(k)}: [${ids.join(",")}]`;
-  });
-  return `{\n  "encoding": "dictionary",\n  "lines": [\n${lines.map((l) => `    ${JSON.stringify(l)}`).join(",\n")}\n  ],\n  "prompts": {\n${encoded.join(",\n")}\n  }\n}\n`;
+type SamplesFile = { prompts: Record<string, string[]> };
+
+function encodeSamples(prompts: Record<string, string>): string {
+  const body = Object.entries(prompts).map(([k, p]) =>
+    `    ${JSON.stringify(k)}: [\n${p.split("\n").map((l) => `      ${JSON.stringify(l)}`).join(",\n")}\n    ]`);
+  return `{\n  "prompts": {\n${body.join(",\n")}\n  }\n}\n`;
 }
 
-export type SnapshotCheck = { written: boolean; missingKeys: string[]; extraKeys: string[]; mismatched: string[] };
+export type SampleCheck = { written: boolean; keys: string[]; mismatched: { key: string; actual: string; expected: string | undefined }[] };
 
-/**
- * Compares every prompt with the fixture at `path` (or writes it, under WRITE_PROMPT_SNAPSHOTS=1). The caller asserts
- * on the result, and on `written` being false, so a write is never a pass.
- */
-export function checkSnapshots(path: string, encoding: SnapshotFile["encoding"], actual: Record<string, string>): SnapshotCheck {
+/** Compares `actual` with the samples file at `path` (or writes it, under WRITE_PROMPT_SNAPSHOTS=1). */
+export function checkSamples(path: string, actual: Record<string, string>): SampleCheck {
   if (process.env.WRITE_PROMPT_SNAPSHOTS === "1") {
-    writeFileSync(path, encodeSnapshots(encoding, actual));
-    return { written: true, missingKeys: [], extraKeys: [], mismatched: [] };
+    writeFileSync(path, encodeSamples(actual));
+    return { written: true, keys: Object.keys(actual), mismatched: [] };
   }
-  const file = JSON.parse(readFileSync(path, "utf8")) as SnapshotFile;
-  const want = Object.keys(file.prompts);
-  const got = Object.keys(actual);
+  const file = JSON.parse(readFileSync(path, "utf8")) as SamplesFile;
   return {
     written: false,
-    missingKeys: want.filter((k) => !(k in actual)),
-    extraKeys: got.filter((k) => !(k in file.prompts)),
-    mismatched: got.filter((k) => k in file.prompts && decodePrompt(file, k) !== actual[k]),
+    keys: Object.keys(file.prompts),
+    mismatched: Object.entries(actual)
+      .map(([key, a]) => ({ key, actual: a, expected: file.prompts[key]?.join("\n") }))
+      .filter((m) => m.actual !== m.expected),
   };
-}
-
-export function readSnapshot(path: string, key: string): string | undefined {
-  return decodePrompt(JSON.parse(readFileSync(path, "utf8")) as SnapshotFile, key);
 }

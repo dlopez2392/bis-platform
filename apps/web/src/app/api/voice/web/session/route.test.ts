@@ -90,7 +90,7 @@ import { POST } from "./route";
 import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/lib/voice/web-demo";
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 import { fileURLToPath } from "node:url";
-import { checkSnapshots, readSnapshot } from "@/lib/voice/prompt-snapshots.fixture";
+import { checkSamples, digestPrompts } from "@/lib/voice/prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES } from "@/lib/tools/customer/specs";
 
 const ORIGIN = "https://bis-rgv.com";
@@ -415,9 +415,14 @@ describe("POST /api/voice/web/session — today's status and the closed days (S-
 
 // F-023 PR 4: the demo's whole instructions (prompt + webDemoNotice) as this route mints them, byte for byte:
 // trade module (none + both) × languages × after-hours setting × hours (none, open now, closed now) = 54, plus an
-// open-ended storm row × module × after-hours = 6. See lib/voice/prompt-snapshots.fixture.ts for the encoding.
+// open-ended storm row × module × after-hours = 6. Three are kept as full text (one per trade module, open and
+// closed); the other 57 are one digest. See lib/voice/prompt-snapshots.fixture.ts for how to rewrite the samples and
+// see a digest's changed text.
 describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 snapshot)", () => {
-  const FIXTURE = fileURLToPath(new URL("./route.snapshots.json", import.meta.url));
+  const FIXTURE = fileURLToPath(new URL("./route.prompt-samples.json", import.meta.url));
+  const SAMPLES = ["no-module|hours_then_message|en|open", "insurance_pc|message_only|es|closed", "events|hours_then_message|both|closed"];
+  /** sha256 (digestPrompts) over the 57 prompts that are not SAMPLES, in enumeration order: F-023 PR 4's re-baseline. */
+  const REST_DIGEST = "f3c5f3dc60248ea36c4a9803fe85465ded22220d2495785346371029713314a5";
   /** A Tuesday, 10:00 AM in Chicago. */
   const NOW = new Date("2027-06-01T15:00:00Z");
   const HOURS = { none: null, open: { tue: [["08:00", "18:00"]] }, closed: { tue: [["13:00", "18:00"]], wed: [["08:00", "12:00"]] } };
@@ -457,16 +462,16 @@ describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 
     return out;
   }
 
-  it("every combination is exactly the captured one (60 of them)", async () => {
+  it("every combination is exactly the captured one (60 of them: 3 samples in full, 57 as a digest)", async () => {
     const actual = await allMinted();
     expect(Object.keys(actual).length).toBe(60);
-    const r = checkSnapshots(FIXTURE, "lines", actual);
-    expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the fixture; run again without it").toBe(false);
-    expect(r.missingKeys).toEqual([]);
-    expect(r.extraKeys).toEqual([]);
-    const first = r.mismatched[0];
-    if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
-    expect(r.mismatched).toEqual([]);
+    const r = checkSamples(FIXTURE, Object.fromEntries(SAMPLES.map((k) => [k, actual[k]!])));
+    expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the samples; run again without it").toBe(false);
+    expect(r.keys).toEqual(SAMPLES);
+    for (const m of r.mismatched) expect.soft(m.actual, m.key).toBe(m.expected);
+    const rest = Object.entries(actual).filter(([k]) => !SAMPLES.includes(k)).map(([, p]) => p);
+    expect(rest.length).toBe(57);
+    expect.soft(digestPrompts(rest), "the 57 prompts that are not samples").toBe(REST_DIGEST);
   });
 
   // The F-023 §2 defect's regression test: this route mints `tools: []`, so the prompt may name no tool.

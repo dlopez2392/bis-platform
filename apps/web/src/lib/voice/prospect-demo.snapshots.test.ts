@@ -1,13 +1,17 @@
 // F-023 PR 4: the prospect demo's whole instructions (prompt + prospectDemoNotice), byte for byte, from the typed
 // form through buildProspectDemoSession: every trade that has a module plus one that has none × languages × open or
-// closed right now = 18 prompts. See prompt-snapshots.fixture.ts for the encoding and how to write it.
+// closed right now = 18 prompts. Three are kept as full text (one per trade, open and closed); the other 15 are one
+// digest. See prompt-snapshots.fixture.ts for how to rewrite the samples and see a digest's changed text.
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { parseProspectDemo, buildProspectDemoSession, type ProspectDemoForm } from "./prospect-demo";
-import { checkSnapshots, readSnapshot } from "./prompt-snapshots.fixture";
+import { checkSamples, digestPrompts } from "./prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES } from "../tools/customer/specs";
 
-const FIXTURE = fileURLToPath(new URL("./prospect-demo.snapshots.json", import.meta.url));
+const FIXTURE = fileURLToPath(new URL("./prospect-demo.prompt-samples.json", import.meta.url));
+const SAMPLES = ["landscaping|en|closed", "insurance|both|open", "events|es|open"];
+/** sha256 (digestPrompts) over the 15 prompts that are not SAMPLES, in enumeration order: F-023 PR 4's re-baseline. */
+const REST_DIGEST = "60c0821d7215adb365244ea9b2b45247c847f22e59c87f1e5df15a4fd87feb12";
 /** A Monday, 9:00 AM in Chicago: the weekday row decides open or closed. */
 const NOW = new Date("2026-11-16T15:00:00Z");
 
@@ -40,16 +44,16 @@ function allInstructions(): Record<string, string> {
 }
 
 describe("the prospect demo's whole instructions, byte for byte (F-023 PR 4)", () => {
-  it("every combination is exactly the captured one (18 of them)", () => {
+  it("every combination is exactly the captured one (18 of them: 3 samples in full, 15 as a digest)", () => {
     const actual = allInstructions();
     expect(Object.keys(actual).length).toBe(18);
-    const r = checkSnapshots(FIXTURE, "lines", actual);
-    expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the fixture; run again without it").toBe(false);
-    expect(r.missingKeys).toEqual([]);
-    expect(r.extraKeys).toEqual([]);
-    const first = r.mismatched[0];
-    if (first) expect(actual[first], first).toBe(readSnapshot(FIXTURE, first));
-    expect(r.mismatched).toEqual([]);
+    const r = checkSamples(FIXTURE, Object.fromEntries(SAMPLES.map((k) => [k, actual[k]!])));
+    expect(r.written, "WRITE_PROMPT_SNAPSHOTS=1 rewrote the samples; run again without it").toBe(false);
+    expect(r.keys).toEqual(SAMPLES);
+    for (const m of r.mismatched) expect.soft(m.actual, m.key).toBe(m.expected);
+    const rest = Object.entries(actual).filter(([k]) => !SAMPLES.includes(k)).map(([, p]) => p);
+    expect(rest.length).toBe(15);
+    expect.soft(digestPrompts(rest), "the 15 prompts that are not samples").toBe(REST_DIGEST);
   });
 
   // The F-023 §2 defect's regression test: the session is minted with `tools: []`, so its prompt may name no tool.
