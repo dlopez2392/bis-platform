@@ -299,6 +299,9 @@ export type Database = {
           a2p_status: string
           a2p_updated_at: string | null
           agency_id: string
+          ai_apps_changed_at: string | null
+          ai_apps_changed_by: string | null
+          ai_apps_enabled_at: string | null
           alert_phone: string | null
           brand_color: string | null
           brand_corners: string | null
@@ -339,6 +342,9 @@ export type Database = {
           a2p_status?: string
           a2p_updated_at?: string | null
           agency_id: string
+          ai_apps_changed_at?: string | null
+          ai_apps_changed_by?: string | null
+          ai_apps_enabled_at?: string | null
           alert_phone?: string | null
           brand_color?: string | null
           brand_corners?: string | null
@@ -379,6 +385,9 @@ export type Database = {
           a2p_status?: string
           a2p_updated_at?: string | null
           agency_id?: string
+          ai_apps_changed_at?: string | null
+          ai_apps_changed_by?: string | null
+          ai_apps_enabled_at?: string | null
           alert_phone?: string | null
           brand_color?: string | null
           brand_corners?: string | null
@@ -419,6 +428,13 @@ export type Database = {
             columns: ["agency_id"]
             isOneToOne: false
             referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "accounts_ai_apps_changed_by_fkey"
+            columns: ["ai_apps_changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -5571,6 +5587,16 @@ export type Database = {
           p_kind: string
           p_record_id: string
           p_session: string
+        }
+        Returns: string
+      }
+      note_ai_app_read: {
+        Args: {
+          p_account_id: string
+          p_actor: string
+          p_actor_name: string
+          p_kind: string
+          p_request_id: string
         }
         Returns: string
       }
