@@ -51,12 +51,17 @@ function audiencesOf(token: string): string[] {
 
 /**
  * `verifyClerkToken` checks no audience (spike §7.4), so this does. Anywhere: an `aud` that names anything but this
- * endpoint is refused (a token minted for another OAuth client of the same Clerk instance). In production the `aud`
- * must also be present (Clerk's MCP setup turns the claim on, plan §6 step 1); the development instance issues none.
+ * endpoint is refused (a token minted for another OAuth client of the same Clerk instance). The `aud` must also be
+ * PRESENT when either signal says production: VERCEL_ENV is production, or the Clerk secret key is a live one (Clerk's
+ * MCP setup on the production instance turns the claim on, plan §6 step 1). The development instance issues none.
+ * Presence reads only, never a parse (no env value is handed to code that can throw).
  */
+function audienceRequired(env: NodeJS.ProcessEnv): boolean {
+  return env.VERCEL_ENV === "production" || (env.CLERK_SECRET_KEY ?? "").startsWith("sk_live_");
+}
 function audienceAllowed(aud: string[], resourceUrl: string, env: NodeJS.ProcessEnv): boolean {
   if (aud.some((a) => a !== resourceUrl)) return false;
-  return env.VERCEL_ENV === "production" ? aud.length > 0 : true;
+  return audienceRequired(env) ? aud.length > 0 : true;
 }
 
 export type McpCaller = { clerkUserId: string; authInfo: AuthInfo };

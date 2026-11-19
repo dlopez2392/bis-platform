@@ -103,7 +103,7 @@ describe.skipIf(!SECRET)("the MCP runner reads only the asking person's own busi
     expect(await readAiAppLog(serviceDb(), B.id, 100)).toEqual([]);
   });
 
-  it("A's switch turned off stops the next read in the database itself", async () => {
+  it("turning A's switch off stops the next read at the app's own switch read, before any write (note_ai_app_read's own refusal is PR A's test)", async () => {
     await setAiAppsSwitch(serviceDb(), A.id, false, A.ownerId);
     expect(await asA("needs_attention")).toMatchObject({ ok: false, error: "no_business" });
   });

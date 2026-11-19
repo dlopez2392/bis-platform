@@ -112,6 +112,7 @@ const nothingRead = () => {
 
 beforeEach(() => {
   vi.stubEnv("VERCEL_ENV", "");
+  vi.stubEnv("CLERK_SECRET_KEY", "sk_test_fixture");
   h.accounts.clear(); h.users.clear(); h.switchOn.clear();
   h.authenticate.mockReset().mockImplementation(async (req: Request) =>
     oauthState((req.headers.get("authorization") ?? "").replace(/^Bearer /, "")));
@@ -169,6 +170,19 @@ describe("sign-in: a request without a valid OAuth access token is 401, pointing
     expect(res.headers.get("www-authenticate")).toBe(PRM);
   });
 
+  it("a refused token is logged by the error's class only, never the token or Clerk's message (mutation: log String(e) or the Authorization header -> FAILS)", async () => {
+    const secret = jwt({ sub: ME, note: "tok-secret-bytes" });
+    h.authenticate.mockRejectedValue(new SyntaxError("Unexpected end of data near tok-secret-bytes"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await post(rpc("tools/list", {}), { token: secret })).status).toBe(401);
+    const logged = err.mock.calls.flat().map(String).join(" ");
+    expect(logged).toContain("SyntaxError");
+    expect(logged).not.toContain("Unexpected end of data");
+    expect(logged).not.toContain("tok-secret-bytes");
+    expect(logged).not.toContain(secret);
+    expect(logged).not.toContain("Bearer");
+  });
+
   it("a token Clerk verified with no user id is refused (mutation: accept any bearer -> FAILS)", async () => {
     h.authenticate.mockResolvedValue({ ...oauthState(TOKEN), toAuth: () => ({ isAuthenticated: true, tokenType: "oauth_token",
       userId: null, clientId: "client_1", scopes: ["profile"] }) });
@@ -205,6 +219,19 @@ describe("the token's audience, read from the token Clerk verified (plan §3.2 s
     }
   });
 
+  it("a LIVE Clerk secret key requires aud too, whatever VERCEL_ENV says (mutation: drop the sk_live_ signal -> FAILS)", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_live_fixture");
+    expect((await list(jwt({ sub: ME }))).status).toBe(401);
+    expect((await list(jwt({ sub: ME, aud: RESOURCE }))).status).toBe(200);
+  });
+
+  it("VERCEL_ENV production alone, with a development Clerk key, still requires aud (mutation: drop the VERCEL_ENV signal -> FAILS)", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_test_fixture");
+    expect((await list(jwt({ sub: ME }))).status).toBe(401);
+  });
+
   it("outside production a token with no aud is accepted, the development instance issues none, spike §7.4 (mutation: require aud everywhere -> FAILS)", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     expect((await list(jwt({ sub: ME }))).status).toBe(200);
@@ -214,6 +241,27 @@ describe("the token's audience, read from the token Clerk verified (plan §3.2 s
     vi.stubEnv("VERCEL_ENV", "production");
     h.authenticate.mockResolvedValue(oauthState(jwt({ sub: ME, aud: RESOURCE })));
     expect((await list(jwt({ sub: ME, aud: "https://other.example/api" }))).status).toBe(401);
+  });
+});
+
+describe("a JSON-RPC batch is refused (MCP 2025-06-18 dropped batching; plan §3.5)", () => {
+  it("a POST whose body is a JSON array is 400 with a JSON-RPC error, before Clerk or the database is asked (mutation: let the SDK take the batch -> FAILS)", async () => {
+    setMemberships(member(A));
+    const batch = [rpc("tools/call", { name: "needs_attention", arguments: {} }), rpc("tools/call", { name: "needs_attention", arguments: {} })];
+    const res = await post(batch);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { jsonrpc: string; error: { code: number; message: string }; id: null };
+    expect(body).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32600 } });
+    expect(h.authenticate).not.toHaveBeenCalled();
+    expect(h.memberships).not.toHaveBeenCalled();
+    expect(h.note).not.toHaveBeenCalled();
+    nothingRead();
+  });
+
+  it("a single message is still served, its body intact after the check (mutation: consume the body in the check -> FAILS)", async () => {
+    const res = await post(rpc("tools/list", {}));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { result: { tools: unknown[] } }).result.tools).toHaveLength(fixture.length);
   });
 });
 
@@ -418,6 +466,25 @@ describe("the read itself (plan §3.3)", () => {
     setMemberships(member(A));
     h.reads.lookupCustomer.mockResolvedValue({ ok: true, count: 0, matches: [] });
     expect((await call("lookup_customer", { term: "Nobody" })).text).toBe('{"ok":true,"count":0,"matches":[]}');
+  });
+
+  it("a switch read that throws is couldnt_read, nothing noted and nothing read (mutation: treat a failed switch read as on -> FAILS)", async () => {
+    setMemberships(member(A));
+    h.readSwitch.mockRejectedValue(new Error("readAiAppsSwitch failed: boom"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await call("needs_attention")).out).toEqual({ ok: false, error: "couldnt_read" });
+    expect(h.note).not.toHaveBeenCalled();
+    nothingRead();
+    expect(err.mock.calls.flat().join(" ")).not.toContain("boom");
+  });
+
+  it("a membership read that throws is couldnt_read, never no_business, nothing noted and nothing read (mutation: treat a failed membership read as none -> FAILS)", async () => {
+    h.memberships.mockRejectedValue(new Error("listMyMemberships failed: boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await call("my_businesses")).out).toEqual({ ok: false, error: "couldnt_read" });
+    expect((await call("needs_attention")).out).toEqual({ ok: false, error: "couldnt_read" });
+    expect(h.note).not.toHaveBeenCalled();
+    nothingRead();
   });
 
   it("a read that throws is couldnt_read, logged by class only, never its message (mutation: log the thrown error itself -> FAILS)", async () => {

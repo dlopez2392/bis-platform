@@ -58,7 +58,9 @@ review tray are a later slice (S-33's second half), not this plan.
 - Libraries (read 2026-11-19 on npm): `@clerk/mcp-tools` 0.9.0 (needs `@modelcontextprotocol/sdk` ^1.29,
   `@clerk/nextjs` ^7.2.3, `next` ^16.1; the app has `@clerk/nextjs` ^7.6.1, `next` 16.3.6).
   `mcp-handler` 2.x moved to `@modelcontextprotocol/server` 2.x and 1.1.0 pins sdk 1.26.0, so neither matches
-  Clerk's ^1.29: the route uses `McpServer` + `WebStandardStreamableHTTPServerTransport`
+  Clerk's ^1.29: the route uses the SDK's low-level `Server` (not `McpServer`, whose `registerTool` takes only zod
+  schemas and writes its own JSON Schema, so `tools/list` could not carry the staff specs byte for byte) +
+  `WebStandardStreamableHTTPServerTransport`
   (`{ sessionIdGenerator: undefined, enableJsonResponse: true }`, `handleRequest(req, { authInfo })`), one
   server and transport per request, and no `mcp-handler` (proven under `next start`, §7.5).
 - `/api/mcp` is taken OUT of both entries of `proxy.ts`'s matcher (it is matched today, and a malformed
@@ -72,8 +74,8 @@ The OAuth token proves a Clerk user id and nothing else. It carries no org, no r
 about WHICH business and WHAT role is read fresh from BIS's own tables on every request:
 
 1. The token → `clerkUserId`, or 401. A Clerk session JWT is refused (§7.3, pinned by a test).
-   `verifyClerkToken` checks no audience, so the route does: when `MCP_RESOURCE_URL` is https (production),
-   `aud` must be present and equal it; a token with an `aud` naming anything else is refused everywhere.
+   `verifyClerkToken` checks no audience, so the route does against the app origin (`APP_ORIGIN`) + `/api/mcp`:
+   when `VERCEL_ENV` is production or the Clerk secret key is live (`sk_live_`), `aud` must be present and equal it; a token with an `aud` naming anything else is refused everywhere.
    Tokens live 24 h, cannot be revoked and outlive the person's Clerk deletion (§7.4), so steps 2-3 on EVERY
    request are the control, never the token.
 2. `listMyMemberships(serviceDb(), clerkUserId)` → memberships, filtered to `OWNER_LINE_ROLES` and to accounts
@@ -129,7 +131,8 @@ Per person: 60 tool calls per rolling 10 minutes and 500 per rolling 24 hours ac
 the access log's own rows (no new table), checked inside `note_ai_app_read` under a per-person advisory lock, so the count and the
 write are one serial step per person (the owner line's own cap also lives in SQL: `owner_line_session_check`'s `p_max`). Over →
 `{ ok:false, error:"rate_limited" }` with a retry hint. A read that a client loops on cannot run up the
-database.
+database. A POST carrying a JSON-RPC batch is refused (400, before Clerk or the database), since a refusal writes no
+log row and so is never counted.
 
 ### 3.6 Turning it on (PR C, UI)
 
@@ -174,8 +177,8 @@ the production click is skipped only when the migrations AND pipeline files are 
 ## 5. Tests that must fail on broken code (mutation probes in B's review)
 
 - No token / bad token / session token → 401 with `resource_metadata`; probe: accept any bearer → FAILS.
-- Person with an Owner membership in A only asks with `business` = B's id → `choose_business` with A only,
-  byte-identical to the omitted-argument answer; probe: skip the membership filter → FAILS.
+- With two allowed businesses: naming B gives the same bytes as omitting it; B's real id, a made-up id and a typo
+  give identical bytes; probe: skip the membership filter → FAILS.
 - Technician of A → `no_business`; probe: drop the role filter → FAILS.
 - A's switch off → `no_business`, and switching it off between two calls stops the second; probe: read the
   switch once per process → FAILS.

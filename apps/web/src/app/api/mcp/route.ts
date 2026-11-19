@@ -10,7 +10,26 @@ import { errorClass } from "@/lib/tools/belt";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * MCP 2025-06-18 dropped JSON-RPC batching, and a refusal (choose_business, no_business, unknown_tool) writes no
+ * access-log row, so a batch of refusals would never meet the rate limit (plan §3.5). A body that is a JSON array is
+ * refused here, before Clerk or the database is asked. Read from a CLONE, so the transport still reads the body itself
+ * (a body that is not JSON goes on to it, and it answers that with its own parse error). The SDK's own client sends one
+ * message per POST, on every protocol version it negotiates.
+ */
+async function isBatch(req: Request): Promise<boolean> {
+  try {
+    return Array.isArray(JSON.parse(await req.clone().text()));
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: Request): Promise<Response> {
+  if (await isBatch(req)) {
+    return Response.json({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid Request: batches are not supported" }, id: null },
+      { status: 400 });
+  }
   const caller = await authenticateMcp(req, mcpResourceUrl(req));
   if (!caller) return unauthorized(req);
   try {
