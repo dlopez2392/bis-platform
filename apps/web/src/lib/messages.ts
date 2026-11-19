@@ -8757,6 +8757,14 @@ export const m = {
   "automations.review.openLinkNewTab": "(opens in a new tab)",
   "automations.review.counts.empty": "No check-ins sent yet. When one goes out, the answers show up here.",
   "automations.review.counts.error": "Could not load the check-in counts. Reload the page to try again.",
+  // The read-only MCP server (plan 2026-11-19-mcp-server.md §3.2, §3.5): the words a person's own AI app (Claude,
+  // ChatGPT) relays when BIS cannot answer. In the person's own language. No business is named that they may not ask about.
+  "mcp.noBusiness": "You can't ask about a business here yet. Ask the business's Owner to switch on AI apps in Settings.",
+  "mcp.noBusiness.es": "Todavía no puede preguntar por un negocio aquí. Pídale al Dueño del negocio que active las apps de IA en Ajustes.",
+  "mcp.chooseBusiness": "Which business? Ask again with one of these.",
+  "mcp.chooseBusiness.es": "¿Cuál negocio? Pregunte otra vez con uno de estos.",
+  "mcp.rateLimited": "That's a lot of questions in a short time. Try again in a few minutes.",
+  "mcp.rateLimited.es": "Son muchas preguntas en poco tiempo. Intente de nuevo en unos minutos.",
 } as const;
 
 export type MessageKey = keyof typeof m;

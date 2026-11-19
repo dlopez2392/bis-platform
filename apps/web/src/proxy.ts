@@ -53,7 +53,15 @@ export default clerkMiddleware(async (auth, req) => {
  *
  * `/r/<token>` (F-072) is the customer's after-the-job check-in page, no sign-in, same reason as `/u`. Its presses
  * are server actions posted to the page's own path, which this exclusion covers.
+ *
+ * `/api/mcp` (the read-only MCP server, plan 2026-11-19-mcp-server.md §3.1) is out of BOTH entries: its bearer is an
+ * OAuth token the route verifies itself, and clerkMiddleware answers a malformed three-part bearer (`a.b.c`) with a 500
+ * before any route runs (spike §7.3). Only the endpoint itself: `/api/mcpx` still runs. Its OAuth metadata
+ * (`/.well-known/oauth-…`) is public and is named in the first entry too, though the `.*\..*` clause already skips it.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|r/|brief/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: [
+    "/((?!_next|api/mcp(?:/|$)|\\.well-known/oauth-|c/|f/|b/|u/|d/|s/|r/|brief/|.*\\..*).*)",
+    "/(api(?!/mcp(?:/|$))|trpc)(.*)",
+  ],
 };

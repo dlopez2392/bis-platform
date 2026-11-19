@@ -1,7 +1,7 @@
 // apps/web/src/lib/tools/belt.test.ts
 // F-023: the belt's transport shapes and its one guard (plan §3.1).
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { realtimeShape, chatShape, runOffered, errorClass, type ToolSpec } from "./belt";
+import { realtimeShape, chatShape, mcpShape, MCP_BUSINESS_PARAMETER, runOffered, errorClass, type ToolSpec } from "./belt";
 
 // Keys deliberately NOT in the order the transports want, so an output that copied the spec's own order fails.
 const SPEC = {
@@ -24,6 +24,22 @@ describe("chatShape: the gateway's AiTool", () => {
     expect(JSON.stringify(chatShape(SPEC))).toBe(
       '{"type":"function","function":{"name":"calls_and_messages","description":"What happened today.",'
       + '"parameters":{"type":"object","properties":{"range":{"type":"string"}},"required":["range"]}}}');
+  });
+});
+
+describe("mcpShape: an MCP tools/list entry (plan 2026-11-19-mcp-server.md §3.3)", () => {
+  it("is name, description, inputSchema (the spec's parameters plus an optional business), read-only, in that key order (mutation: put business first, or drop readOnlyHint -> FAILS)", () => {
+    expect(JSON.stringify(mcpShape(SPEC))).toBe(
+      '{"name":"calls_and_messages","description":"What happened today.",'
+      + '"inputSchema":{"type":"object","properties":{"range":{"type":"string"},'
+      + `"business":${JSON.stringify(MCP_BUSINESS_PARAMETER)}},"required":["range"]},`
+      + '"annotations":{"readOnlyHint":true}}');
+  });
+
+  it("never makes business required, and leaves the spec itself untouched (mutation: push business into required -> FAILS)", () => {
+    const before = JSON.stringify(SPEC);
+    expect(mcpShape(SPEC).inputSchema.required).toEqual(["range"]);
+    expect(JSON.stringify(SPEC)).toBe(before);
   });
 });
 
