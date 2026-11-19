@@ -1,6 +1,6 @@
 # Ask your business from your own AI app: the read-only MCP server (focus row 13)
 
-Status: plan, 2026-11-19. Tier: HIGH (auth and tenancy: a token from outside the app reads one business's
+Status: plan, 2026-11-19; spike done the same day (§7), its findings folded into §3. Tier: HIGH (auth and tenancy: a token from outside the app reads one business's
 customers). Focus list row 13. `docs/crm-features.md` S-33 (line 1594: "the spike rules out agency-admin
 tokens"), line 3023 ("reads answer at once, writes become proposals; the auth spike proves tokens are scoped to
 one client organisation"). Builds on F-023 (`lib/tools/staff`, #393, #395).
@@ -45,34 +45,37 @@ review tray are a later slice (S-33's second half), not this plan.
 - One route, `apps/web/src/app/api/mcp/route.ts`: MCP Streamable HTTP, STATELESS (no session store; every POST
   carries its bearer token and is checked from zero). GET and DELETE answer 405, as the spec allows a stateless
   server to.
-- Clerk is the OAuth authorization server. The production Clerk instance (`clerk.app.bis-rgv.com`) and the
-  development instance each need **Dynamic client registration** switched on (Clerk dashboard → OAuth
-  applications). The development instance is switched by the spike (§4 PR 0); production is danlo's click
-  (§6), after PR C merges. ASSUMPTION until the spike: Clerk issues OAuth access tokens to dynamically
-  registered clients with the `profile`/`email` scopes and `verifyClerkToken` (`@clerk/mcp-tools`) returns the
-  Clerk user id.
-- `/.well-known/oauth-protected-resource/mcp` (and the root form, for clients that ask there) answers the
-  protected-resource metadata naming the Clerk issuer; `/.well-known/oauth-authorization-server` answers Clerk's
-  metadata. Both from `@clerk/mcp-tools/next`. A request with no token, a bad token or an expired one gets 401
+- Clerk is the OAuth authorization server. Development: dynamic client registration switched on by the spike
+  (§7.1, Backend API). Production (danlo, §6): Clerk's MCP setup with resource
+  `https://app.bis-rgv.com/api/mcp`, which turns on the `aud` claim and Clerk's client registration for MCP
+  (decided 2026-11-19, the spike's recommendation). Tokens are JWTs, scopes `profile email offline_access`.
+- `/.well-known/oauth-protected-resource/api/mcp` (and the root form) answers the protected-resource metadata,
+  built with `generateClerkProtectedResourceMetadata({ publishableKey, resourceUrl: origin + "/api/mcp" })` so
+  `resource` names the endpoint (`protectedResourceHandlerClerk` would name the bare origin);
+  `/.well-known/oauth-authorization-server` answers Clerk's metadata (`authServerMetadataHandlerClerk`), with
+  `metadataCorsOptionsRequestHandler` for OPTIONS. A request with no token, a bad token or an expired one gets 401
   with `WWW-Authenticate: Bearer resource_metadata="…"`, so the client starts the sign-in.
 - Libraries (read 2026-11-19 on npm): `@clerk/mcp-tools` 0.9.0 (needs `@modelcontextprotocol/sdk` ^1.29,
   `@clerk/nextjs` ^7.2.3, `next` ^16.1; the app has `@clerk/nextjs` ^7.6.1, `next` 16.3.6).
   `mcp-handler` 2.x moved to `@modelcontextprotocol/server` 2.x and 1.1.0 pins sdk 1.26.0, so neither matches
-  Clerk's ^1.29: the route uses the SDK's own web-standard Streamable HTTP server transport directly (stateless
-  mode) and no `mcp-handler`. The spike confirms the transport's class name and that it runs on Vercel's Node
-  runtime; if it cannot, the fallback is `mcp-handler` 1.1.0 with an sdk override, decided in the spike notes.
-- `proxy.ts` protects only `/dashboard(.*)`, so `/api/mcp` and `/.well-known/*` pass Clerk's middleware
-  untouched. A test pins that `/api/mcp` is not in the protected matcher AND that the route itself refuses
-  without a token (the middleware is not the control).
+  Clerk's ^1.29: the route uses `McpServer` + `WebStandardStreamableHTTPServerTransport`
+  (`{ sessionIdGenerator: undefined, enableJsonResponse: true }`, `handleRequest(req, { authInfo })`), one
+  server and transport per request, and no `mcp-handler` (proven under `next start`, §7.5).
+- `/api/mcp` is taken OUT of both entries of `proxy.ts`'s matcher (it is matched today, and a malformed
+  three-part bearer makes `clerkMiddleware` throw → 500, §7.3). The route authenticates itself:
+  `(await clerkClient()).authenticateRequest(req, { acceptsToken: "oauth_token" })`, then
+  `verifyClerkToken(state.toAuth(), token)`. Tests pin the exclusion and `Bearer a.b.c` → 401.
 
 ### 3.2 The token is only a person
 
 The OAuth token proves a Clerk user id and nothing else. It carries no org, no role, no account. Everything
 about WHICH business and WHAT role is read fresh from BIS's own tables on every request:
 
-1. `verifyClerkToken` → `clerkUserId`, or 401. A token Clerk did not issue to an OAuth client (a session JWT,
-   an M2M token) is refused: the spike records which token types `verifyClerkToken` accepts and PR B pins the
-   refusal of a session token with a test.
+1. The token → `clerkUserId`, or 401. A Clerk session JWT is refused (§7.3, pinned by a test).
+   `verifyClerkToken` checks no audience, so the route does: when `MCP_RESOURCE_URL` is https (production),
+   `aud` must be present and equal it; a token with an `aud` naming anything else is refused everywhere.
+   Tokens live 24 h, cannot be revoked and outlive the person's Clerk deletion (§7.4), so steps 2-3 on EVERY
+   request are the control, never the token.
 2. `listMyMemberships(serviceDb(), clerkUserId)` → memberships, filtered to `OWNER_LINE_ROLES` and to accounts
    whose AI-app switch is on (§3.4). Empty → every tool answers `{ ok: false, error: "no_business" }` with one
    sentence telling the person how to get access ("Ask the business's Owner to switch on AI apps in Settings").
@@ -154,8 +157,7 @@ A ships before B (B calls A's function). PR A adds the migration and changes no 
 the production click is skipped only when the migrations AND pipeline files are byte-identical, CLAUDE.md).
 
 **PR 0, the spike, must prove (each a line in §7, with what was run):**
-1. Clerk development instance: switch on dynamic client registration (Clerk MCP `patch_instance_config` on the
-   DEVELOPMENT instance only, after `get_instance_config` + `dry_run`; never production).
+1. Clerk development instance: switch on dynamic client registration (DEVELOPMENT only; never production).
 2. Local app (`pnpm --filter web dev` on bis-ci) + `claude mcp add --transport http bis-local
    http://localhost:3000/api/mcp`: the 401 starts OAuth, the browser sign-in with a bis-ci test user succeeds,
    the token arrives, `verifyClerkToken` returns the user id.
@@ -188,8 +190,8 @@ the production click is skipped only when the migrations AND pipeline files are 
 
 ## 6. Done when (danlo, after B and C merge)
 
-1. danlo switches on Dynamic client registration on the PRODUCTION Clerk instance (dashboard click; agents
-   never change production Clerk).
+1. danlo sets up MCP on the PRODUCTION Clerk instance with resource `https://app.bis-rgv.com/api/mcp` (Clerk
+   dashboard; agents never change production Clerk), then confirms tokens carry that `aud`.
 2. On BIS's own account: Settings → AI apps → on.
 3. claude.ai → Settings → Connectors → Add custom connector → `https://app.bis-rgv.com/api/mcp` → sign in →
    ask "who called today?" and "what's the latest with" a real customer, then a made-up name ("I don't see that
@@ -200,4 +202,77 @@ the production click is skipped only when the migrations AND pipeline files are 
 
 ## 7. Spike notes
 
-(PR 0 fills this in.)
+Run 2026-11-19 on branch `spike/mcp-auth` (from main 98659526), throwaway code under `apps/web/spike/`,
+`apps/web/src/app/api/mcp/route.ts`, `apps/web/src/app/.well-known/**` and a matcher change in `proxy.ts`. Env:
+the main checkout's `apps/web/.env.local` (Clerk DEVELOPMENT instance `topical-redfish-40`, bis-ci) loaded into
+the process by `spike/with-env.mjs` (`process.loadEnvFile` in a launcher that spawns `next`, refusing a
+production ref); no `.env` file in the worktree. `node --env-file` does not work for `next dev` (Next copies
+it into NODE_OPTIONS, where Node forbids it). Versions: `@clerk/mcp-tools` 0.9.0, `@modelcontextprotocol/sdk`
+1.32.2 (resolved from ^1.29), `@clerk/nextjs` 7.6.1, `@clerk/testing` 2.x, `next` 16.3.6, Playwright 1.62.
+
+**1. DCR on the development instance: PROVEN, but not through `patch_instance_config`.** The Clerk MCP's
+instance config schema has no OAuth-application key (`get_instance_config_schema` lists 51 top-level keys, none
+for OAuth applications), so `patch_instance_config` cannot switch it. `check_mcp_server` READS the settings
+(`dynamic_oauth_client_registration:false`, `aud_claim_enabled:false`, `pkce_required:false` on dev). Clerk's
+`configure_mcp_server` (registers an MCP resource URL, turns on the audience claim and CIMD registration, not
+DCR) refused `http://localhost:3000/api/mcp`: "resource_url must use https." So the switch went through the
+Backend API with the DEV secret key (script `spike/oauth-settings.mjs`, refuses unless the key is `sk_test_`
+and the publishable key decodes to `topical-redfish-40`): `GET /v1/instance/oauth_application_settings` →
+200, `dynamic_oauth_client_registration:false` (the "dry run"); `PATCH` with `{dynamic_oauth_client_registration:
+true}` → 200, `true`. Production was only READ (`check_mcp_server instance=production`): DCR false,
+`pkce_required:true`, unchanged. Gap reported to Clerk (`submit_feedback` fbk_3MKXcn4DZnGI1u8kfU9KBR6AHIo).
+
+**2. Route + OAuth end to end with no human: PROVEN** (`spike/oauth-e2e.mjs`, against `next dev` and again
+against `next start`). `POST /api/mcp` no token → 401, `WWW-Authenticate: Bearer resource_metadata=
+"…/.well-known/oauth-protected-resource/api/mcp"` → PRM names `https://topical-redfish-40.clerk.accounts.dev` →
+its `/.well-known/oauth-authorization-server` → `registration_endpoint` `/oauth/register`. DCR (public client,
+`token_endpoint_auth_method:none`) → 201, scope `email offline_access profile`, no secret. Throwaway user
+`e2e-client-<13 digits>@example.com` (the e2e sweep's own shape), signed in by ticket with a testing token.
+Authorize with PKCE S256 → the app's localhost session does NOT carry over: Clerk sends the browser to the
+Account Portal (`topical-redfish-40.accounts.dev/sign-in`); a second ticket sign-in there, then
+`/oauth-consent` with **Allow / Deny** buttons. Playwright clicks Allow; nothing blocked automation (one trap:
+`setupClerkTestingToken`'s route re-fetches FAPI calls and follows the 303 itself, so the callback needs a real
+listener, not `context.route`). Callback state matches, code exchange → 200. Then with the access token:
+`initialize` 200 (protocol 2025-06-18), `tools/list` 200 (`whoami` only), `tools/call whoami` 200 returning
+exactly the throwaway user's id. The user is deleted by the script.
+Exported names that worked: `verifyClerkToken`, `protectedResourceHandlerClerk`, `authServerMetadataHandlerClerk`,
+`metadataCorsOptionsRequestHandler` from `@clerk/mcp-tools/next`; `McpServer` (`…/sdk/server/mcp.js`,
+`registerTool`, the handler's `extra.authInfo`); `WebStandardStreamableHTTPServerTransport`
+(`…/sdk/server/webStandardStreamableHttp.js`, `{ sessionIdGenerator: undefined, enableJsonResponse: true }`,
+`handleRequest(req, { authInfo })`), one server + transport per request. Not run: `claude mcp add` (Claude
+Code's own client needs a person to click Allow); the script runs the same RFC 9728/8414/7591/7636 steps.
+
+**3. Session token and bad tokens: PROVEN refused.** Clerk SESSION JWT as bearer → 401. `garbage` → 401.
+No bearer → 401. The real access token with `exp` edited into the past (signature no longer matches) → 401.
+A genuinely expired OAuth token was not waited for (lifetime 24 h). **Finding:** with the app's matcher as it
+is, a three-part malformed bearer (`a.b.c`, `garbage.token.value`) makes `clerkMiddleware` throw
+`SyntaxError: Unexpected end of data` → **500** before any route runs, on EVERY matched path (`/`,
+`/dashboard`, `/api/nope`; reproduced under `next start`). Pre-existing, fails closed, not MCP-specific. The
+spike excludes `/api/mcp` from both matcher entries and authenticates in the route with
+`(await clerkClient()).authenticateRequest(req, { acceptsToken: "oauth_token" })` then
+`verifyClerkToken(state.toAuth(), token)`: `a.b.c` on `/api/mcp` → 401.
+
+**4. Token shape, scopes, audience: RECORDED.** Access tokens are JWTs (`oauth_jwt_access_tokens:true`),
+claims `client_id, exp, iat, iss, jti, nbf, scope, sub`; **no `aud`** (the `resource` parameter sent on
+authorize and token is ignored while `aud_claim_enabled` is false), lifetime 86 400 s, refresh token issued
+(`offline_access` is added by DCR's default). `verifyClerkToken(auth, token)` does NOT verify anything itself: it
+reads the `auth` object (`isAuthenticated`, `tokenType === "oauth_token"`, `clientId`, `scopes`, `userId`) and
+never looks at an audience, so any OAuth token this Clerk instance issued to ANY client would be accepted.
+Revocation: `POST /oauth/token/revoke` → 400 `unsupported_token_type`, "JWT access tokens cannot be revoked";
+the token still works after. **A deleted Clerk user's access token still answers `whoami` (200)**; only its
+refresh fails (400). So for up to 24 h the token outlives the person in Clerk: §3.2's per-request membership
+read from BIS's tables is the actual control, not the token.
+
+**5. Built server: PROVEN.** `next build` (with the env launcher) exit 0, compiled in 27 s, routes listed:
+`ƒ /api/mcp`, `ƒ /.well-known/oauth-protected-resource`, `ƒ /.well-known/oauth-protected-resource/api/mcp`,
+`ƒ /.well-known/oauth-authorization-server`. `next start` → the whole script again: `initialize` 200,
+`tools/list` 200, `whoami` 200 with the right user, every negative case as in 3. `GET /api/mcp` → 405. No
+memory trouble. Vercel's own runtime was not run (no bypass secret; as planned).
+
+**6. claude.ai: NOT RUN, as planned.** claude.ai's connector reaches only a public https URL; Preview sits
+behind Vercel Authentication and this repo has no protection-bypass secret, so the first claude.ai check is
+production (§6). Recorded, not worked around.
+
+**Folded into §3.1-§3.2 above** (matcher exclusion, in-route authentication, PRM path, audience check,
+token lifetime). Separate, pre-existing: any matched route answers 500 to `Authorization: Bearer a.b.c`; worth
+its own small fix, not in this plan.
