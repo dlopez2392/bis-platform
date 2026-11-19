@@ -201,6 +201,14 @@ describe("ai_apps: the switch starts off and moves only with its record (D2)", (
       await expect(c.query("update accounts set ai_apps_enabled_at = now() where id = $1", [s.a])).rejects.toMatchObject(RECORD);
     }));
 
+  it("rewriting who switched it, without moving it, to a Staff member is refused (review m2; probe: the trigger's WHEN back to ai_apps_enabled_at alone -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await ready(c);
+      await expect(c.query(
+        "update accounts set ai_apps_changed_at = clock_timestamp(), ai_apps_changed_by = $2 where id = $1", [s.a, s.staff.id],
+      )).rejects.toMatchObject(OWNER_ONLY);
+    }));
+
   it("a Staff member's id is not an Owner's: refused (D2; probe: drop the role = 'owner' test -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);

@@ -86,7 +86,7 @@ export async function setAiAppsSwitch(
  * The last `limit` (1 to 100) AI-app reads on this business, newest first: who (the stored name, null when there was
  * none), which read, when. Kinds and times only, never what was read (D4). On the READER's request client: the access
  * log's RLS returns rows to the agency and this account's Owner only, [] to anyone else (plan 3.4: Owner only).
- * Two reads, visits then their items: each visit has exactly one item, written in the same statement.
+ * Two reads, visits then their items: each visit has exactly one item, written in the same transaction.
  */
 export async function readAiAppLog(db: SupabaseClient, accountId: string, limit: number): Promise<AiAppLogRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {

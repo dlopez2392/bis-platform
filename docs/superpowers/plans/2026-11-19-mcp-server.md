@@ -126,8 +126,8 @@ fixture like `owner-tool-schemas.fixture.json`, so a word change to a staff tool
 ### 3.5 Limits
 
 Per person: 60 tool calls per rolling 10 minutes and 500 per rolling 24 hours across businesses, counted from
-the access log's own rows (no new table), checked inside `note_ai_app_read` so the count and the write are one
-statement (the owner line's own cap also lives in SQL: `owner_line_session_check`'s `p_max`). Over →
+the access log's own rows (no new table), checked inside `note_ai_app_read` under a per-person advisory lock, so the count and the
+write are one serial step per person (the owner line's own cap also lives in SQL: `owner_line_session_check`'s `p_max`). Over →
 `{ ok:false, error:"rate_limited" }` with a retry hint. A read that a client loops on cannot run up the
 database.
 

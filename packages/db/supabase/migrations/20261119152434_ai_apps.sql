@@ -93,7 +93,9 @@
 --   re-run 0115's note_agency_open (its section 3) as create or replace, with its revoke and grant lines;
 --   re-run 0105's agency_visit_live as create or replace, with its revoke and grant lines;
 --   drop index public.agency_visits_ai_app_rate;
---   by OWNER DECISION ONLY (it deletes access-log rows): delete from public.agency_visits where actor_kind = 'ai_app';
+--   REQUIRED before the CHECKs below can be restored (0115's lists refuse any ai_app row), so a rollback deletes
+--   every AI-app access-log entry; that is the OWNER'S decision to make before anyone starts it:
+--   delete from public.agency_visits where actor_kind = 'ai_app';
 --   alter table public.agency_visits drop constraint agency_visits_ai_app_check;
 --   restore 0115's agency_visit_items_kind_check, agency_visits_actor_kind_check and agency_visits_reason_check;
 --   drop trigger accounts_ai_apps_switch_record on public.accounts; drop function app.ai_apps_switch_record_guard();
@@ -171,7 +173,13 @@ begin
 end $$;
 revoke all on function app.ai_apps_switch_record_guard() from public, anon, authenticated, service_role;
 create trigger accounts_ai_apps_switch_record before update on public.accounts
-  for each row when (old.ai_apps_enabled_at is distinct from new.ai_apps_enabled_at)
+  -- Fires when the switch moves AND when a new who or a new when is written without moving it (review m2: else
+  -- the record could be rewritten to name a Staff member). Not on the two ways a column may go NULL by itself: the
+  -- FK's on delete set null (who forgotten) and clearing the time, which accounts_ai_apps_on_has_record_check
+  -- refuses while the switch is on.
+  for each row when (old.ai_apps_enabled_at is distinct from new.ai_apps_enabled_at
+    or (new.ai_apps_changed_by is not null and new.ai_apps_changed_by is distinct from old.ai_apps_changed_by)
+    or (new.ai_apps_changed_at is not null and new.ai_apps_changed_at is distinct from old.ai_apps_changed_at))
   execute function app.ai_apps_switch_record_guard();
 
 -- 2. The access log learns ai_app_read (D4). Each list is 0115 section 3's, plus the new values.

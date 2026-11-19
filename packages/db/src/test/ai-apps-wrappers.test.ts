@@ -182,7 +182,7 @@ describe("readAiAppLog", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("a visit without its item throws: every note_ai_app_read writes both in one statement", async () => {
+  it("a visit without its item throws: every note_ai_app_read writes both in one transaction", async () => {
     const { db } = fake([ok(VISITS), ok([ITEMS[1]])]);
     await expect(readAiAppLog(db, "acct_1", 20)).rejects.toThrow("readAiAppLog: visit v1 has no ai_app item");
   });
