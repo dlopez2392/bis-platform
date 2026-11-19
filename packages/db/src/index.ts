@@ -191,6 +191,8 @@ export * from "./business-status";
 export * from "./screened-calls";
 export * from "./forwarded-calls";
 export * from "./owner-line";
+// The read-only MCP server's switch and access log (migration ai_apps). See ./ai-apps.ts.
+export * from "./ai-apps";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
