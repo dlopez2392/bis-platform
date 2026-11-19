@@ -7,7 +7,7 @@
 // written confirmation and cancel link go. No email = book anyway, say the
 // business will confirm by phone.
 import type { VoicePromptInput } from "./session-config";
-import { bookingMode } from "./booking-mode";
+import { offeredTools, ifOffered } from "./tools/offered";
 import { tradeModuleBlock } from "./modules";
 import {
   businessHoursBlock, servicesBlock, LIST_PRICE_LINE, CLOSED_PRICE_LINE, AFTER_HOURS_CLOSED_WEB,
@@ -18,14 +18,18 @@ import { hasOpenDay } from "./knowledge/hours";
 import { closedDaysBlock, todayLine } from "./knowledge/closure-lines";
 
 export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
-  // `bookingMode` (booking-mode.ts) — the same answer the session's tool
-  // list and runTool's guard read. `booking`: new appointments may be made.
-  // `manageable`: an existing one may be found, moved or cancelled ("Always
-  // take a message" keeps this and drops only `booking`, owner decision
-  // 2026-10-09).
-  const mode = bookingMode(input);
-  const booking = mode === "full";
-  const manageable = mode !== "none";
+  // F-023 PR 4 (plan §3.5): the tools this session is offered, from the same
+  // input (tools/offered.ts). A line that names a tool is written only when
+  // the tool is in this set. On the phone it is `toolSchemas` of `bookingMode`
+  // (booking-mode.ts), the same answer the session's tool list and runTool's
+  // guard read, so `booking` (new appointments may be made) and `manageable`
+  // (an existing one may be found, moved or cancelled; "Always take a message"
+  // keeps this and drops only `booking`, owner decision 2026-10-09) are what
+  // they always were there. The web chat and the browser demos are sent no
+  // booking tool whatever the profile says, so neither is ever true for them.
+  const offered = offeredTools(input);
+  const booking = offered.has("book_appointment");
+  const manageable = offered.has("check_availability");
   const currentDateTime = new Intl.DateTimeFormat("en-US", {
     timeZone: input.timezone, weekday: "long", year: "numeric",
     month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
@@ -83,9 +87,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // profile with no transfer number gets the take-a-message sentence this
   // prompt has always carried, byte for byte — ON THE PHONE. The web has no
   // take_message tool at all, so it never reaches that fallback either way.
+  // F-023 PR 4: keyed on transfer_to_human being offered, which on the phone is
+  // `handoffAvailable` and on a browser demo is never.
   const wouldRatherTalkToAPerson = onWeb
     ? CAPTURE_LEAD_FOLLOWUP
-    : input.handoffAvailable && !closedNow
+    : offered.has("transfer_to_human") && !closedNow
       ? "offer to put them through to someone on the team"
       : "offer to take a message";
 
@@ -110,7 +116,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   const tradeBlock = tradeModuleBlock(input.tradeModule, {
     businessName: input.businessName,
     medium: input.medium ?? "phone",
-    handoffAvailable: input.handoffAvailable === true,
+    handoffAvailable: offered.has("transfer_to_human"),
     canBook: booking && !onWeb,
     languages: input.languages,
   });
@@ -185,8 +191,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     // digest). `canBook` is the booking MODE, not the checkbox: "Always take a message" drops new booking
     // (D-040), and the web has no booking tool at all (SD2).
     ...tradeBlock,
-    "",
-    "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
+    // No tool on the session (the browser demos, F-023 §2): no TOOLS list at all, not a heading with nothing under it.
+    ...(offered.size > 0 ? [
+      "",
+      "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
+    ] : []),
     // The WEB tool (CAPTURE_LEAD_TOOL, lib/concierge/prompt.ts) is FLAT —
     // fullName/email/phone/need at the top level, no `fields` wrapper, and no
     // slot for a business name — a different shape from the phone tool
@@ -194,23 +203,24 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     // A model told the phone shape on the web emits `{"fields":{...}}`,
     // which `parseCaptureLead` cannot read a name out of, and the lead is
     // silently dropped. The phone line below is BYTE-UNCHANGED.
-    onWeb
+    ...ifOffered(offered, "capture_lead", onWeb
       ? "- capture_lead(fullName, email, phone, need) — record who the visitor is and what they need. Call it as soon as you have their name AND either an email address or a phone number."
-      : "- capture_lead(fields) — record who the caller is and what they need. Required fields: fullName, need. Also capture when offered: email, businessName.",
+      : "- capture_lead(fields) — record who the caller is and what they need. Required fields: fullName, need. Also capture when offered: email, businessName."),
   );
 
   // take_message and log_transcript are given to the phone session only
   // (`session-config.ts`'s tool array). A model told it has them on the web
   // will SAY it took a message that nothing recorded — the exact defect this
-  // review found in `WEB_TOOL_NOTICE`'s old append-only placement.
+  // review found in `WEB_TOOL_NOTICE`'s old append-only placement. The lines
+  // only the web chat reaches name capture_lead, which it is always offered.
   if (onWeb) {
     lines.push(
       "- capture_lead is the ONLY tool you have here. take_message and log_transcript do not exist on the website: do not mention them, and never say you have taken a message, logged, sent, or passed anything on unless capture_lead came back successful. If you cannot answer something, say the team will follow up and use capture_lead to get their name and either an email address or a phone number.",
     );
   } else {
     lines.push(
-      "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed.",
-      "- log_transcript is called automatically; never mention it.",
+      ...ifOffered(offered, "take_message", "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed."),
+      ...ifOffered(offered, "log_transcript", "- log_transcript is called automatically; never mention it."),
     );
   }
 
@@ -222,19 +232,16 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   }
 
   // Named in the TOOLS list only when the tool is actually on the session
-  // (`toolSchemas`' third argument, session-config.ts:33) — the same
-  // `handoffAvailable` decides both, so the prompt can never advertise a
+  // (`toolSchemas`' third argument, session-config.ts:99, through
+  // `offeredTools`) — the same `handoffAvailable` decides both, so the prompt can never advertise a
   // tool the model was not given. The "do not ask them to hold" line is not
   // manners: the route speaks `handoffLine` for her the moment the tool
   // succeeds (`lib/voice/handoff.ts`), so a hold line of her own gets the
   // caller told twice.
   // S-47c (spec 5.2.1 point 2): closed now, the tool stays but is not offered.
-  if (input.handoffAvailable) {
-    lines.push(closedNow
-      ? transferToolLineClosed(tradeBlock.length > 0)
-      : "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.",
-    );
-  }
+  lines.push(...ifOffered(offered, "transfer_to_human", closedNow
+    ? transferToolLineClosed(tradeBlock.length > 0)
+    : "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead."));
 
   if (manageable) {
     if (booking && input.meetingType === "video") {
@@ -258,10 +265,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ? "If they cannot spell it clearly or you get it wrong twice, do not book — take a message instead."
       : "If they cannot spell it clearly or you get it wrong twice, book with the phone number alone.";
     lines.push(
-      "- check_availability(date) — list open times for a date before offering any.",
-      ...(booking ? ["- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned."] : []),
-      "- find_my_booking() — call it FIRST when a caller wants to check, change or cancel an appointment. It only looks up the number they are calling from.",
-      `- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only for the booking find_my_booking returned on this call, or one you booked on this call. If either refuses, apologize and ${wouldRatherTalkToAPerson}.`,
+      ...ifOffered(offered, "check_availability", "- check_availability(date) — list open times for a date before offering any."),
+      ...ifOffered(offered, ["book_appointment", "check_availability"], "- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned."),
+      ...ifOffered(offered, "find_my_booking", "- find_my_booking() — call it FIRST when a caller wants to check, change or cancel an appointment. It only looks up the number they are calling from."),
+      ...ifOffered(offered, ["reschedule_appointment", "cancel_appointment", "find_my_booking"],
+        `- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only for the booking find_my_booking returned on this call, or one you booked on this call. If either refuses, apologize and ${wouldRatherTalkToAPerson}.`),
       // Phone only: "the number they are calling from" is caller ID, which the
       // web has none of.
       ...(onWeb ? [] : [
@@ -270,6 +278,8 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       "- TIMES — tool results give every time twice: startsAt (an ISO timestamp — pass that exact value to tools) and local/startsAtLocal (the time in the business's own timezone). When telling the caller a time, say the local value. NEVER convert an ISO timestamp yourself — your own timezone arithmetic is not reliable, and a tool result that looks like a different hour than you expected is YOUR conversion being wrong, never a reason to re-book or re-reschedule.",
     );
     // The new-booking half. Absent under "Always take a message" (`manage`).
+    // Under `booking` (the phone, mode "full") capture_lead and take_message,
+    // which these lines also name, are always on the session.
     if (booking) lines.push(
       "",
       `BOOKING — Appointments are ${input.slotDurationMinutes} minutes. To book you need the caller's NAME and PHONE NUMBER; their email is ${isVideo ? "REQUIRED (video meeting link)" : "optional but worth asking for once, because it is where the written confirmation and the cancellation link go"}.`,
@@ -312,7 +322,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       // Not without a caller ID: find_my_booking refuses then, and the
       // caller-ID line above already says so.
       ...(manageable && input.callerNumber ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
-      ...(input.handoffAvailable ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
+      ...(offered.has("transfer_to_human") ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
     ].join(" ");
     if (onPhone) lines.push("", always);
     // Web chat and demo: today's conditional line when there are no structured hours; with hours, the definite
@@ -329,7 +339,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     // S-47d (spec 5.4.2): a closure with no hours takes the same branch, its lines pointing at TODAY.
     lines.push("", onPhone
       ? afterHoursClosedPhoneLine({
-        canBook: booking && !openEndedStorm, handoffAvailable: input.handoffAvailable === true,
+        canBook: booking && !openEndedStorm, handoffAvailable: offered.has("transfer_to_human"),
         hasTradeRules: tradeBlock.length > 0, see: hoursBlock ? "Right now" : "TODAY",
       })
       : onWeb
