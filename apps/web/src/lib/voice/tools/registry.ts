@@ -42,12 +42,12 @@ import { findNeedsRead, findStep, confirmStep, ownsStep, messageNeedsNameCheck, 
 import { isLocked } from "../identity/state";
 import { lockedResult, noCallerId, FOUND_BY_NAME_NEXT, BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, type ToolResult } from "../identity/results";
 import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord, type RecordPick } from "../identity/record";
+import { runOffered } from "@/lib/tools/belt";
+import { CUSTOMER_TOOL_NAMES, type CustomerToolName } from "@/lib/tools/customer/specs";
+import { toolSchemas } from "./schemas";
 
-export type ToolName =
-  | "check_availability" | "book_appointment" | "reschedule_appointment"
-  | "cancel_appointment" | "find_my_booking" | "confirm_identity"
-  | "capture_lead" | "take_message" | "log_transcript"
-  | "transfer_to_human";
+/** The phone's tools: the belt's customer catalogue (F-023, lib/tools/customer/specs.ts), a narrow union. */
+export type ToolName = CustomerToolName;
 
 /**
  * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
@@ -83,11 +83,32 @@ export interface ToolContext {
   now?: () => Date;
 }
 
-/** The booking tools that work on what exists rather than making something
- *  new — kept under "Always take a message", refused with booking off. */
-const MANAGE_TOOLS: ReadonlySet<ToolName> = new Set([
-  "check_availability", "find_my_booking", "confirm_identity", "reschedule_appointment", "cancel_appointment",
-]);
+const NO_TRANSFER_TARGET = "There's no one available to transfer to on this line. Apologize, then offer to take a message.";
+const noBooking = (ctx: ToolContext) =>
+  `Appointments can't be looked up or changed on this line. Apologize, then ${nextStep(ctx)} so the team can help.`;
+
+/**
+ * What a model hears when it calls a tool this session was not given (F-023 plan §3.3; models do call tools they
+ * were not given). One sentence per tool, the words each refusal said before the belt: book_appointment off "full";
+ * the booking tools that work on what exists rather than making something new (kept under "Always take a message")
+ * with booking off; transfer_to_human with nowhere to send the caller. capture_lead, take_message and log_transcript
+ * are on every session (`toolSchemas`), so they have no entry.
+ */
+const NOT_OFFERED: Record<Exclude<ToolName, "capture_lead" | "take_message" | "log_transcript">, (ctx: ToolContext) => string> = {
+  book_appointment: () =>
+    "New appointments can't be booked on this line. Take a message with take_message instead, so the team can call them back to set it up.",
+  check_availability: noBooking, find_my_booking: noBooking, confirm_identity: noBooking,
+  reschedule_appointment: noBooking, cancel_appointment: noBooking,
+  transfer_to_human: () => NO_TRANSFER_TARGET,
+};
+
+function notOfferedWords(name: ToolName, ctx: ToolContext): string {
+  const words = (NOT_OFFERED as Partial<Record<ToolName, (ctx: ToolContext) => string>>)[name];
+  // Unreachable while toolSchemas puts the core three on every session; a throw reaches call-events.ts, which
+  // answers "tool failed — apologize and offer to take a message" rather than a refusal nobody wrote.
+  if (!words) throw new Error(`No refusal written for ${name}`);
+  return words(ctx);
+}
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -306,25 +327,43 @@ async function readOnCallerId(ctx: ToolContext): Promise<CandidateRead> {
   }
 }
 
+type Ran = { state: CallState; result: unknown };
+
+/**
+ * Runs one phone tool through the belt's guard (F-023, lib/tools/belt.ts runOffered). In order:
+ *   1. a name not in the customer catalogue throws "Unknown tool: <name>", which call-events.ts answers
+ *      "unknown tool" (an owner-line tool included: the wall, F-032 §7);
+ *   2. a catalogue name this session was not given is refused in that tool's own words (NOT_OFFERED), before
+ *      anything is read or written, `state` untouched. Belt and braces (review minor 10): the session never hands
+ *      the model a tool this line does not offer, but models do call tools they were not given. "Not given" is
+ *      `toolSchemas` asked with the session's own three inputs — the same `bookingMode`, the calendar's meeting type
+ *      and `handoffTarget.available` the route built the session from (session-config.ts) — so the guard and the
+ *      session can never disagree;
+ *   3. otherwise the tool's case runs.
+ * A tool that throws still throws, the same error object, to call-events.ts, which logs it and answers "tool failed —
+ * apologize and offer to take a message": runOffered hands its onError only the class, so the error is held here.
+ */
 export async function runTool(
   state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>,
-): Promise<{ state: CallState; result: unknown }> {
+): Promise<Ran> {
   const now = ctx.now?.() ?? new Date();
-
-  // Belt and braces (review minor 10): the session never hands the model a
-  // booking tool this line does not offer (`toolSchemas`, the same
-  // `bookingMode`), but models do call tools they were not given. Refused
-  // here before anything is read or written; `state` untouched.
   const mode = bookingMode({ bookingEnabled: ctx.profile.booking_enabled, afterHours: ctx.profile.after_hours });
-  if (name === "book_appointment" && mode !== "full") {
-    return { state, result: { ok: false, error:
-      "New appointments can't be booked on this line. Take a message with take_message instead, so the team can call them back to set it up." } };
-  }
-  if (MANAGE_TOOLS.has(name) && mode === "none") {
-    return { state, result: { ok: false, error:
-      `Appointments can't be looked up or changed on this line. Apologize, then ${nextStep(ctx)} so the team can help.` } };
-  }
+  const offered = toolSchemas(mode, ctx.calendar.meeting_type, ctx.handoffTarget.available === true).map((t) => t.name);
+  let thrown: unknown;
+  return runOffered<ToolName, Ran>({
+    catalogue: CUSTOMER_TOOL_NAMES,
+    offered,
+    name, args,
+    unknown: () => { throw new Error(`Unknown tool: ${name}`); },
+    notOffered: (tool) => ({ state, result: { ok: false, error: notOfferedWords(tool, ctx) } }),
+    run: (tool, a) => runOfferedTool(state, ctx, tool, a, mode, now).catch((e: unknown) => { thrown = e; throw e; }),
+    onError: () => { throw thrown; },
+  });
+}
 
+async function runOfferedTool(
+  state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>, mode: BookingMode, now: Date,
+): Promise<Ran> {
   switch (name) {
     // Every time a tool result names leaves this file twice: `startsAt`
     // (ISO, what other tool calls take) and a `local`/`startsAtLocal`
@@ -976,9 +1015,9 @@ export async function runTool(
     // the missed-call text-back, and marking a caller transferred when they
     // were not is how someone gets no text after a call that helped nobody.
     case "transfer_to_human": {
+      // The guard refuses this first (NOT_OFFERED, the same words); kept so the case stands on its own.
       if (!ctx.handoffTarget.available) {
-        return { state, result: { ok: false,
-          error: "There's no one available to transfer to on this line. Apologize, then offer to take a message." } };
+        return { state, result: { ok: false, error: NO_TRANSFER_TARGET } };
       }
       if (!ctx.callRowId) {
         return { state, result: { ok: false,
