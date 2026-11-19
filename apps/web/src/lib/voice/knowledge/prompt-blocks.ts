@@ -27,19 +27,23 @@ export const CLOSED_PRICE_LINE =
 
 export const AFTER_HOURS_CLOSED_WEB =
   "AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
-/** The browser demos (owner decision 2026-11-19): nothing said in a demo reaches anyone, so where the phone would take a
- *  message she points to the next step the demo's notice gives (the booking page, the number, or the contact form on
- *  the website; the prospect demo's "this is a preview" sentence). Never a link or number of its own. */
-export const DEMO_NEXT_STEP = "point them to the next step the notice below gives";
-
 export const AFTER_HOURS_CLOSED_WEB_VOICE =
+  "AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.";
+
+/** The website's browser demo (owner decision 2026-11-19; VoicePromptInput.websiteDemo): nothing said there reaches
+ *  anyone, so where the phone would take a message she points to the next step webDemoNotice gives (the booking page,
+ *  the number, or the website's contact form). Never a link or number of its own. */
+export const DEMO_NEXT_STEP = "point them to the next step the notice below gives";
+export const AFTER_HOURS_CLOSED_WEBSITE_DEMO =
   `AFTER HOURS — The business is closed right now (see Right now above); say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`;
+export const AFTER_HOURS_CLOSED_WEBSITE_DEMO_TODAY =
+  `AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`;
 
 /** S-47d (spec 5.4.2; SD16): the same two lines when a closure holds and there is no hours block to point at. */
 export const AFTER_HOURS_CLOSED_WEB_TODAY =
   "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
 export const AFTER_HOURS_CLOSED_WEB_VOICE_TODAY =
-  `AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`;
+  "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.";
 
 /** Phone, "Follow business hours, then take a message", closed now (spec 5.2; SD5). `see` (S-47d, spec 5.4.2) names
  *  the line it points at: "TODAY" when a closure holds with no hours block; absent is "Right now", byte for byte. */

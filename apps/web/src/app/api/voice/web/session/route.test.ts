@@ -90,7 +90,7 @@ import { POST } from "./route";
 import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/lib/voice/web-demo";
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 import { fileURLToPath } from "node:url";
-import { checkSamples, digestPrompts } from "@/lib/voice/prompt-snapshots.fixture";
+import { checkSamples, digestPrompts, WEBSITE_DEMO_MESSAGE_WORDS } from "@/lib/voice/prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES } from "@/lib/tools/customer/specs";
 
 const ORIGIN = "https://bis-rgv.com";
@@ -474,16 +474,16 @@ describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 
     expect.soft(digestPrompts(rest), "the 57 prompts that are not samples").toBe(REST_DIGEST);
   });
 
-  // Owner decision 2026-11-19: nothing reaches anyone from a demo, so above its notice the prompt never tells her to
-  // take a message or have someone call back; it points to the notice, which is there, after a blank line.
+  // Owner decision 2026-11-19: nothing reaches anyone from the website demo, so above its notice the prompt never tells
+  // her to take a message, ask for a callback number or have someone call back; it points to the notice, which is
+  // there, after a blank line.
   it("never tells her to take a message, in any combination, and always carries the notice after a blank line", async () => {
     const HEADING = "## This conversation is happening on the website, not the phone";
-    const MESSAGE_WORDS = /take a message|take their details|call (them|you) back|(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)|le (van a|vamos a) llamar/i;
     const wrong = Object.entries(await allMinted()).flatMap(([key, text]) => {
       const at = text.indexOf(`\n\n${HEADING}`);
       if (at < 0) return [`${key}: no notice after a blank line`];
       const above = text.slice(0, at);
-      return MESSAGE_WORDS.test(above) ? [`${key}: ${above.split("\n").find((l) => MESSAGE_WORDS.test(l))}`] : [];
+      return WEBSITE_DEMO_MESSAGE_WORDS.test(above) ? [`${key}: ${above.split("\n").find((l) => WEBSITE_DEMO_MESSAGE_WORDS.test(l))}`] : [];
     });
     expect(wrong).toEqual([]);
   });

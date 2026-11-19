@@ -22,7 +22,7 @@ describe("prompt-blocks — the fixed lines, word for word", () => {
   });
   it("the web chat's and the voice demo's closed AFTER HOURS lines (SD6)", () => {
     expect(AFTER_HOURS_CLOSED_WEB).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
-    expect(AFTER_HOURS_CLOSED_WEB_VOICE).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and point them to the next step the notice below gives; do not attempt anything else.");
+    expect(AFTER_HOURS_CLOSED_WEB_VOICE).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
   });
 });
 
@@ -130,7 +130,7 @@ describe("prompt-blocks — S-47d", () => {
   it("the web chat's and the voice demo's (see TODAY above) lines, word for word", async () => {
     const m = await import("./prompt-blocks");
     expect(m.AFTER_HOURS_CLOSED_WEB_TODAY).toBe("AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
-    expect(m.AFTER_HOURS_CLOSED_WEB_VOICE_TODAY).toBe("AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and point them to the next step the notice below gives; do not attempt anything else.");
+    expect(m.AFTER_HOURS_CLOSED_WEB_VOICE_TODAY).toBe("AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.");
   });
   it("the phone line with see: \"TODAY\" changes only the parenthesis; \"Right now\" and absent are byte-identical (mutation: ignore see -> FAILS)", () => {
     const o = { canBook: true, handoffAvailable: true, hasTradeRules: false };

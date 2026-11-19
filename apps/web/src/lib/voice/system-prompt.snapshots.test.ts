@@ -22,7 +22,7 @@ import { TRADE_MODULE_IDS, type TradeModuleId } from "./modules";
 import type { OpenHours } from "../booking/slots";
 import type { EffectiveStatus } from "../business-status/status";
 import { offeredTools } from "./tools/offered";
-import { digestPrompts as digestOf } from "./prompt-snapshots.fixture";
+import { digestPrompts as digestOf, WEBSITE_DEMO_MESSAGE_WORDS } from "./prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES, type CustomerToolName } from "../tools/customer/specs";
 
 /** A Tuesday, 10:00 AM in Chicago. */
@@ -168,12 +168,12 @@ describe("the prompt names only the tools its session is offered (F-023 PR 4)", 
     expect(wrong).toEqual([]);
   });
 
-  // Owner decision 2026-11-19: nothing reaches anyone from a demo, so it never tells her to take a message or have
-  // someone call back, whatever the profile says; it points to the notice the route appends.
-  it("a browser demo (web_voice) never tells her to take a message, whatever the profile says", () => {
-    const MESSAGE_WORDS = /take a message|take their details|call (them|you) back|(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)|le (van a|vamos a) llamar/i;
-    const wrong = SURFACE_INPUTS.flatMap(([k, i]) => buildSystemPrompt({ ...i, medium: "web_voice" }, NOW).split("\n")
-      .filter((l) => MESSAGE_WORDS.test(l)).map((l) => `${k}: ${l.slice(0, 80)}`));
+  // Owner decision 2026-11-19: nothing reaches anyone from the website demo, so it never tells her to take a message,
+  // ask for a callback number or have someone call back, whatever the profile says; it points to the notice the route
+  // appends. (The prospect demo keeps the phone's words: prospect-demo.snapshots.test.ts pins them to main's.)
+  it("the website demo (web_voice, websiteDemo) never tells her to take a message, whatever the profile says", () => {
+    const wrong = SURFACE_INPUTS.flatMap(([k, i]) => buildSystemPrompt({ ...i, medium: "web_voice", websiteDemo: true }, NOW)
+      .split("\n").filter((l) => WEBSITE_DEMO_MESSAGE_WORDS.test(l)).map((l) => `${k}: ${l.slice(0, 80)}`));
     expect(wrong).toEqual([]);
   });
 
