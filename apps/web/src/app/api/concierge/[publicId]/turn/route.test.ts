@@ -503,6 +503,17 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     expect(body.reply).not.toBe(conciergeStrings("en").captured);
   });
 
+  it("a tool it was never offered, on a conversation that already filed a lead, never reads as a fresh capture (mutation: gate `spoken` on any tool call -> FAILS)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "already" });
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "Let me check the calendar.",
+        tool_calls: [{ id: "t9", type: "function", function: { name: "book_appointment", arguments: JSON.stringify({ day: "mon" }) } }] } }] }) })
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    const body = await (await laterTurn()).json() as { reply: string };
+    expect(body.reply).not.toBe(conciergeStrings("en").captured);
+    expect(body.reply).toBe(conciergeStrings("en").unavailable);
+  });
+
   it("truncates a very long message instead of rejecting it", async () => {
     const long = "x".repeat(CONCIERGE_MAX_MESSAGE_CHARS + 500);
     const res = await firstTurn({ text: long });
