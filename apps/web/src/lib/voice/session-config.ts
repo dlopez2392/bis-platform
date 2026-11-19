@@ -47,6 +47,14 @@ export type VoicePromptInput = {
    */
   medium?: "phone" | "web" | "web_voice";
   /**
+   * The WEBSITE's browser demo (`api/voice/web/session`), read only with medium "web_voice" (owner decision
+   * 2026-11-19). Nothing said there reaches anyone, so wherever the prompt would take a message or ask for a callback
+   * number, it points to the next step the appended `webDemoNotice` gives instead. Absent everywhere else, the
+   * prospect demo included: its notice says to answer exactly as the real line would and handles a booking or a
+   * message itself, so it keeps the phone's words.
+   */
+  websiteDemo?: true;
+  /**
    * S-47a: this conversation has ALREADY been told it is talking to an AI (the phone's opening sentence,
    * or the chat's label and first message). OPTIONAL and defaulting to false, so every caller that does not
    * pass it (the browser voice demo) gets a byte-identical prompt.

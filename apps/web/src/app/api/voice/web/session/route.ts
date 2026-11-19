@@ -242,6 +242,9 @@ export async function POST(req: Request) {
       // The browser demo, not the phone line: it keeps the conditional
       // after-hours wording (owner decision 2026-10-09, see session-config.ts).
       medium: "web_voice",
+      // The website demo's own words (owner decision 2026-11-19): where the phone would take a message or ask for a
+      // callback number, she points to the next step webDemoNotice below gives.
+      websiteDemo: true,
       // S-47b: the same trade rules as the phone line, in the demo's tool-less variant (SD1).
       tradeModule: profile.trade_module,
       businessHours: pk.businessHours, priceList: pk.priceList,

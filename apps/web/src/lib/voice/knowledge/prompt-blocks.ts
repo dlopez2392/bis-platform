@@ -30,6 +30,15 @@ export const AFTER_HOURS_CLOSED_WEB =
 export const AFTER_HOURS_CLOSED_WEB_VOICE =
   "AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.";
 
+/** The website's browser demo (owner decision 2026-11-19; VoicePromptInput.websiteDemo): nothing said there reaches
+ *  anyone, so where the phone would take a message she points to the next step webDemoNotice gives (the booking page,
+ *  the number, or the website's contact form). Never a link or number of its own. */
+export const DEMO_NEXT_STEP = "point them to the next step the notice below gives";
+export const AFTER_HOURS_CLOSED_WEBSITE_DEMO =
+  `AFTER HOURS — The business is closed right now (see Right now above); say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`;
+export const AFTER_HOURS_CLOSED_WEBSITE_DEMO_TODAY =
+  `AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`;
+
 /** S-47d (spec 5.4.2; SD16): the same two lines when a closure holds and there is no hours block to point at. */
 export const AFTER_HOURS_CLOSED_WEB_TODAY =
   "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";

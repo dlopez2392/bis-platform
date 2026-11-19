@@ -7,6 +7,17 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
+/**
+ * Every way a prompt has told Sofía to take a message, take details or have someone call back, in English and in
+ * Spanish. The website demo's prompt (above its notice) must match none of it: nothing said there reaches anyone
+ * (owner decision 2026-11-19). One copy, read by the route's test and the builder's.
+ */
+export const WEBSITE_DEMO_MESSAGE_WORDS = new RegExp([
+  "take a message", "take their details", "take down", "leave a message", "callback", "call (them|you) back",
+  "(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)", "deje (su|un) mensaje", "tomar (sus|los) datos",
+  "le devolveremos la llamada", "le (van a|vamos a) llamar", "l[oa] van a llamar",
+].join("|"), "i");
+
 export function digestPrompts(prompts: readonly string[]): string {
   const h = createHash("sha256");
   for (const p of prompts) h.update(`${p}\u0000`);

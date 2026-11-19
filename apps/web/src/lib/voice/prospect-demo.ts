@@ -160,7 +160,8 @@ const TRADE_MODULE: Partial<Record<string, TradeModuleSetting>> = { insurance: "
 export function prospectDemoNotice(maxSeconds: number = WEB_DEMO_MAX_SECONDS): string {
   const minutes = webDemoMinutes(maxSeconds);
   return [
-    "",
+    // "\n", not "": appended straight after the prompt's last line, this is what puts a blank line before the heading.
+    "\n",
     "## This conversation is a preview in a web browser, not the phone line",
     "",
     "The person talking to you is trying out how you will answer this business's phone. They may be the owner, or they may play a customer. Answer exactly as you would on the real line.",

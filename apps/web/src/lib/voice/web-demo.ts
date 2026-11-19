@@ -73,7 +73,8 @@ export function webDemoNotice(input: {
 }): string {
   const minutes = webDemoMinutes(input.maxSeconds ?? WEB_DEMO_MAX_SECONDS);
   const lines = [
-    "",
+    // "\n", not "": appended straight after the prompt's last line, this is what puts a blank line before the heading.
+    "\n",
     "## This conversation is happening on the website, not the phone",
     "",
     `You are talking to someone who clicked a button on the website to hear you. They are a stranger, not a known caller — you do not have their phone number, and you must not ask for it as though you already had it.`,

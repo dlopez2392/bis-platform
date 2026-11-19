@@ -90,7 +90,7 @@ import { POST } from "./route";
 import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/lib/voice/web-demo";
 import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 import { fileURLToPath } from "node:url";
-import { checkSamples, digestPrompts } from "@/lib/voice/prompt-snapshots.fixture";
+import { checkSamples, digestPrompts, WEBSITE_DEMO_MESSAGE_WORDS } from "@/lib/voice/prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES } from "@/lib/tools/customer/specs";
 
 const ORIGIN = "https://bis-rgv.com";
@@ -208,7 +208,7 @@ describe("POST /api/voice/web/session — the name a website visitor hears", () 
     const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
     const { session } = JSON.parse(String(init.body)) as { session: { instructions: string } };
     expect(session.instructions).toContain(
-      "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
+      "AFTER HOURS — If the business is closed right now, say so briefly and point them to the next step the notice below gives; do not attempt anything else.",
     );
     expect(session.instructions).not.toContain("MESSAGES ONLY");
   });
@@ -300,7 +300,7 @@ describe("POST /api/voice/web/session — what Sofía knows (S-47c)", () => {
     const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
     return (JSON.parse(String(init.body)) as { session: { instructions: string } }).session.instructions;
   };
-  const CLOSED = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
+  const CLOSED = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and point them to the next step the notice below gives. This overrides any rule below that allows a price from the facts.";
 
   it("the demo's prompt carries the live list and hours, records nothing and stamps nothing (mutations: drop priceList or businessHours from promptInput -> FAILS)", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, business_hours: { tue: [["08:00", "18:00"]] } });
@@ -421,8 +421,8 @@ describe("POST /api/voice/web/session — today's status and the closed days (S-
 describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 snapshot)", () => {
   const FIXTURE = fileURLToPath(new URL("./route.prompt-samples.json", import.meta.url));
   const SAMPLES = ["no-module|hours_then_message|en|open", "insurance_pc|message_only|es|closed", "events|hours_then_message|both|closed"];
-  /** sha256 (digestPrompts) over the 57 prompts that are not SAMPLES, in enumeration order: F-023 PR 4's re-baseline. */
-  const REST_DIGEST = "f3c5f3dc60248ea36c4a9803fe85465ded22220d2495785346371029713314a5";
+  /** sha256 (digestPrompts) over the 57 prompts that are not SAMPLES, in enumeration order: re-baselined 2026-11-19, when the website demo's wording pointed to its notice and lost the callback line. */
+  const REST_DIGEST = "2aed22e5853307c555d577a75fa8cfbd845513c89887ebaaefb3515f63a3ea1d";
   /** A Tuesday, 10:00 AM in Chicago. */
   const NOW = new Date("2027-06-01T15:00:00Z");
   const HOURS = { none: null, open: { tue: [["08:00", "18:00"]] }, closed: { tue: [["13:00", "18:00"]], wed: [["08:00", "12:00"]] } };
@@ -472,6 +472,20 @@ describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 
     const rest = Object.entries(actual).filter(([k]) => !SAMPLES.includes(k)).map(([, p]) => p);
     expect(rest.length).toBe(57);
     expect.soft(digestPrompts(rest), "the 57 prompts that are not samples").toBe(REST_DIGEST);
+  });
+
+  // Owner decision 2026-11-19: nothing reaches anyone from the website demo, so above its notice the prompt never tells
+  // her to take a message, ask for a callback number or have someone call back; it points to the notice, which is
+  // there, after a blank line.
+  it("never tells her to take a message, in any combination, and always carries the notice after a blank line", async () => {
+    const HEADING = "## This conversation is happening on the website, not the phone";
+    const wrong = Object.entries(await allMinted()).flatMap(([key, text]) => {
+      const at = text.indexOf(`\n\n${HEADING}`);
+      if (at < 0) return [`${key}: no notice after a blank line`];
+      const above = text.slice(0, at);
+      return WEBSITE_DEMO_MESSAGE_WORDS.test(above) ? [`${key}: ${above.split("\n").find((l) => WEBSITE_DEMO_MESSAGE_WORDS.test(l))}`] : [];
+    });
+    expect(wrong).toEqual([]);
   });
 
   // The F-023 §2 defect's regression test: this route mints `tools: []`, so the prompt may name no tool.
