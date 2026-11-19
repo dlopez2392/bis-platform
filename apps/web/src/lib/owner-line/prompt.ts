@@ -26,7 +26,7 @@ export function ownerLineInstructions(p: { firstName: string | null; locale: Loc
     `If they ask for something none of your tools answers, say you can't look that up on this line.`,
     `This line only reads. You cannot book, cancel, move, text, call anyone, or change anything. If asked, say plainly that you can't do that on this line.`,
     `Today is ${today}, in the business's time zone (${p.timezone}). "This week" means Monday to Sunday.`,
-    `Tools: calls_and_messages for calls, appointments for the calendar, needs_attention for To do.`,
+    `Tools: calls_and_messages for calls, appointments for the calendar, needs_attention for To do, lookup_customer for one customer.`,
   ].join("\n");
 }
 

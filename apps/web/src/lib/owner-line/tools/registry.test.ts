@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const r = vi.hoisted(() => ({ calls: vi.fn(), reasons: vi.fn(), agenda: vi.fn(), work: vi.fn(), answered: vi.fn(), spam: vi.fn(), names: vi.fn() }));
+const r = vi.hoisted(() => ({ calls: vi.fn(), reasons: vi.fn(), agenda: vi.fn(), work: vi.fn(), answered: vi.fn(), spam: vi.fn(), names: vi.fn(),
+  search: vi.fn(), upcoming: vi.fn(), history: vi.fn() }));
 // The real module under the four readers: callbackTaskTitle's own module (call-card) reads @bis/db's constants.
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   listCalls: r.calls, listCallReasons: r.reasons, listAgendaBookings: r.agenda, listAccountWork: r.work,
+  // lookup_customer (F-023 PR 5, owner-line plan Task 17): the read lives in lib/tools/staff/read.ts and imports these
+  // from @bis/db, so this factory still intercepts it.
+  searchContacts: r.search, listContactUpcomingBookings: r.upcoming, listContactBookings: r.history,
   ANSWERED_CALL_OUTCOMES: ["booked", "lead", "message", "transferred"],
 }));
 vi.mock("@/lib/reports/weekly-metrics", () => ({ listAnsweredCallStartsBetween: r.answered, listSpamCallStartsBetween: r.spam }));
@@ -62,8 +66,8 @@ beforeEach(() => {
 });
 
 describe("the owner tools (F-032 §5)", () => {
-  it("THE WALL: only the three owner tools exist, and no receptionist tool is among them", () => {
-    expect([...OWNER_TOOL_NAMES].sort()).toEqual(["appointments", "calls_and_messages", "needs_attention"]);
+  it("THE WALL: only the four owner tools exist, and no receptionist tool is among them", () => {
+    expect([...OWNER_TOOL_NAMES].sort()).toEqual(["appointments", "calls_and_messages", "lookup_customer", "needs_attention"]);
     const receptionist = toolSchemas("full", "in_person", true).map((t: { name: string }) => t.name);
     expect(OWNER_TOOL_NAMES.filter((n) => (receptionist as string[]).includes(n))).toEqual([]);
   });
@@ -264,5 +268,103 @@ describe("the owner tools (F-032 §5)", () => {
   it("an unknown tool name, or a receptionist tool name, is refused without a read", async () => {
     expect(await runOwnerTool(ctx(), "book_appointment", {})).toEqual({ ok: false, error: "unknown_tool" });
     expect(r.calls).not.toHaveBeenCalled();
+  });
+});
+
+// F-023 PR 5: the owner-line plan's Task 17 (docs/superpowers/plans/2026-11-09-owner-line.md), its three cases as
+// written there, plus the account scope of every read it makes and how the last visit is chosen.
+describe("lookup_customer (spec §5; owner-line plan Task 17)", () => {
+  const maria = (i: number) => ({ id: `k${i}`, first_name: "Maria", last_name: `López ${i}`, phone: "+19565550177",
+    email: "maria@example.com", custom: { ssn: "x" }, address: "1 Main" });
+
+  it("returns at most 3 matches with ONLY name, phone, last visit, next visit and open To do count (mutation: spread the contact row -> FAILS)", async () => {
+    r.search.mockResolvedValue([1, 2, 3, 4].map(maria));
+    r.upcoming.mockResolvedValue([{ id: "b9", contact_id: "k1", starts_at: "2026-11-12T16:00:00.000Z" }]);
+    r.history.mockResolvedValue([{ id: "b1", starts_at: "2026-10-01T16:00:00.000Z", status: "completed" }]);
+    r.work.mockResolvedValue([{ id: "t", source: "task", contactId: "k1", title: "x", dueAt: null, occurredAt: "x", accountId: A }]);
+    const out = await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" }) as { count: number; matches: Record<string, unknown>[] };
+    expect(out.count).toBe(3);
+    expect(out.matches).toHaveLength(3);
+    expect(Object.keys(out.matches[0]!).sort()).toEqual(["lastVisit", "name", "nextVisit", "openTodos", "phone"]);
+    expect(JSON.stringify(out)).not.toMatch(/maria@example|ssn|Main|"k[0-9]"|b9|b1/);
+    expect(r.search).toHaveBeenCalledWith(DB, A, { term: "Maria", limit: 3 });
+    // The five values, in the person's zone (3 PM CST on Nov 9): the To do is k1's alone.
+    expect(out.matches[0]).toEqual({ name: "Maria López 1", phone: "+19565550177",
+      lastVisit: "Thursday, October 1 at 11:00 AM", nextVisit: "Thursday, November 12 at 10:00 AM", openTodos: 1 });
+    expect(out.matches[1]!.openTodos).toBe(0);
+  });
+
+  it("every read is this session's account through the factory's client (mutation: another account id to any reader -> FAILS)", async () => {
+    r.search.mockResolvedValue([maria(1)]);
+    r.upcoming.mockResolvedValue([]);
+    r.history.mockResolvedValue([]);
+    await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" });
+    expect(r.search).toHaveBeenCalledWith(DB, A, { term: "Maria", limit: 3 });
+    expect(r.upcoming).toHaveBeenCalledWith(DB, A, "k1", NOW.toISOString(), 1);
+    expect(r.history).toHaveBeenCalledWith(DB, A, "k1", { limit: 30 });
+    expect(r.work).toHaveBeenCalledWith(DB, A);
+    for (const reader of [r.search, r.upcoming, r.history, r.work]) {
+      for (const call of reader.mock.calls) expect([call[0], call[1]]).toEqual([DB, A]);
+    }
+  });
+
+  it("the last visit is the latest COMPLETED booking that has started; a cancelled, no-show or future one is not a visit (mutation: drop the status check -> FAILS)", async () => {
+    r.search.mockResolvedValue([maria(1)]);
+    r.upcoming.mockResolvedValue([]);
+    r.history.mockResolvedValue([
+      { id: "h1", starts_at: "2026-11-08T16:00:00.000Z", status: "cancelled" },
+      { id: "h2", starts_at: "2026-11-07T16:00:00.000Z", status: "no_show" },
+      { id: "h3", starts_at: "2026-11-20T16:00:00.000Z", status: "completed" },
+      { id: "h4", starts_at: "2026-09-01T16:00:00.000Z", status: "completed" },
+      { id: "h5", starts_at: "2026-10-01T16:00:00.000Z", status: "completed" },
+    ]);
+    const out = await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" }) as { matches: { lastVisit: string | null; nextVisit: string | null }[] };
+    expect(out.matches[0]).toMatchObject({ lastVisit: "Thursday, October 1 at 11:00 AM", nextVisit: null });
+    r.history.mockResolvedValue([{ id: "h1", starts_at: "2026-11-08T16:00:00.000Z", status: "cancelled" }]);
+    const none = await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" }) as { matches: { lastVisit: string | null }[] };
+    expect(none.matches[0]!.lastVisit).toBeNull();
+  });
+
+  it("a completed booking starting at this very instant, written +00:00 as PostgREST writes it, has not started yet (review m-6; mutation: compare the strings -> FAILS)", async () => {
+    r.search.mockResolvedValue([maria(1)]);
+    r.upcoming.mockResolvedValue([]);
+    r.history.mockResolvedValue([{ id: "h1", starts_at: "2026-11-09T21:00:00+00:00", status: "completed" }]);
+    const out = await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" }) as { matches: { lastVisit: string | null }[] };
+    expect(out.matches[0]!.lastVisit).toBeNull();
+  });
+
+  it("finding no one answers the same bytes whether the customer exists outside this person's list or not at all (non-confirming; mutation: echo the term -> FAILS)", async () => {
+    r.search.mockResolvedValue([]);
+    const a = await runOwnerTool(ctx(), "lookup_customer", { term: "Ana Unassigned" });
+    const b = await runOwnerTool(ctx(), "lookup_customer", { term: "Nobody Atall" });
+    expect(a).toEqual({ ok: true, count: 0, matches: [] });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    // Nothing else is read for an empty answer, so how long it takes says no more than its bytes.
+    expect(r.work).not.toHaveBeenCalled();
+  });
+
+  it.each([[" "], ["M"], ["  M  "], [""]])("a blank or one-character term (%j) reads nothing (mutation: drop the length check -> FAILS)", async (term) => {
+    expect(await runOwnerTool(ctx(), "lookup_customer", { term })).toEqual({ ok: false, error: "bad_term" });
+    expect(r.search).not.toHaveBeenCalled();
+  });
+
+  it("a missing or non-text term is bad_term too, with no read", async () => {
+    expect(await runOwnerTool(ctx(), "lookup_customer", {})).toEqual({ ok: false, error: "bad_term" });
+    expect(await runOwnerTool(ctx(), "lookup_customer", { term: 9565550177 })).toEqual({ ok: false, error: "bad_term" });
+    expect(r.search).not.toHaveBeenCalled();
+  });
+
+  it("a read that throws midway is 'couldnt_read', never some of the matches", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    r.search.mockResolvedValue([maria(1), maria(2)]);
+    r.upcoming.mockResolvedValue([]);
+    r.history.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("db"));
+    expect(await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" })).toEqual({ ok: false, error: "couldnt_read" });
+  });
+
+  it("a session that is no longer valid looks no one up", async () => {
+    expect(await runOwnerTool(ctx({ recheck: vi.fn(async () => false) }), "lookup_customer", { term: "Maria" }))
+      .toEqual({ ok: false, error: "couldnt_read" });
+    expect(r.search).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,9 @@
 // apps/web/src/lib/owner-line/tools/schemas.test.ts
 // F-023 PR 1: the owner line's three tools, byte for byte. The fixture was captured from main (f257e92f) BEFORE the
 // tools moved onto the belt (lib/tools), one JSON.stringify per tool, so a change of a character, a key's order or an
-// array's order in what the owner-line session sends OpenAI fails here.
+// array's order in what the owner-line session sends OpenAI fails here. F-023 PR 5 appended a fourth entry,
+// lookup_customer, written from the owner-line plan's Task 17 text (docs/superpowers/plans/2026-11-09-owner-line.md),
+// not captured from the code; the first three are untouched.
 import { describe, it, expect } from "vitest";
 import { OWNER_TOOL_SCHEMAS } from "./schemas";
 import { buildOwnerLineSessionConfig } from "../session-config";

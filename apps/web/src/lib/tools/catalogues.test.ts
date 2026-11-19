@@ -17,9 +17,9 @@ for (const mode of ["full", "manage", "none"] as const) {
 }
 
 describe("the staff catalogue", () => {
-  it("holds the owner line's three reads, each for staff only", () => {
-    expect(STAFF_TOOL_NAMES).toEqual(["calls_and_messages", "appointments", "needs_attention"]);
-    expect(STAFF_TOOL_SPECS.map((s) => s.audience)).toEqual(["staff", "staff", "staff"]);
+  it("holds the owner line's three reads and its customer lookup, each for staff only", () => {
+    expect(STAFF_TOOL_NAMES).toEqual(["calls_and_messages", "appointments", "needs_attention", "lookup_customer"]);
+    expect(STAFF_TOOL_SPECS.map((s) => s.audience)).toEqual(["staff", "staff", "staff", "staff"]);
   });
 
   // A TYPE check: `pnpm --filter web typecheck` fails if either name type widens to string (the `as const` dropped),

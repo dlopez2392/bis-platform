@@ -15,4 +15,5 @@ export const LOG_KIND_OF: Record<OwnerToolName, OwnerLineLogKind> = {
   calls_and_messages: "owner_line_calls_and_messages",
   appointments: "owner_line_appointments",
   needs_attention: "owner_line_needs_attention",
+  lookup_customer: "owner_line_lookup_customer",
 };

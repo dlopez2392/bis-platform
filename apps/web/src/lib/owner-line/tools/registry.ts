@@ -1,7 +1,7 @@
 // apps/web/src/lib/owner-line/tools/registry.ts
 import type { SupabaseClient } from "@bis/db";
 import { runOffered, errorClass } from "@/lib/tools/belt";
-import { callsAndMessages, appointments, needsAttention, type StaffReadContext } from "@/lib/tools/staff/read";
+import { callsAndMessages, appointments, needsAttention, lookupCustomer, type StaffReadContext } from "@/lib/tools/staff/read";
 import { OWNER_TOOL_NAMES, type OwnerToolName } from "./schemas";
 import type { OwnerLineSession } from "../session";
 
@@ -53,6 +53,7 @@ export async function runOwnerTool(ctx: OwnerToolContext, name: string, args: Re
         case "calls_and_messages": return await callsAndMessages(c, a);
         case "appointments": return await appointments(c, a);
         case "needs_attention": return await needsAttention(c);
+        case "lookup_customer": return await lookupCustomer(c, a);
       }
     },
   });

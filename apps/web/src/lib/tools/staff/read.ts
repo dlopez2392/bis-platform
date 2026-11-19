@@ -7,6 +7,7 @@
 // owns the checks before it (the owner line: PIN, live re-check, the factory's client, Technicians refused).
 import {
   listCalls, listCallReasons, listAgendaBookings, listAccountWork, ANSWERED_CALL_OUTCOMES,
+  searchContacts, listContactUpcomingBookings, listContactBookings,
   type SupabaseClient, type CallListRow,
 } from "@bis/db";
 import { listAnsweredCallStartsBetween, listSpamCallStartsBetween } from "@/lib/reports/weekly-metrics";
@@ -155,4 +156,44 @@ export async function needsAttention(c: StaffReadContext): Promise<NeedsAttentio
       };
     }),
   };
+}
+
+/** The most matches lookup_customer ever answers (owner-line plan Task 17). */
+export const LOOKUP_MATCHES = 3;
+export type LookupCustomerResult =
+  | { ok: false; error: "bad_term" }
+  | { ok: true; count: number;
+      matches: { name: string | null; phone: string; lastVisit: string | null; nextVisit: string | null; openTodos: number }[] };
+
+/**
+ * lookup_customer (spec §5; owner-line plan Task 17): up to three customers by name or phone, each as five fields and
+ * nothing else. The search is the app's own (searchContacts, the ⌘K box's), on the context's client, so who can be
+ * found is the client's scope: RLS under the token path, the account under F2. Finding no one is ONE answer, the
+ * same bytes and the same reads whether the customer is outside this person's list or nowhere at all: nothing here
+ * can tell the two apart, and nothing here tries to.
+ */
+export async function lookupCustomer(c: StaffReadContext, args: Record<string, unknown>): Promise<LookupCustomerResult> {
+  const term = typeof args.term === "string" ? args.term.trim() : "";
+  if (term.length < 2) return { ok: false, error: "bad_term" };
+  const found = (await searchContacts(c.db, c.accountId, { term, limit: LOOKUP_MATCHES })).slice(0, LOOKUP_MATCHES);
+  if (found.length === 0) return { ok: true, count: 0, matches: [] };
+  const nowIso = c.now.toISOString();
+  const work = await listAccountWork(c.db, c.accountId);
+  const matches = await Promise.all(found.map(async (k) => {
+    const [next, history] = await Promise.all([
+      listContactUpcomingBookings(c.db, c.accountId, k.id, nowIso, 1),
+      listContactBookings(c.db, c.accountId, k.id, { limit: 30 }),
+    ]);
+    // Instants, never strings (review m-6): PostgREST writes "+00:00" where nowIso ends in ".000Z".
+    const nowMs = c.now.getTime();
+    const last = history.filter((b) => b.status === "completed" && Date.parse(b.starts_at) < nowMs)
+      .sort((a, b) => Date.parse(b.starts_at) - Date.parse(a.starts_at))[0];
+    return {
+      name: nameOf(k), phone: k.phone ?? "",
+      lastVisit: last ? when(last.starts_at, c, true) : null,
+      nextVisit: next[0] ? when(next[0].starts_at, c, true) : null,
+      openTodos: work.filter((w) => w.contactId === k.id).length,
+    };
+  }));
+  return { ok: true, count: matches.length, matches };
 }
