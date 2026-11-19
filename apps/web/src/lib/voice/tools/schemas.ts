@@ -1,108 +1,41 @@
 // apps/web/src/lib/voice/tools/schemas.ts
 // Flat GA Realtime tool format: type/name/description/parameters at top
-// level, no function: wrapper. Ported from the reception demo and re-pointed
-// at platform semantics (booking ids, not Cal uids).
+// level, no function: wrapper. F-023: the contracts live on the belt's
+// customer catalogue (lib/tools/customer/specs.ts); this picks a phone
+// session's tools from it, byte for byte what was sent before
+// (lib/tools/customer/customer-tool-schemas.fixture.json).
 import type { BookingMode } from "../booking-mode";
-const BOOKING_TOOLS = [
-  { type: "function", name: "check_availability",
-    description: "List open appointment slots for a date. Each slot carries startsAt (an ISO timestamp — pass that exact value to book_appointment or reschedule_appointment) and local (the same moment rendered in the business's own timezone — this is what you SAY to the caller; never convert the ISO value yourself).",
-    parameters: { type: "object", properties: { date: { type: "string", description: "YYYY-MM-DD in the business's timezone" } }, required: ["date"] } },
-  { type: "function", name: "book_appointment",
-    description: "Book an appointment at an available ISO start time. Requires the caller's name and a phone number (their caller ID is used if they don't give one). You MUST first ask whether they would like an email confirmation: pass their email, or emailDeclined: true if they said no. The tool refuses to book without one of the two.",
-    parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, notes: { type: "string" }, forSomeoneElse: { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." } }, required: ["startsAt", "name"] } },
-  // Booking tools are bound to the caller ID (registry.ts): find_my_booking
-  // takes no number at all — the contract says so, so the model never asks a
-  // caller for one to look up — and the two below move or cancel only a
-  // booking made on this call, or one whose contact this call has confirmed
-  // (S-47e: on a shared number that is the person named, not the caller ID
-  // alone; flow.ts ownsStep).
-  { type: "function", name: "reschedule_appointment",
-    description: "Move an existing booking to a new ISO start time. Only for a booking find_my_booking returned on this call, or one booked on this call.",
-    parameters: { type: "object", properties: { bookingId: { type: "string" }, startsAt: { type: "string" } }, required: ["bookingId", "startsAt"] } },
-  { type: "function", name: "cancel_appointment",
-    description: "Cancel an existing booking. Only for a booking find_my_booking returned on this call, or one booked on this call.",
-    parameters: { type: "object", properties: { bookingId: { type: "string" } }, required: ["bookingId"] } },
-  { type: "function", name: "find_my_booking",
-    description: "Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number. If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again.",
-    parameters: { type: "object", properties: {}, required: [] } },
-  // S-47e (spec 5.4.3): on the session exactly where find_my_booking is (modes full and manage).
-  { type: "function", name: "confirm_identity",
-    description: "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.",
-    parameters: { type: "object", properties: { fullName: { type: "string", description: "First and last name, as the caller said it." }, email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." } }, required: ["fullName"] } },
-] as const;
+import { realtimeShape } from "@/lib/tools/belt";
+import { CUSTOMER_TOOL_SPECS, selectVariant, type CustomerToolName } from "@/lib/tools/customer/specs";
 
-const CORE_TOOLS = [
-  { type: "function", name: "capture_lead",
-    description: "Record who the caller is and what they need. For callbackNumber, write the digits as spoken, with no country code unless the caller said one.",
-    parameters: { type: "object", properties: { fields: { type: "object", additionalProperties: { type: "string" } }, forSomeoneElse: { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." } }, required: ["fields"] } },
-  { type: "function", name: "take_message",
-    description: "Leave a message for a human callback.",
-    parameters: { type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." } }, required: ["body"] } },
-  { type: "function", name: "log_transcript",
-    description: "Log a spoken turn for staff review.",
-    parameters: { type: "object", properties: { role: { type: "string", enum: ["caller", "assistant"] }, text: { type: "string" } }, required: ["role", "text"] } },
-] as const;
-
-// Advertised ONLY when the account actually has somewhere to send the caller
-// (`toolSchemas`' third argument). A model offered this tool WILL offer it out
-// loud — "let me put you through" — and a caller who hears that and then does
-// not get put through is worse off than one who was never offered it, so the
-// gate is on the schema rather than on the tool's refusal alone.
-//
-// No parameters: who to dial is the business's own configured number, never
-// anything the model or the caller supplies.
-const HANDOFF_TOOL = {
-  type: "function", name: "transfer_to_human",
-  description: "Put the caller through to a person at the business. Use only when the caller asks to speak to someone.",
-  parameters: { type: "object", properties: {}, required: [] },
-} as const;
-
-// The video rewrite of book_appointment's contract. 2026-08-30, live call:
-// the caller declined email and the model invented "we can book using just
-// your phone number" — while the SYSTEM PROMPT said email-is-required
-// (recited moments earlier; prompt rules are wishes). The tool description
-// was actively working against the video gate: it said "pass their email,
-// or emailDeclined: true if they said no", which on a video calendar is a
-// booking path that does not exist (registry.ts refuses it). The contract
-// the model reads at call time must say what the tool will actually do.
-const VIDEO_BOOK_TOOL = {
-  ...BOOKING_TOOLS[1],
-  description:
-    "Book an appointment at an available ISO start time. Requires the caller's name, a phone number (their caller ID is used if they don't give one), and a working EMAIL ADDRESS — appointments at this business are VIDEO meetings and the meeting link only arrives by email. emailDeclined is NOT accepted: there is no way to book without an email and no phone-only option, so never offer one. If the caller cannot or will not give an email, stop collecting booking details and use take_message so a human can arrange it.",
-  parameters: {
-    ...BOOKING_TOOLS[1].parameters,
-    properties: {
-      ...BOOKING_TOOLS[1].parameters.properties,
-      emailDeclined: {
-        type: "boolean",
-        description: "Not accepted for this business — its video appointments cannot be booked without an email. If the caller declines, use take_message instead.",
-      },
-    },
-  },
-} as const;
+/** Whether a phone session with this booking mode and handoff carries the tool. Everything else is always there. */
+function onSession(name: CustomerToolName, mode: BookingMode, handoffAvailable: boolean): boolean {
+  switch (name) {
+    // Advertised ONLY when the account actually has somewhere to send the
+    // caller; asking for a person has nothing to do with whether this
+    // business takes appointments, so booking mode never removes it.
+    case "transfer_to_human": return handoffAvailable;
+    // "Always take a message": every booking tool but the one that books a NEW
+    // appointment (`booking-mode.ts`). check_availability stays — a move needs
+    // a time it offered.
+    case "book_appointment": return mode === "full";
+    case "check_availability": case "reschedule_appointment": case "cancel_appointment":
+    case "find_my_booking": case "confirm_identity":
+      return mode !== "none";
+    case "capture_lead": case "take_message": case "log_transcript": return true;
+  }
+}
 
 export function toolSchemas(
   mode: BookingMode, meetingType: "in_person" | "phone" | "video",
   handoffAvailable: boolean,
 ) {
-  // Appended to CORE, not to BOOKING: asking for a person has nothing to do
-  // with whether this business takes appointments.
-  const core = handoffAvailable ? [...CORE_TOOLS, HANDOFF_TOOL] : [...CORE_TOOLS];
-  if (mode === "none") return core;
-  // "Always take a message": every booking tool but the one that books a NEW
-  // appointment (`booking-mode.ts`). check_availability stays — a move needs
-  // a time it offered.
-  // Its description must not name the tool this session lacks.
-  if (mode === "manage") {
-    return [
-      ...BOOKING_TOOLS.filter((t) => t.name !== "book_appointment").map((t) => (t.name === "check_availability"
-        ? { ...t, description: t.description.replace("book_appointment or reschedule_appointment", "reschedule_appointment") }
-        : t)),
-      ...core,
-    ];
-  }
-  const booking = meetingType === "video"
-    ? BOOKING_TOOLS.map((t) => (t.name === "book_appointment" ? VIDEO_BOOK_TOOL : t))
-    : [...BOOKING_TOOLS];
-  return [...booking, ...core];
+  // The catalogue's order is the session's order: booking tools, then the
+  // core three, then transfer_to_human. A variant is picked by the session's
+  // facts: check_availability's under "manage" (its description must not name
+  // the tool this session lacks), book_appointment's on a video calendar.
+  const facts = [mode, meetingType];
+  return CUSTOMER_TOOL_SPECS
+    .filter((s) => onSession(s.name, mode, handoffAvailable))
+    .map((s) => realtimeShape(selectVariant(s, facts)));
 }
