@@ -389,7 +389,7 @@ describe("buildSystemPrompt medium", () => {
         medium: "web_voice", bookingEnabled: false, afterHours: "message_only", callerNumber: null,
       }), now);
       expect(demo).toContain(
-        "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
+        "AFTER HOURS — If the business is closed right now, say so briefly and point them to the next step the notice below gives; do not attempt anything else.",
       );
       expect(demo).not.toContain("MESSAGES ONLY");
     });
@@ -552,9 +552,11 @@ function digestOf(prompts: string[]): string {
  * `webAndDemos`: the web chat's and the browser demos' 864, re-pinned 2026-11-18 by F-023 PR 4, which names only
  * offered tools: every "web_voice" prompt lost the tool lines a demo has no tool for, and every "web" prompt with
  * booking on or a transfer number (neither of which the chat route sends) lost the lines naming tools the chat is
- * not sent. The same split and the same history hold for the two digests below.
+ * not sent. Re-pinned again 2026-11-19 (owner decision): the demos' "take a message" wording points to their notice
+ * instead (DEMO_NEXT_STEP); the phone half did not change. The same split and the same history hold for the two
+ * digests below.
  */
-const PRE_S47B_DIGEST = { phone: "4943d1f82cb5b667f6e68a792968074d514ad06677e6a557213f1622551dca43", webAndDemos: "5c5d5808f24742649f3b1fa3c58079a42cf358b1de089aa4bc3147e5ed195f05" };
+const PRE_S47B_DIGEST = { phone: "4943d1f82cb5b667f6e68a792968074d514ad06677e6a557213f1622551dca43", webAndDemos: "a0738afa01f10f2d90cecefed32740054ee24c36a9ea9e50b1be7c2ba7367ea4" };
 
 describe("buildSystemPrompt — no trade module is byte-identical to before S-47b", () => {
   it("covers 1728 combinations (guards the digest from an empty loop)", () => {
@@ -666,7 +668,7 @@ function everyS47cBaseInput(): VoicePromptInput[] {
 /** sha256 over all 5184 prompts, split by medium. `phone`: as they were at 044b1ab2, BEFORE S-47c touched
  *  system-prompt.ts (split out by F-023 PR 4 from main 4b7e9147's builder, unchanged since). `webAndDemos`:
  *  re-pinned at F-023 PR 4, because the web_voice and web inputs changed (see PRE_S47B_DIGEST). */
-const PRE_S47C_DIGEST = { phone: "69fceb4f9db84464c8a7574a4f7eddb8a63ab238182372dc5eafb492bc68e494", webAndDemos: "396a6fd81f6885a4c872b5f677cf950c40feae7dfb657299293e50403ade7eb3" };
+const PRE_S47C_DIGEST = { phone: "69fceb4f9db84464c8a7574a4f7eddb8a63ab238182372dc5eafb492bc68e494", webAndDemos: "66bc59e2f56f768f8877422dd80540fc0779a6ae09c353255199df9a3e63cda4" };
 
 describe("buildSystemPrompt — no hours and no list is byte-identical to before S-47c (C3)", () => {
   it("covers 5184 combinations (guards the digest from an empty loop)", () => {
@@ -700,6 +702,10 @@ const NAMES_BLOCK = `\n\n${["SERVICES (what the business offers):", "- Haircut (
 const TODAY_PRICE = "- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.";
 const LIST_PRICE = "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
 const CLOSED_PRICE = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
+/** A price line as a surface says it: a browser demo points to its notice where the others offer to take details
+ *  (owner decision 2026-11-19). */
+const onSurface = (medium: "phone" | "web" | "web_voice", line: string) =>
+  medium === "web_voice" ? line.replace("offer to take their details", "point them to the next step the notice below gives") : line;
 const PUT_THROUGH = "offer to put them through to someone on the team";
 const TOOL_TODAY = "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
 const TOOL_CLOSED = "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
@@ -732,7 +738,7 @@ function everyS47dBaseInput(): VoicePromptInput[] {
  *  system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there; split out by
  *  F-023 PR 4 from main 4b7e9147's builder, unchanged since). `webAndDemos`: re-pinned at F-023 PR 4, because the
  *  web_voice and web inputs changed (see PRE_S47B_DIGEST). */
-const PRE_S47D_DIGEST = { phone: "407431c8cdd71dadd5c390e864bedc5099f5d7c14f41c0d539bef22834a7edb8", webAndDemos: "0d20bf81aba63536453cfcc418793fc7df82f86941f92b0fe951ecf498a875aa" };
+const PRE_S47D_DIGEST = { phone: "407431c8cdd71dadd5c390e864bedc5099f5d7c14f41c0d539bef22834a7edb8", webAndDemos: "541a58f3422dfce88c8ea545db009cacb626c2aef0b8c6a1d701aad66164ee2f" };
 
 describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
   it("covers 31104 combinations (guards the digest from an empty loop)", () => {
@@ -774,7 +780,7 @@ describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
   });
   it("closed now, voice demo: the definite demo line (SD6)", () => {
     const p = buildSystemPrompt(baseInput({ medium: "web_voice", afterHours: "hours_then_message", businessHours: CLOSED_H }), now);
-    expect(lastLine(p)).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
+    expect(lastLine(p)).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and point them to the next step the notice below gives; do not attempt anything else.");
   });
   it("closed now, phone, Follow business hours: the closed line, with the booking clause when booking is on and the person clause per SD5 (mutation: drop the hasTradeRules branch -> FAILS)", () => {
     expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: false, businessHours: CLOSED_H }), now))).toBe(
@@ -873,11 +879,12 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
     for (const medium of ["phone", "web", "web_voice"] as const)
       for (const tradeModule of [null, "events"] as const) {
         const input = baseInput({ medium, tradeModule });
+        const [listPrice, todayPrice] = [onSurface(medium, LIST_PRICE), onSurface(medium, TODAY_PRICE)];
         const withL = buildSystemPrompt({ ...input, priceList: LIST }, now);
         expect(withL).toContain(LIST_BLOCK);
-        expect(withL.split(LIST_PRICE).length - 1).toBe(1);
-        expect(withL).not.toContain(TODAY_PRICE);
-        expect(withL.replace(LIST_BLOCK, "").replace(LIST_PRICE, TODAY_PRICE)).toBe(buildSystemPrompt(input, now));
+        expect(withL.split(listPrice).length - 1).toBe(1);
+        expect(withL).not.toContain(todayPrice);
+        expect(withL.replace(LIST_BLOCK, "").replace(listPrice, todayPrice)).toBe(buildSystemPrompt(input, now));
       }
   });
   it("hours and a list together: hours first, then the list, both before HARD LIMITS", () => {
@@ -898,10 +905,11 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
   it("C20: a FAILED list read closes the price line, on every surface, and changes nothing else (mutation: ignore priceListUnavailable -> FAILS)", () => {
     for (const medium of ["phone", "web", "web_voice"] as const) {
       const input = baseInput({ medium });
+      const [closedPrice, todayPrice] = [onSurface(medium, CLOSED_PRICE), onSurface(medium, TODAY_PRICE)];
       const closed = buildSystemPrompt({ ...input, priceList: null, priceListUnavailable: true }, now);
-      expect(closed).toContain(CLOSED_PRICE);
-      expect(closed).not.toContain(TODAY_PRICE);
-      expect(closed.replace(CLOSED_PRICE, TODAY_PRICE)).toBe(buildSystemPrompt(input, now));
+      expect(closed).toContain(closedPrice);
+      expect(closed).not.toContain(todayPrice);
+      expect(closed.replace(closedPrice, todayPrice)).toBe(buildSystemPrompt(input, now));
     }
   });
   it("C20: an EMPTY list is not a failure: today's line, byte for byte (mutation: treat [] as unavailable -> FAILS)", () => {
@@ -943,7 +951,7 @@ const DAYS_BLOCK = "CLOSED DAYS (the business is closed all day on these dates, 
 const SEE_TODAY_PHONE_HEAD = "AFTER HOURS — The business is closed right now (see TODAY above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above";
 const BOOK_CLAUSE = ", and book a time that check_availability returns";
 const WEB_TODAY = "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
-const DEMO_TODAY = "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.";
+const DEMO_TODAY = "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and point them to the next step the notice below gives; do not attempt anything else.";
 
 describe("buildSystemPrompt — S-47d byte identity (spec 5.4.4)", () => {
   it("null, [] and an open status are byte-identical too, across all 31104 (mutations: an unconditional \"\" before the TODAY slot -> FAILS; treat [] as closed days -> FAILS)", () => {
@@ -1086,7 +1094,7 @@ describe("buildSystemPrompt — AFTER HOURS with a closure (spec 5.4.2; SD16, S1
       expect(lastLine(buildSystemPrompt(baseInput({ medium: "web", afterHours, businessStatus: S_CLOSED_TODAY, businessHours: OPEN_H }), now)))
         .toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
       expect(lastLine(buildSystemPrompt(baseInput({ medium: "web_voice", afterHours, businessStatus: S_CLOSED_TODAY, businessHours: OPEN_H }), now)))
-        .toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
+        .toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and point them to the next step the notice below gives; do not attempt anything else.");
     }
   });
   it("web and demo under Always take a message, running late, no hours: today's conditional line", () => {

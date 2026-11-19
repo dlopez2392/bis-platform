@@ -168,6 +168,15 @@ describe("the prompt names only the tools its session is offered (F-023 PR 4)", 
     expect(wrong).toEqual([]);
   });
 
+  // Owner decision 2026-11-19: nothing reaches anyone from a demo, so it never tells her to take a message or have
+  // someone call back, whatever the profile says; it points to the notice the route appends.
+  it("a browser demo (web_voice) never tells her to take a message, whatever the profile says", () => {
+    const MESSAGE_WORDS = /take a message|take their details|call (them|you) back|(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)|le (van a|vamos a) llamar/i;
+    const wrong = SURFACE_INPUTS.flatMap(([k, i]) => buildSystemPrompt({ ...i, medium: "web_voice" }, NOW).split("\n")
+      .filter((l) => MESSAGE_WORDS.test(l)).map((l) => `${k}: ${l.slice(0, 80)}`));
+    expect(wrong).toEqual([]);
+  });
+
   it("the web chat names capture_lead and nothing else, apart from the one line that says the phone's two do not exist here", () => {
     const ONLY = "- capture_lead is the ONLY tool you have here.";
     const wrong = [...SURFACE_INPUTS, ...Object.entries(CHAT_INPUTS)].flatMap(([k, i]) => {

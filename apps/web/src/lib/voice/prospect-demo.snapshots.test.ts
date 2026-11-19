@@ -11,7 +11,10 @@ import { CUSTOMER_TOOL_NAMES } from "../tools/customer/specs";
 const FIXTURE = fileURLToPath(new URL("./prospect-demo.prompt-samples.json", import.meta.url));
 const SAMPLES = ["landscaping|en|closed", "insurance|both|open", "events|es|open"];
 /** sha256 (digestPrompts) over the 15 prompts that are not SAMPLES, in enumeration order: F-023 PR 4's re-baseline. */
-const REST_DIGEST = "60c0821d7215adb365244ea9b2b45247c847f22e59c87f1e5df15a4fd87feb12";
+const NOTICE_HEADING = "## This conversation is a preview in a web browser, not the phone line";
+/** Every way the prompt has said "take a message" or "they will be called back", in English and in Spanish. */
+const MESSAGE_WORDS = /take a message|take their details|call (them|you) back|(tomar|dejar|tomarle|dejarle) (un|su) (mensaje|recado)|le (van a|vamos a) llamar/i;
+const REST_DIGEST ="60c0821d7215adb365244ea9b2b45247c847f22e59c87f1e5df15a4fd87feb12";
 /** A Monday, 9:00 AM in Chicago: the weekday row decides open or closed. */
 const NOW = new Date("2026-11-16T15:00:00Z");
 
@@ -54,6 +57,18 @@ describe("the prospect demo's whole instructions, byte for byte (F-023 PR 4)", (
     const rest = Object.entries(actual).filter(([k]) => !SAMPLES.includes(k)).map(([, p]) => p);
     expect(rest.length).toBe(15);
     expect.soft(digestPrompts(rest), "the 15 prompts that are not samples").toBe(REST_DIGEST);
+  });
+
+  // Owner decision 2026-11-19: nothing reaches anyone from a demo, so above its notice the prompt never tells her to
+  // take a message or have someone call back; it points to the notice, which is there, after a blank line.
+  it("never tells her to take a message, in any combination, and always carries the notice after a blank line", () => {
+    const wrong = Object.entries(allInstructions()).flatMap(([key, text]) => {
+      const at = text.indexOf(`\n\n${NOTICE_HEADING}`);
+      if (at < 0) return [`${key}: no notice after a blank line`];
+      const above = text.slice(0, at);
+      return MESSAGE_WORDS.test(above) ? [`${key}: ${above.split("\n").find((l) => MESSAGE_WORDS.test(l))}`] : [];
+    });
+    expect(wrong).toEqual([]);
   });
 
   // The F-023 §2 defect's regression test: the session is minted with `tools: []`, so its prompt may name no tool.

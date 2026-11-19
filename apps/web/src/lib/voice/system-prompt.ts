@@ -11,7 +11,7 @@ import { offeredTools, ifOffered } from "./tools/offered";
 import { tradeModuleBlock } from "./modules";
 import {
   businessHoursBlock, servicesBlock, LIST_PRICE_LINE, CLOSED_PRICE_LINE, AFTER_HOURS_CLOSED_WEB,
-  AFTER_HOURS_CLOSED_WEB_VOICE, AFTER_HOURS_CLOSED_WEB_TODAY, AFTER_HOURS_CLOSED_WEB_VOICE_TODAY,
+  AFTER_HOURS_CLOSED_WEB_VOICE, AFTER_HOURS_CLOSED_WEB_TODAY, AFTER_HOURS_CLOSED_WEB_VOICE_TODAY, DEMO_NEXT_STEP,
   afterHoursClosedPhoneLine, transferToolLineClosed,
 } from "./knowledge/prompt-blocks";
 import { hasOpenDay } from "./knowledge/hours";
@@ -43,6 +43,10 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   const onWeb = input.medium === "web";
   // Declared here (S-47c moved it up from the after-hours code below, which explains it): `closedNow` needs it.
   const onPhone = !input.medium || input.medium === "phone";
+  // The browser demos (owner decision 2026-11-19): wherever the phone would take a message, a demo points to the next
+  // step its notice gives instead (DEMO_NEXT_STEP), because nothing said in a demo reaches anyone.
+  const onDemo = input.medium === "web_voice";
+  const demoWords = (line: string): string => (onDemo ? line.replace("offer to take their details", DEMO_NEXT_STEP) : line);
 
   // S-47c (spec 5.2, 5.2.1, C5, C14): structured hours, only when at least one day is open (SD17). `closedNow`
   // is the PHONE under "Follow business hours" with the hours saying closed right now (C19); while it holds, the
@@ -91,7 +95,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // `handoffAvailable` and on a browser demo is never.
   const wouldRatherTalkToAPerson = onWeb
     ? CAPTURE_LEAD_FOLLOWUP
-    : offered.has("transfer_to_human") && !closedNow
+    : onDemo
+      ? DEMO_NEXT_STEP
+      : offered.has("transfer_to_human") && !closedNow
       ? "offer to put them through to someone on the team"
       : "offer to take a message";
 
@@ -175,16 +181,19 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     `- Never invent facts about ${input.businessName} — no capabilities, client names, statistics, or timelines that are not stated above.`,
     // S-47c: a list swaps today's price line for the list's (spec 5.2); a FAILED list read closes it (owner
     // decision C20); insurance keeps today's line either way (C13, spec 5.4); an empty list keeps it (C3).
-    insurance
+    // Every one ends "offer to take their details", which a demo cannot do: it points to its notice instead.
+    demoWords(insurance
       ? `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`
       : priceList
         ? LIST_PRICE_LINE
         : input.priceListUnavailable === true
           ? CLOSED_PRICE_LINE
-          : `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`,
+          : `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`),
     onWeb
       ? "- If you do not know something, say so, and use capture_lead to get their name and a way to reach them so the team can follow up."
-      : "- If you do not know something, say so and take a message rather than guessing.",
+      : onDemo
+        ? `- If you do not know something, say so rather than guessing, and ${DEMO_NEXT_STEP}.`
+        : "- If you do not know something, say so and take a message rather than guessing.",
     "- Never give legal, medical, or compliance advice.",
     // S-47b (spec section 5.2): the account's trade rules, right after the general limits. None on the
     // profile gives no lines at all, so every existing prompt is byte-identical (system-prompt.test.ts's
@@ -300,7 +309,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       "",
       onWeb
         ? "This business does not take bookings through this chat. If a visitor asks to schedule something, use capture_lead to get their name and a way to reach them, and say the team will follow up to set it up."
-        : "This business does not take bookings by phone. If a caller asks to schedule something, take a message with their details and say someone will call them back to arrange it.",
+        : onDemo
+          ? `You cannot book anything in this conversation. If they ask to schedule something, ${DEMO_NEXT_STEP}.`
+          : "This business does not take bookings by phone. If a caller asks to schedule something, take a message with their details and say someone will call them back to arrange it.",
     );
   }
 
@@ -332,7 +343,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ? (onWeb ? AFTER_HOURS_CLOSED_WEB_TODAY : AFTER_HOURS_CLOSED_WEB_VOICE_TODAY)
       : onWeb
         ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
-        : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.");
+        : `AFTER HOURS — If the business is closed right now, say so briefly and ${DEMO_NEXT_STEP}; do not attempt anything else.`);
     else if (!hoursBlock.open) lines.push("", onWeb ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_VOICE);
   } else if ((hoursBlock && !hoursBlock.open) || (!hoursBlock && closure)) {
     // S-47c: "Follow business hours, then take a message", closed now: the setting finally has hours to follow.
