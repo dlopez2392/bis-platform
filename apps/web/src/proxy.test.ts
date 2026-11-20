@@ -58,6 +58,28 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
 });
 
 /**
+ * The read-only MCP server (plan 2026-11-19-mcp-server.md §3.1, spike §7.3): clerkMiddleware answers a malformed
+ * three-part bearer (`Bearer a.b.c`) with a 500 before any route runs, so /api/mcp authenticates itself and the proxy
+ * must never run there. The OAuth metadata documents are public and carry no session.
+ */
+describe("proxy.ts — the MCP endpoint and its OAuth metadata skip the proxy (plan §3.1)", () => {
+  it.each([
+    "/api/mcp", "/api/mcp/", "/api/mcp?x=1",
+    "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/api/mcp",
+    "/.well-known/oauth-authorization-server",
+  ])("%s skips the proxy (mutation: drop api/mcp from either matcher entry -> FAILS for /api/mcp)", (path) => {
+    expect(runs(path)).toBe(false);
+  });
+
+  it.each(["/api/mcpx", "/api/mcp-admin", "/api/concierge/mcp", "/dashboard/mcp"])(
+    "%s still runs the proxy: only the endpoint itself is carved out (mutation: exclude api/mcp as a bare prefix in both entries -> FAILS)",
+    (path) => {
+      expect(runs(path)).toBe(true);
+    },
+  );
+});
+
+/**
  * F-118 part 1 (spec 3.2): the proxy hands the reason gate the in-account path the person asked for, in the
  * x-bis-path request header. clerkMiddleware cannot run under vitest, so this reads proxy.ts's real syntax
  * tree (comments are trivia and never become nodes): a CALL of accountPathOf, and a `.set(…)` whose first

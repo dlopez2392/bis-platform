@@ -258,6 +258,11 @@ const ALLOWED: Record<string, Reason> = {
   // branch only, after the signed pass verified; it reads the caller's own membership, enrolment and the switch,
   // never customer data, and refuses on any identity mismatch.
   "lib/owner-line/session.ts": "public-or-cron",
+  // MCP server PR B (focus row 13): the per-request checks behind POST /api/mcp, which has no Clerk session (an OAuth
+  // bearer verified in the route). It reads the token's own person's memberships and each business's AI-apps switch,
+  // then notes the read (noteAiAppRead, which re-checks role and switch in SQL) before any read; the reads themselves
+  // run on ownerLineReadClient (lib/owner-line/reader.ts above), scoped to the one allowed account.
+  "lib/mcp/run.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",
   // The suggestion actions (item 8b-1): decide.ts writes proposals on the service client only after getProposal
   // on the request client (0088's RLS) found the row; every CRM write and its inverse stays on the request client.

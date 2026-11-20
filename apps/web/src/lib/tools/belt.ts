@@ -45,6 +45,31 @@ export function chatShape<S extends ToolSpec>(spec: S): ChatTool<S> & AiTool {
   return { type: "function", function: { name: spec.name, description: spec.description, parameters: spec.parameters } };
 }
 
+/** The one parameter an MCP tool adds to its spec (plan 2026-11-19-mcp-server.md §3.2): which business, by the id
+ *  `my_businesses` lists. Optional, never required: a person with one business leaves it out. */
+export const MCP_BUSINESS_PARAMETER = {
+  type: "string",
+  description: "Which business to ask about: an id from my_businesses. Leave it out if you have only one business.",
+} as const;
+
+export type McpTool<S extends ToolSpec = ToolSpec> = {
+  name: S["name"]; description: S["description"];
+  inputSchema: { type: "object"; properties: Readonly<Record<string, unknown>>; required: S["parameters"]["required"] };
+  annotations: { readOnlyHint: true };
+};
+
+/** An MCP `tools/list` entry (the read-only MCP server, §3.3): the spec's name and description, its parameters plus
+ *  `business`, in THAT key order, and `readOnlyHint` (every tool the server offers only reads). Pinned by
+ *  lib/mcp/mcp-tool-schemas.fixture.json, so a word changed on a staff tool shows up there too. */
+export function mcpShape<S extends ToolSpec>(spec: S): McpTool<S> {
+  return {
+    name: spec.name, description: spec.description,
+    inputSchema: { type: "object", properties: { ...spec.parameters.properties, business: MCP_BUSINESS_PARAMETER },
+      required: spec.parameters.required },
+    annotations: { readOnlyHint: true },
+  };
+}
+
 /** What a failure logs: its class, never its message, which can quote a customer's words or number (the owner line's
  *  rule since Task 9 and Task 12, lib/owner-line/finish.ts). */
 export const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
