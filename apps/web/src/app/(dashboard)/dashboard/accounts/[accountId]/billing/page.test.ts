@@ -407,6 +407,8 @@ describe("the Plan and billing page, F-088 PR 3", () => {
 
   it("not billed yet: the 'Billing isn't set up yet' words stay AND the includes card shows, with no bigger-plan card (mutation: return the empty state early → includes FAILS)", async () => {
     dbm.getAccountBilling.mockResolvedValue(null);
+    // Facts that WOULD grade Sofía "in a bigger plan": the unbilled page still shows no bigger-plan card.
+    facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
     const tree = await page();
     expect(find(tree, EmptyState)[0]?.props).toMatchObject({ title: m["billing.page.empty.title"] });
     expect(notesIn(cardOf(tree, "includes")[0])).toHaveLength(3);
@@ -444,6 +446,26 @@ describe("the Plan and billing page, F-088 PR 3", () => {
     expect(await texting()).toMatchObject({ state: "needs_setup", sentence: m["surface.texting.not_registered.agency"] });
     facts.fn.mockResolvedValue(OK_FACTS({ a2pStatus: "rejected" }));
     expect(await texting()).toMatchObject({ sentence: m["surface.texting.registration_rejected.agency"] });
+    guard.isAgency = false;
+    // The client never reads the agency's instructions: rejected tells them it has to be sent again.
+    expect(await texting()).toMatchObject({ state: "needs_setup", sentence: m["surface.texting.registration_rejected"] });
+    expect(m["surface.texting.registration_rejected"]).toContain("sent to them again");
+    expect(m["surface.texting.registration_rejected"]).not.toContain("Checklist");
+  });
+
+  it("a plan that ENDED reads the ended words for Sofía and the chat, never 'until your account's payment is settled' (mutation: drop the cause check in capabilities.ts → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "canceled" });
+    const ended = (cause: "ended" | "payment") => OK_FACTS({
+      verdict: { paused: true, voice: false, concierge: false, forward: false, cause }, numberStatuses: [], conciergeLive: false,
+    });
+    const sentences = async () => notesIn(cardOf(await page(), "includes")[0]).map((n) => (n.props as { sentence: string }).sentence).slice(0, 2);
+    facts.fn.mockResolvedValue(ended("ended"));
+    expect(await sentences()).toEqual([m["surface.sofia.billing_ended"], m["surface.chat.billing_ended"]]);
+    guard.isAgency = true;
+    expect(await sentences()).toEqual([m["surface.sofia.billing_ended.agency"], m["surface.chat.billing_ended.agency"]]);
+    guard.isAgency = false;
+    facts.fn.mockResolvedValue(ended("payment"));
+    expect(await sentences()).toEqual([m["surface.sofia.billing_paused"], m["surface.chat.billing_paused"]]);
   });
 
   it("no support address set: the ask names who to ask and has no mailto link (mutation: build mailto: from an empty address → FAILS)", async () => {

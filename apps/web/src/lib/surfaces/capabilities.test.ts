@@ -46,10 +46,11 @@ type OkFacts = Extract<Facts, { read: "ok" }>;
 
 const A = "11111111-1111-4111-8111-111111111111";
 const PAUSED: BillingVerdict = { paused: true, voice: false, concierge: false, forward: true };
+const ENDED = { ...PAUSED, cause: "ended" as const };
 const NO_VOICE: BillingVerdict = { paused: false, voice: false, concierge: true, forward: true };
 const NO_CHAT: BillingVerdict = { paused: false, voice: true, concierge: false, forward: true };
 const CRM: BillingVerdict = { paused: false, voice: false, concierge: false, forward: true };
-const VERDICTS: BillingVerdict[] = [ALL_ON, NO_VOICE, NO_CHAT, CRM, PAUSED, { ...PAUSED, forward: false }];
+const VERDICTS: (BillingVerdict & { cause?: "payment" | "ended" | null })[] = [ALL_ON, NO_VOICE, NO_CHAT, CRM, PAUSED, { ...PAUSED, forward: false }, ENDED, { ...PAUSED, cause: "payment" as const }];
 const TRADES = ["plumbing", null, "restaurant", "child_care", "not_a_trade_key"];
 const CRM_ONLY = new Set<string | null>(["restaurant", "child_care"]);
 const PROFILES: OkFacts["profile"][] = [null, { enabled: true }, { enabled: false }, { enabled: true, forwardCalls: true }, { enabled: false, forwardCalls: true }];
@@ -78,7 +79,7 @@ const TABLE: [string, string, [string, Facts][]][] = [
     // route.ts: a cleared call goes to the transfer number while forward_calls is on, so Sofía is not answering.
     ["calls_forwarded", ok({ profile: { enabled: true, forwardCalls: true } })],
   ]],
-  ["sofia", "waiting", [["billing_paused", ok({ verdict: PAUSED })]]],
+  ["sofia", "waiting", [["billing_paused", ok({ verdict: PAUSED })], ["billing_ended", ok({ verdict: ENDED })]]],
   ["sofia", "bigger_plan", [["plan_no_voice", ok({ verdict: NO_VOICE })]]],
   ["sofia", "absent", [["crm_only_trade", ok({ trade: "restaurant", profile: OFF })]]],
   ["webChat", "live", [["chat_open", ok()]]],
@@ -86,7 +87,7 @@ const TABLE: [string, string, [string, Facts][]][] = [
     ["read_failed", { read: "failed" }], ["no_trade", ok({ trade: null, conciergeLive: false })],
     ["chat_off", ok({ conciergeLive: false })],
   ]],
-  ["webChat", "waiting", [["billing_paused", ok({ verdict: PAUSED })]]],
+  ["webChat", "waiting", [["billing_paused", ok({ verdict: PAUSED })], ["billing_ended", ok({ verdict: ENDED })]]],
   ["webChat", "bigger_plan", [["plan_no_chat", ok({ verdict: NO_CHAT })]]],
   ["webChat", "absent", [["crm_only_trade", ok({ trade: "child_care", conciergeLive: false })]]],
   ["texting", "live", [["texting_registered", ok()]]],

@@ -13,8 +13,8 @@ import type { Capability, CapabilityGrade, CapabilityStateName } from "@/lib/sur
  * sentence stays on text tokens.
  */
 export const TONE: Record<CapabilityStateName, { chip: string; dot: string }> = {
-  live: { chip: "bg-[var(--good-bg)] text-[var(--good)]", dot: "bg-[var(--good)]" },
-  needs_setup: { chip: "bg-[var(--warn-bg)] text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  live: { chip: "bg-[var(--good-bg)] text-[var(--text-1)]", dot: "bg-[var(--good)]" },
+  needs_setup: { chip: "bg-[var(--warn-bg)] text-[var(--text-1)]", dot: "bg-[var(--warn)]" },
   waiting: { chip: "bg-[var(--accent-dim)] text-[var(--accent)]", dot: "bg-[var(--accent)]" },
   bigger_plan: { chip: "bg-[var(--surface-2)] text-[var(--text-2)]", dot: "bg-[var(--text-2)]" },
   // The word is on --text-2 (--text-3 on --surface-2 is 3.1:1 in light, under AA); only the dot is --text-3.
@@ -68,7 +68,7 @@ export function sofiaSentenceKey(grade: CapabilityGrade, reader: SurfaceReader):
   switch (reason) {
     case "sofia_off": case "no_number": case "no_trade":
       return reader.isAgency ? (`surface.sofia.${reason}.agency` as MessageKey) : "surface.sofia.setting_up";
-    case "plan_no_voice": case "sofia_testing": case "billing_paused": case "calls_forwarded":
+    case "plan_no_voice": case "sofia_testing": case "billing_paused": case "billing_ended": case "calls_forwarded":
       return (reader.isAgency ? `surface.sofia.${reason}.agency` : `surface.sofia.${reason}`) as MessageKey;
     case "sofia_answering": case "read_failed": case "crm_only_trade":
       return `surface.sofia.${reason}` as MessageKey;
@@ -116,7 +116,7 @@ export function webChatSentenceKey(grade: CapabilityGrade, reader: SurfaceReader
       return reader.isAgency ? "surface.chat.chat_off.agency" : "surface.chat.setting_up";
     case "no_trade":
       return reader.isAgency ? "surface.chat.no_trade.agency" : "surface.chat.setting_up";
-    case "plan_no_chat": case "billing_paused":
+    case "plan_no_chat": case "billing_paused": case "billing_ended":
       return (reader.isAgency ? `surface.chat.${reason}.agency` : `surface.chat.${reason}`) as MessageKey;
     case "chat_open": case "crm_only_trade": case "read_failed":
       return `surface.chat.${reason}` as MessageKey;
@@ -160,6 +160,6 @@ export function capabilityLink(
   const base = `/dashboard/accounts/${accountId}`;
   if (!reader.isAgency || grade.state !== "needs_setup" || grade.reason === "read_failed") return undefined;
   if (grade.reason === "no_trade") return { href: `${base}/settings`, label: tr.text("nav.settings") };
-  if (cap === "texting") return { href: `${base}/checklist`, label: tr.text("surface.link.checklist") };
+  if (cap === "texting") return { href: `${base}/checklist#a2p-registration`, label: tr.text("surface.link.checklist") };
   return { href: `${base}/voice`, label: tr.text("surface.link.voice") };
 }
