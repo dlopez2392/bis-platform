@@ -770,6 +770,21 @@ describe("F-082 PR 4: daily brief keywords on Preferences", () => {
   });
 });
 
+// MCP PR C (plan 2026-11-19-mcp-server.md 3.6): the "AI apps" card (Team, the Owner's) and "Use BIS from your AI app"
+// (Preferences, Owners and Staff) are registered by the words a person would type, in both languages.
+describe("MCP PR C: AI apps keywords on Preferences and Team", () => {
+  const WORDS = ["ai apps", "claude", "chatgpt", "connector", "aplicaciones de ia", "conector"];
+  it.each([["nav:preferences", true], ["nav:team", false], ["settings:team", true]] as const)(
+    "finds %s by every AI-app word, in English and Spanish (mutation: drop one word -> FAILS by name)", (id, agency) => {
+      const entries = id === "nav:team" ? buildPaletteEntries(BASE, false, true) : buildPaletteEntries(BASE, agency, false);
+      const entry = entries.find((e) => e.id === id)!;
+      for (const word of WORDS) {
+        expect(entry.keywords, `${id} ${word}`).toContain(word);
+        expect(filterEntries(entries, word).map((e) => e.id), `${id} ${word}`).toContain(id);
+      }
+    });
+});
+
 // F-032 Task 6: the "Call in to your business" card (Preferences) and the switch card (Team).
 describe("F-032 Task 6: owner-line keywords on Preferences and Team", () => {
   it("finds Preferences by owner line, call in, pin and llamar (mutation: drop one of the four -> FAILS by name)", () => {

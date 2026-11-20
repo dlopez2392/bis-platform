@@ -179,6 +179,10 @@ const ALLOWED: Record<string, Reason> = {
   // F-032 Task 5: the business's owner-line switch, after requireAccountOwner; the three switch columns and BIS's
   // null-account event are server-only writes, and nothing customer-shaped is read.
   "app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts": "owner-only",
+  // MCP server PR C (focus row 13): the business's AI-apps switch. After requireAccountAccess it refuses the agency and
+  // requires an account-scope Owner membership for THIS account, then writes the three server-only columns (the DB's
+  // record guard re-checks the Owner) and reads the read log; nothing customer-shaped.
+  "app/(dashboard)/dashboard/accounts/[accountId]/team/ai-apps-actions.ts": "owner-only",
   // F-032 Task 6: the switch card's own read (readOwnerLineSwitch, readAccountTimezone), after
   // requireAccountOwner above has already admitted only the agency or this account's own Owner; the three switch
   // columns are server-only (0115), same guard as team/owner-line-actions.ts above, and nothing customer-shaped

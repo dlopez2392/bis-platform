@@ -95,6 +95,7 @@ import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
 import { TradePickerDemo } from "./trade-picker-demo";
 import { BisAccessDemo } from "./bis-access-demo";
 import { DailyBriefDemo } from "./daily-brief-demo";
+import { AiAppsStates } from "./ai-apps-states";
 
 export const dynamic = "force-dynamic";
 
@@ -996,6 +997,11 @@ export default async function StyleguidePage({
         {/* F-082 PR 4: the daily brief card on Mis preferencias: off and on rows, empty, error, skeleton, Spanish. */}
         <Section title={t(m, "dailyBrief.card.title", "en")} file="components/preferences/daily-brief-card.tsx">
           <DailyBriefDemo />
+        </Section>
+
+        {/* MCP PR C: the AI apps card on Team and "Use BIS from your AI app" on Mis preferencias, every state. */}
+        <Section title={t(m, "aiApps.title", "en")} file="components/ai-apps/ai-apps-card.tsx">
+          <AiAppsStates />
         </Section>
 
         {/* F-046 part 1 (plan Task 12, spec 5.2-5.6): the Agenda card, first on the Calendar page: a Day with two jobs
