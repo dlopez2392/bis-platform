@@ -96,7 +96,8 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
   "nav:screened": ["refused", "blocked", "spam", "declined", "rejected", "turned away"],
   "nav:plans": ["billing", "pricing", "stripe", "subscription", "tier", "allowance", "overage"],
   "nav:demo": ["prospect", "sales", "pitch", "try", "hear", "sofia", "sofía", "receptionist"],
-  "nav:billing": ["invoice", "invoices", "card", "payment", "plan", "subscription", "receipt"],
+  // F-088 PR 3: the page is now "Plan and billing", the one upgrade page: upgrade/bigger plan, mejorar and its Spanish title.
+  "nav:billing": ["invoice", "invoices", "card", "payment", "plan", "subscription", "receipt", "upgrade", "bigger plan", "mejorar", "plan mayor", "plan y facturación", "factura", "pago"],
   // Staff and roles (Task 8): "equipo" (F-095 part 1) — nav.team's own
   // Spanish label, the word itself was missing before so an English-locale
   // session could not find this entry by it.

@@ -389,6 +389,14 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
         await expect(cpMain.locator('[data-status="active"]')).toBeVisible();
         await expect(cpMain.getByText(minutes, { exact: true })).toBeVisible();
         await expect(cpMain.getByText(nextInvoice)).toBeVisible();
+        // F-088 PR 3: the page is "Plan and billing" and carries "What your plan includes", one row per capability.
+        // No state word is asserted: which of the five a fixture account shows depends on its setup, and
+        // BILLING_ENFORCE (unset here) decides whether "a bigger plan" can appear at all.
+        await expect(cp.getByRole("heading", { level: 1, name: m["billing.page.title"], exact: true })).toBeVisible();
+        await expect(cpMain.getByRole("heading", { name: m["billing.includes.title"], exact: true })).toBeVisible();
+        for (const cap of ["sofia", "webChat", "texting"] as const) {
+          await expect(cpMain.getByRole("heading", { level: 4, name: m[`surface.cap.${cap}`], exact: true })).toBeVisible();
+        }
 
         const refusal = cp.getByRole("alert").filter({ hasText: m["billing.page.portalFailed"] });
         await cp.getByRole("button", { name: m["billing.page.manage"] }).click();

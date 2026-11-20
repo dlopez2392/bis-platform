@@ -1,10 +1,13 @@
 import { CreditCard } from "lucide-react";
-import { getPlan, serviceDb, sumUsageSince } from "@bis/db";
+import { brandDisplayName, getPlan, serviceDb, sumUsageSince } from "@bis/db";
 import { DotPill } from "@/components/dot-pill";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SurfaceStateNote, capabilityLink, capabilityPill, capabilitySentenceKey, type SurfaceReader } from "@/components/surface-state-note";
 import { requireAccountOwner } from "@/lib/auth";
+import { getTenantBranding } from "@/lib/branding/tenant-theme-reader";
+import { CAPABILITIES, capabilityState, readCapabilityFacts, type Capability, type CapabilityGrade } from "@/lib/surfaces/capabilities";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { billingCardView, billingStatusTreatment, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
@@ -15,6 +18,7 @@ import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { openBillingPortalAction } from "./actions";
 import { paymentProcessingTreatment } from "./client-status";
@@ -60,7 +64,7 @@ export default async function BillingPage({
   // The paused line (M7a PR-4 Task 10, plan G12) and its locale, read the
   // account layout's own way — billingVerdictFor is cached per request, so
   // this is the SAME read the layout already made on this navigation.
-  const [billing, account, verdict, prefs] = await Promise.all([
+  const [billing, account, verdict, prefs, capFacts] = await Promise.all([
     readAccountBilling(accountId),
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle().then(({ data, error }) => {
       if (error) throw new Error(`billing page: account read failed: ${error.message}`);
@@ -68,6 +72,7 @@ export default async function BillingPage({
     }),
     billingVerdictFor(accountId),
     getPersonPrefs(),
+    readCapabilityFacts(accountId),
   ]);
   const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   // S-10 T9a: `p()` wraps an already-resolved string from the `tFn()` calls
@@ -76,6 +81,13 @@ export default async function BillingPage({
   // is built right here in the server component.
   const pseudo = requestPseudoMode({ locale: localeParam });
   const p = (resolved: string) => (pseudo ? pseudoLocale(resolved) : resolved);
+  // F-088 PR 3: each capability graded from the ONE facts read; a failed read grades every row "needs setup",
+  // never "live" (capabilities.ts). The reader decides the words: a client is told BIS is on it, the agency is
+  // pointed at the page that fixes it. The Owner's link to THIS page is never offered here.
+  const reader: SurfaceReader = { isAgency, role: isAgency ? null : "owner" };
+  const grades = CAPABILITIES.map((cap) => ({ cap, grade: capabilityState(cap, capFacts) }));
+  const support = normalizeReplyTo(process.env.AGENCY_SUPPORT_EMAIL) ?? null;
+  const includes = includesCard({ grades, reader, accountId, locale, pseudo });
   const header = <PageHeader title={p(tFn(m, "billing.page.title", locale))} subtitle={p(tFn(m, "billing.page.subtitle", locale))} />;
   if (!billing) {
     // DECISION 4: the item is in the client's nav before billing starts, and
@@ -83,8 +95,9 @@ export default async function BillingPage({
     return (
       <>
         {header}
-        <div className="p-6">
+        <div className="space-y-4 p-6">
           <EmptyState icon={CreditCard} title={p(tFn(m, "billing.page.empty.title", locale))} body={p(tFn(m, "billing.page.empty.body", locale))} />
+          {includes}
         </div>
       </>
     );
@@ -108,7 +121,6 @@ export default async function BillingPage({
   // or its pause says so; and "contact us" has a target — the agency's support address, read here on
   // the server, else the line names who to ask.
   const ended = view.status === "canceled" || (verdict.paused && verdict.cause === "ended");
-  const support = normalizeReplyTo(process.env.AGENCY_SUPPORT_EMAIL) ?? null;
   const pausedLine = verdict.paused
     ? pausedSentence(verdict.cause === "ended" ? "ended" : "payment", support, locale, pseudo)
     : null;
@@ -149,8 +161,84 @@ export default async function BillingPage({
             ) : null}
           </CardContent>
         </Card>
+        {includes}
+        {await biggerPlanCard({ grades, support, accountId, locale, pseudo })}
       </div>
     </>
+  );
+}
+
+type Graded = { cap: Capability; grade: CapabilityGrade }[];
+
+/** "What your plan includes" (F-088 PR 3): one row per capability, dot + word + one sentence (rule 3). No
+ *  button, no padlock: the card says what is so, the next card (when it applies) says how to ask. */
+function includesCard({ grades, reader, accountId, locale, pseudo }: {
+  grades: Graded; reader: SurfaceReader; accountId: string; locale: Locale; pseudo: boolean;
+}) {
+  const tr = makeTr(locale, pseudo);
+  return (
+    <Card data-surface-card="includes">
+      <CardHeader><CardTitle>{tr.text("billing.includes.title")}</CardTitle></CardHeader>
+      <CardContent>
+        <ul className="flex flex-col divide-y divide-[var(--line)]">
+          {grades.map(({ cap, grade }) => (
+            <li key={cap} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:gap-6">
+              <h4 className="text-sm font-medium text-foreground sm:w-40 sm:shrink-0 sm:pt-0.5">{tr.text(`surface.cap.${cap}`)}</h4>
+              <SurfaceStateNote
+                align="start"
+                state={grade.state}
+                sentence={tr.text(capabilitySentenceKey(cap, grade, reader))}
+                word={capabilityPill(cap, grade, locale, pseudo)}
+                link={capabilityLink(cap, grade, reader, accountId, locale, pseudo)}
+                locale={locale}
+                pseudo={pseudo}
+              />
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** "What a bigger plan adds" (F-088 PR 3): only when a capability grades "in a bigger plan" (a paused, CRM-only
+ *  or not-yet-set-up one is not a plan matter). One plain sentence per missing capability, no price (owner
+ *  ruling 2026-11-20), and the one way to ask: a mail to the agency's support address, its subject naming the
+ *  BRAND (never accounts.name), else the line names who to ask. The mail is a quiet link, so the card carries no
+ *  primary (rule 8) and no hero (rule 11). Nothing here sends anything. */
+async function biggerPlanCard({ grades, support, accountId, locale, pseudo }: {
+  grades: Graded; support: string | null; accountId: string; locale: Locale; pseudo: boolean;
+}) {
+  const missing = grades.filter(({ grade }) => grade.state === "bigger_plan");
+  if (missing.length === 0) return null;
+  const tr = makeTr(locale, pseudo);
+  let ask: React.ReactNode = tr.text("billing.bigger.askNoContact");
+  if (support) {
+    const business = brandDisplayName(await getTenantBranding(accountId));
+    const subject = business
+      ? tFn(m, "billing.bigger.subject", locale, { business })
+      : tFn(m, "billing.bigger.subjectNoName", locale);
+    const [before, after] = tr.text("billing.bigger.ask").split("{email}");
+    ask = (
+      <>
+        {before}
+        <a href={`mailto:${support}?subject=${encodeURIComponent(subject)}`} className="underline underline-offset-2">{support}</a>
+        {after}
+      </>
+    );
+  }
+  return (
+    <Card data-surface-card="bigger">
+      <CardHeader><CardTitle>{tr.text("billing.bigger.title")}</CardTitle></CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-2">
+          {missing.map(({ cap }) => (
+            <li key={cap} className="text-sm text-foreground" lang={locale}>{tr.text(cap === "sofia" ? "billing.bigger.sofia" : "billing.bigger.webChat")}</li>
+          ))}
+        </ul>
+        <p className="text-sm text-muted-foreground" lang={locale}>{ask}</p>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -28,6 +28,15 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 // proves billingVerdictFor's fail-soft/switch contract).
 const verdict = vi.hoisted(() => ({ fn: vi.fn() }));
 vi.mock("@/lib/billing/standing-read", () => ({ billingVerdictFor: (...a: unknown[]) => verdict.fn(...a) }));
+// F-088 PR 3: the facts read is mocked at its own boundary (capabilities.test.ts proves what it reads); the
+// GRADE is the real capabilityState, so these tests prove the words the page reaches from real grades.
+const facts = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("@/lib/surfaces/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<object>()), readCapabilityFacts: (...a: unknown[]) => facts.fn(...a),
+}));
+// The brand name the support mail's subject names (never accounts.name): the cached tenant read.
+const brand = vi.hoisted(() => ({ name: "Rio Roofing" as string | null }));
+vi.mock("@/lib/branding/tenant-theme-reader", () => ({ getTenantBranding: async () => ({ brandName: brand.name }) }));
 // Echoes the bound locale back as `error` (S-10 T6 test below), rather than
 // a fixed "x" — the real action's own shape, with nothing to assert on its
 // REAL English/Spanish text here; billing/actions.test.ts already covers that.
@@ -38,6 +47,10 @@ const { EmptyState } = await import("@/components/empty-state");
 const { ManageBillingButton } = await import("./manage-billing-button");
 const { m } = await import("@/lib/messages");
 const { DotPill } = await import("@/components/dot-pill");
+const { Card } = await import("@/components/ui/card");
+const { Button } = await import("@/components/ui/button");
+const { PageHeader } = await import("@/components/page-header");
+const { SurfaceStateNote: Note } = await import("@/components/surface-state-note");
 
 /** Every element of a type in the tree the page returns (it is CALLED, not rendered). */
 function find(node: ReactNode, type: unknown): ReactElement[] {
@@ -68,6 +81,10 @@ const PLAN = { id: "p1", agencyId: "ag", name: "Growth", monthlyPriceCents: 1490
 const PAID = { accountId: "a", planId: "p1", complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
   subscriptionStatus: "active", currentPeriodStart: "2026-10-12T17:00:00+00:00", currentPeriodEnd: "2026-11-12T17:00:00+00:00",
   pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "", createdAt: "", updatedAt: "" } as AccountBilling;
+const OK_FACTS = (over: Record<string, unknown> = {}) => ({
+  read: "ok" as const, verdict: { paused: false, voice: true, concierge: true, forward: true }, trade: "roofing",
+  profile: { enabled: true, forwardCalls: false }, numberStatuses: ["live"], conciergeLive: true, a2pStatus: "approved", ...over,
+});
 const page = (searchParams: Record<string, string> = {}) =>
   BillingPage({ params: Promise.resolve({ accountId: "a" }), searchParams: Promise.resolve(searchParams) });
 
@@ -82,6 +99,9 @@ beforeEach(() => {
   prefs.language = null;
   verdict.fn.mockReset();
   verdict.fn.mockResolvedValue(NOT_PAUSED);
+  facts.fn.mockReset();
+  facts.fn.mockResolvedValue(OK_FACTS());
+  brand.name = "Rio Roofing";
 });
 
 describe("the client Billing page", () => {
@@ -298,5 +318,212 @@ describe("the client Billing page — pseudo wiring (I2, review fix round)", () 
     const [button] = find(tree, ManageBillingButton);
     expect((button!.props as { pseudo?: boolean }).pseudo).toBe(false);
     expect(text(tree)).toContain(m["billing.usage.chatsNote"]);
+  });
+});
+
+
+// F-088 PR 3: the upgrade page. "What your plan includes" (one note per capability, graded) and, only when a
+// capability grades "in a bigger plan", "What a bigger plan adds" with the one way to ask.
+describe("the Plan and billing page, F-088 PR 3", () => {
+  const cardOf = (tree: ReactNode, id: "includes" | "bigger") =>
+    find(tree, Card).filter((c) => (c.props as Record<string, unknown>)["data-surface-card"] === id);
+  const notesIn = (card: ReactElement | undefined) => (card ? find(card, Note) : []);
+  const SUPPORT = "help@agency.example";
+  const NO_VOICE = { verdict: { paused: false, voice: false, concierge: true, forward: true } };
+
+  it("the page and its nav entry are 'Plan and billing' / 'Plan y facturación' (mutation: revert either key → FAILS)", async () => {
+    expect(m["billing.page.title"]).toBe("Plan and billing");
+    expect(m["billing.page.title.es"]).toBe("Plan y facturación");
+    expect(m["nav.billing"]).toBe("Plan and billing");
+    expect(m["nav.billing.es"]).toBe("Plan y facturación");
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    const [header] = find(await page(), PageHeader);
+    expect(header?.props).toMatchObject({ title: "Plan and billing" });
+  });
+
+  it("includes card: one graded note per capability (Sofía, website chat, texting), in that order, each with its own sentence (mutation: drop a row → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    const tree = await page();
+    const notes = notesIn(cardOf(tree, "includes")[0]);
+    expect(notes.map((n) => (n.props as { state: string }).state)).toEqual(["live", "live", "live"]);
+    expect(notes.map((n) => (n.props as { sentence: string }).sentence)).toEqual([
+      m["surface.sofia.sofia_answering"], m["surface.chat.chat_open"], m["surface.texting.texting_registered"],
+    ]);
+    expect(text(tree)).toContain(m["billing.includes.title"]);
+    expect(facts.fn).toHaveBeenCalledWith("a");
+  });
+
+  it("billed with Sofía off in the plan: the bigger-plan card names Sofía only, with a mailto to the support address whose subject names the BRAND (mutation: always render the card → the all-on test FAILS; drop the mailto → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", ` ${SUPPORT} `);
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
+      const tree = await page();
+      const [card] = cardOf(tree, "bigger");
+      expect(card).toBeDefined();
+      const words = text(card);
+      expect(words).toContain(m["billing.bigger.sofia"]);
+      expect(words).not.toContain(m["billing.bigger.webChat"]);
+      expect(words).not.toMatch(/\$\d/);
+      const [link] = find(card, "a");
+      expect((link!.props as { href: string }).href).toBe(`mailto:${SUPPORT}?subject=${encodeURIComponent("Plan change for Rio Roofing")}`);
+      // The includes card grades the same fact: Sofía is "in a bigger plan" there too.
+      const states = notesIn(cardOf(tree, "includes")[0]).map((n) => (n.props as { state: string }).state);
+      expect(states).toEqual(["bigger_plan", "live", "live"]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("both Sofía and the chat missing: one sentence each, one mailto (mutation: only the first capability → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", SUPPORT);
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS({ verdict: { paused: false, voice: false, concierge: false, forward: true }, conciergeLive: false }));
+      const [card] = cardOf(await page(), "bigger");
+      expect(text(card)).toContain(m["billing.bigger.sofia"]);
+      expect(text(card)).toContain(m["billing.bigger.webChat"]);
+      expect(find(card, "a")).toHaveLength(1);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("everything on: no bigger-plan card and no ask (mutation: render the card unconditionally → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", SUPPORT);
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      const tree = await page();
+      expect(cardOf(tree, "bigger")).toHaveLength(0);
+      expect(cardOf(tree, "includes")).toHaveLength(1);
+      expect(text(tree)).not.toContain(m["billing.bigger.title"]);
+      expect(find(tree, "a").filter((a) => String((a.props as { href?: string }).href).startsWith("mailto:"))).toHaveLength(0);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("a paused or CRM-only grade is not 'a bigger plan': no card, no ask (mutation: ask on any not-live state → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    facts.fn.mockResolvedValue(OK_FACTS({ verdict: { paused: true, voice: false, concierge: false, forward: false }, numberStatuses: [], conciergeLive: false }));
+    expect(cardOf(await page(), "bigger")).toHaveLength(0);
+    facts.fn.mockResolvedValue(OK_FACTS({ trade: "restaurant", verdict: { paused: false, voice: false, concierge: false, forward: true }, numberStatuses: [], conciergeLive: false }));
+    expect(cardOf(await page(), "bigger")).toHaveLength(0);
+  });
+
+  it("not billed yet: the 'Billing isn't set up yet' words stay AND the includes card shows, with no bigger-plan card (mutation: return the empty state early → includes FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(null);
+    const tree = await page();
+    expect(find(tree, EmptyState)[0]?.props).toMatchObject({ title: m["billing.page.empty.title"] });
+    expect(notesIn(cardOf(tree, "includes")[0])).toHaveLength(3);
+    expect(cardOf(tree, "bigger")).toHaveLength(0);
+  });
+
+  it("a failed facts read says so in words with NO pill, never 'live', and asks for nothing (mutation: grade a failed read live, or show the pill → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    facts.fn.mockResolvedValue({ read: "failed" });
+    const tree = await page();
+    const notes = notesIn(cardOf(tree, "includes")[0]);
+    expect(notes).toHaveLength(3);
+    for (const n of notes) {
+      const props = n.props as { state: string; word: string | null | undefined };
+      expect(props.state).toBe("needs_setup");
+      expect(props.word).toBeNull();
+    }
+    expect(notes.map((n) => (n.props as { sentence: string }).sentence)).toEqual([
+      m["surface.sofia.read_failed"], m["surface.chat.read_failed"], m["surface.texting.read_failed"],
+    ]);
+    expect(cardOf(tree, "bigger")).toHaveLength(0);
+  });
+
+  it("texting words: live never promises texts go out; waiting names the phone carriers; setup reads 'BIS is setting up' to a client and points the agency at the Checklist (mutation: swap the client/agency sentence → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    const texting = async () => (notesIn(cardOf(await page(), "includes")[0])[2]!.props as { state: string; sentence: string });
+    expect(m["surface.texting.texting_registered"]).not.toMatch(/send|sent|go out|deliver/i);
+    facts.fn.mockResolvedValue(OK_FACTS({ a2pStatus: "pending" }));
+    expect(await texting()).toMatchObject({ state: "waiting", sentence: m["surface.texting.carrier_review"] });
+    expect(m["surface.texting.carrier_review"]).toContain("phone carriers");
+    expect(m["surface.texting.carrier_review"]).not.toMatch(/A2P|10DLC/i);
+    facts.fn.mockResolvedValue(OK_FACTS({ a2pStatus: "not_started" }));
+    expect(await texting()).toMatchObject({ state: "needs_setup", sentence: m["surface.texting.setting_up"] });
+    guard.isAgency = true;
+    expect(await texting()).toMatchObject({ state: "needs_setup", sentence: m["surface.texting.not_registered.agency"] });
+    facts.fn.mockResolvedValue(OK_FACTS({ a2pStatus: "rejected" }));
+    expect(await texting()).toMatchObject({ sentence: m["surface.texting.registration_rejected.agency"] });
+  });
+
+  it("no support address set: the ask names who to ask and has no mailto link (mutation: build mailto: from an empty address → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", "");
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
+      const [card] = cardOf(await page(), "bigger");
+      expect(find(card, "a")).toHaveLength(0);
+      expect(text(card)).toContain(m["billing.bigger.askNoContact"]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("a business with no brand name still gets a subject, never accounts.name or 'null' (mutation: interpolate the raw value → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", SUPPORT);
+    try {
+      brand.name = null;
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
+      const [link] = find(cardOf(await page(), "bigger")[0], "a");
+      expect((link!.props as { href: string }).href).toBe(`mailto:${SUPPORT}?subject=${encodeURIComponent("Plan change")}`);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("the client reads 'BIS is setting up' and no link; the agency reads where to fix it (reader words)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    facts.fn.mockResolvedValue(OK_FACTS({ profile: null, numberStatuses: [] }));
+    const client = notesIn(cardOf(await page(), "includes")[0])[0]!.props as { sentence: string; link?: { href: string } };
+    expect(client.sentence).toBe(m["surface.sofia.setting_up"]);
+    expect(client.link).toBeUndefined();
+    guard.isAgency = true;
+    const agency = notesIn(cardOf(await page(), "includes")[0])[0]!.props as { sentence: string; link?: { href: string } };
+    expect(agency.sentence).toBe(m["surface.sofia.sofia_off.agency"]);
+    expect(agency.link?.href).toBe("/dashboard/accounts/a/voice");
+  });
+
+  it("reads in Spanish for a Spanish reader: titles, sentences, the ask and its subject; and pseudo wraps them (mutation: read m[key] directly → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", SUPPORT);
+    try {
+      prefs.language = "es";
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
+      const tree = await page();
+      const words = text(tree);
+      for (const k of ["billing.includes.title.es", "billing.bigger.title.es", "billing.bigger.sofia.es"] as const) expect(words).toContain(m[k]);
+      const notes = notesIn(cardOf(tree, "includes")[0]);
+      expect((notes[0]!.props as { sentence: string }).sentence).toBe(m["surface.sofia.plan_no_voice.es"]);
+      expect((notes[0]!.props as { locale: string }).locale).toBe("es");
+      const [link] = find(cardOf(tree, "bigger")[0], "a");
+      expect((link!.props as { href: string }).href).toBe(`mailto:${SUPPORT}?subject=${encodeURIComponent("Cambio de plan para Rio Roofing")}`);
+    } finally { vi.unstubAllEnvs(); }
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      prefs.language = null;
+      const { pseudoLocale } = await import("@/lib/i18n/pseudo-locale");
+      const tree = await page({ locale: "pseudo" });
+      expect(text(tree)).toContain(pseudoLocale(m["billing.bigger.sofia"]));
+      expect((notesIn(cardOf(tree, "includes")[0])[0]!.props as { sentence: string }).sentence).toBe(pseudoLocale(m["surface.sofia.plan_no_voice"]));
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("no primary button in either new card (rule 8): the ask is a ghost link, never a Button (mutation: render the ask as a Button → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", SUPPORT);
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      facts.fn.mockResolvedValue(OK_FACTS(NO_VOICE));
+      const tree = await page();
+      for (const id of ["includes", "bigger"] as const) {
+        const [card] = cardOf(tree, id);
+        expect(find(card, Button), id).toHaveLength(0);
+        expect(find(card, "button"), id).toHaveLength(0);
+      }
+      expect(find(tree, ManageBillingButton)).toHaveLength(1);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("the guard still runs first: Staff (or another account) reads no capability facts (mutation: read facts before the guard → FAILS)", async () => {
+    guard.allowed = false;
+    await expect(page()).rejects.toThrow("NEXT_REDIRECT");
+    expect(facts.fn).not.toHaveBeenCalled();
   });
 });

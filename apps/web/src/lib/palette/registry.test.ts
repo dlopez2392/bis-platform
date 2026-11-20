@@ -816,3 +816,12 @@ describe("buildPaletteEntries — the agency's in-account ⌘K order matches ori
     expect(order).toEqual(["nav:preferences", "nav:bis-access", "nav:settings", "nav:setup", "settings:team"]);
   });
 });
+
+// F-088 PR 3: Plan and billing is the one upgrade page, found by the words for asking for more.
+describe("F-088 PR 3: the Plan and billing entry", () => {
+  it("nav:billing carries plan, upgrade, mejorar and its Spanish title, for a client Owner (mutation: drop a keyword → FAILS)", () => {
+    const billing = buildPaletteEntries(BASE, false, true).find((e) => e.id === `nav:${BASE}/billing`);
+    expect(billing).toBeDefined();
+    for (const word of ["plan", "upgrade", "mejorar", "plan y facturación"]) expect(billing!.keywords, word).toContain(word);
+  });
+});

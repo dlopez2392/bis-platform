@@ -535,7 +535,7 @@ describe("CallsPage: the empty state is worded from the grade (F-088 PR 2)", () 
     expect(owner).toContain("Your plan doesn&#x27;t include Sofía.");
     expect(owner).not.toContain("forwarded");
     expect(owner).toContain(`href="${BILLING}"`);
-    expect(owner).toContain(">Billing<");
+    expect(owner).toContain(">Plan and billing<");
     for (const role of ["staff", "technician"] as const) {
       const other = await empty(g, { isAgency: false, role });
       expect(other).toContain("Your plan doesn&#x27;t include Sofía.");
@@ -544,7 +544,7 @@ describe("CallsPage: the empty state is worded from the grade (F-088 PR 2)", () 
   });
   it("renders the words in Spanish (usted), the link as Plan y facturación", async () => {
     const html = await empty({ state: "bigger_plan", reason: "plan_no_voice" }, client, "es");
-    expect(html).toContain(">Facturación<");
+    expect(html).toContain(">Plan y facturación<");
     expect(html).toContain("Su plan no incluye a Sofía");
     expect(html).toContain('data-surface-state="bigger_plan"');
     expect(html).not.toContain("Your plan");
