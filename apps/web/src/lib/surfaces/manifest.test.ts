@@ -77,6 +77,14 @@ describe("SURFACE_MANIFEST shape", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  // F-088 PR 1: the display-only capability a page speaks for (lib/surfaces/capabilities.ts grades it).
+  it("capability annotates exactly Calls and Voice (Sofía) and Conversations (texting)", () => {
+    const annotated = Object.fromEntries(
+      SURFACE_MANIFEST.filter((e) => e.capability !== undefined).map((e) => [e.id, e.capability]),
+    );
+    expect(annotated).toEqual({ "nav:calls": "sofia", "nav:voice": "sofia", "nav:conversations": "texting" });
+  });
+
   it("surfaceById finds a known entry and throws on an unknown one (mutation: typo the id → the throw's message names it)", () => {
     expect(surfaceById("nav:dashboard").labelKey).toBe("nav.dashboard");
     expect(() => surfaceById("nav:does-not-exist")).toThrow(/nav:does-not-exist/);

@@ -1,4 +1,5 @@
 import type { MessageKey } from "../messages";
+import type { Capability } from "./capabilities";
 
 /**
  * F-087 part 1 (spec `docs/superpowers/specs/2026-11-06-surface-manifest-design.md`):
@@ -100,6 +101,10 @@ export type SurfaceEntry = {
    *  null, same as the flat nav list's own six items — would otherwise be
    *  indistinguishable from). */
   iconKey?: NavIconKey;
+  /** F-088: the capability this page speaks for, graded by `capabilityState`
+   *  (capabilities.ts) into one of the five surface states for its words.
+   *  Display only, like `audience`: nothing reads it to admit or hide. */
+  capability?: Capability;
 };
 
 function hasIcon(e: SurfaceEntry): e is SurfaceEntry & { iconKey: NavIconKey } {
@@ -203,11 +208,13 @@ export const SURFACE_MANIFEST: SurfaceEntry[] = [
     id: "nav:conversations", kind: "page", scope: "account", group: "nav.group.communications",
     labelKey: "nav.conversations", iconKey: "conversations", route: (base) => `${base}/conversations`,
     audience: { agency: true, client: true, technician: true },
+    capability: "texting",
   },
   {
     id: "nav:calls", kind: "page", scope: "account", group: "nav.group.communications",
     labelKey: "nav.calls", iconKey: "calls", route: (base) => `${base}/calls`,
     audience: { agency: true, client: true, technician: true },
+    capability: "sofia",
   },
   {
     id: "nav:activity", kind: "page", scope: "account", group: "nav.group.communications",
@@ -218,6 +225,7 @@ export const SURFACE_MANIFEST: SurfaceEntry[] = [
     id: "nav:voice", kind: "page", scope: "account", group: "nav.group.communications",
     labelKey: "nav.voice", iconKey: "voice", route: (base) => `${base}/voice`,
     audience: { agency: true, client: false, technician: false },
+    capability: "sofia",
   },
 
   // --- GROWTH --------------------------------------------------------
