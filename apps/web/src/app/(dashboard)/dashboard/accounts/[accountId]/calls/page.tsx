@@ -5,6 +5,8 @@ import {
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { SurfaceStateNote, sofiaLink, sofiaSentenceKey, type SurfaceReader } from "@/components/surface-state-note";
+import { capabilityState, readCapabilityFacts } from "@/lib/surfaces/capabilities";
 import { requireAccountAccess } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
@@ -170,6 +172,14 @@ export default async function CallsPage({
       ? `/dashboard/accounts/${accountId}/calls?before=${encodeURIComponent(last.started_at)}`
       : undefined;
 
+  // F-088 PR 2: the cold-start sentence must be TRUE. "When Sofía answers a call, it will appear here" is only
+  // honest while she answers, so the empty state is worded from the grade (PR 1), read only on this branch. A
+  // plain "live, answering" keeps today's sentence (no note); every other grade says its own words instead.
+  const reader: SurfaceReader = { isAgency, role };
+  const coldStart = rows.length === 0 && !cursor;
+  const grade = coldStart ? capabilityState("sofia", await readCapabilityFacts(accountId)) : null;
+  const sofiaNote = grade && !(grade.state === "live" && grade.reason === "sofia_answering") ? { grade } : null;
+
   return (
     <>
       <PageHeader title={tr.text("calls.title")} />
@@ -197,7 +207,16 @@ export default async function CallsPage({
             <EmptyState
               icon={PhoneIncoming}
               title={tr.text("calls.empty.title")}
-              body={tr.text("calls.empty.body")}
+              body={sofiaNote ? undefined : tr.text("calls.empty.body")}
+              action={sofiaNote ? (
+                <SurfaceStateNote
+                  state={sofiaNote.grade.state}
+                  sentence={tr.text(sofiaSentenceKey(sofiaNote.grade, reader))}
+                  link={sofiaLink(sofiaNote.grade, reader, accountId, locale, pseudo)}
+                  locale={locale}
+                  pseudo={pseudo}
+                />
+              ) : undefined}
             />
           ) : (
             <CallsTable

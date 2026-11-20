@@ -96,6 +96,7 @@ import { TradePickerDemo } from "./trade-picker-demo";
 import { BisAccessDemo } from "./bis-access-demo";
 import { DailyBriefDemo } from "./daily-brief-demo";
 import { AiAppsStates } from "./ai-apps-states";
+import { SurfaceStateStates } from "./surface-state-states";
 
 export const dynamic = "force-dynamic";
 
@@ -997,6 +998,12 @@ export default async function StyleguidePage({
         {/* F-082 PR 4: the daily brief card on Mis preferencias: off and on rows, empty, error, skeleton, Spanish. */}
         <Section title={t(m, "dailyBrief.card.title", "en")} file="components/preferences/daily-brief-card.tsx">
           <DailyBriefDemo />
+        </Section>
+
+        {/* F-088 PR 2: the five surface states (live, needs setup, waiting, not in the plan, not offered) as the
+            note the Calls empty state carries: dot + word, one sentence, never a padlock; EN, ES, pseudo-locale. */}
+        <Section title="Surface states" file="components/surface-state-note.tsx">
+          <SurfaceStateStates />
         </Section>
 
         {/* MCP PR C: the AI apps card on Team and "Use BIS from your AI app" on Mis preferencias, every state. */}
