@@ -52,7 +52,7 @@ const CRM: BillingVerdict = { paused: false, voice: false, concierge: false, for
 const VERDICTS: BillingVerdict[] = [ALL_ON, NO_VOICE, NO_CHAT, CRM, PAUSED, { ...PAUSED, forward: false }];
 const TRADES = ["plumbing", null, "restaurant", "child_care", "not_a_trade_key"];
 const CRM_ONLY = new Set<string | null>(["restaurant", "child_care"]);
-const PROFILES: OkFacts["profile"][] = [null, { enabled: true }, { enabled: false }];
+const PROFILES: OkFacts["profile"][] = [null, { enabled: true }, { enabled: false }, { enabled: true, forwardCalls: true }, { enabled: false, forwardCalls: true }];
 const NUMBER_SETS: PhoneNumberStatus[][] = [[], ["provisioned"], ["released"], ["testing"], ["live"], ["provisioned", "live"], ["live", "testing"]];
 const A2P: A2pStatus[] = ["not_started", "pending", "approved", "rejected"];
 
@@ -75,6 +75,8 @@ const TABLE: [string, string, [string, Facts][]][] = [
     ["read_failed", { read: "failed" }], ["no_trade", ok({ trade: null, profile: OFF })],
     ["sofia_off", ok({ profile: OFF })], ["sofia_off", ok({ profile: null, numberStatuses: ["testing"] })],
     ["no_number", ok({ numberStatuses: [] })], ["no_number", ok({ numberStatuses: ["provisioned", "released"] })],
+    // route.ts: a cleared call goes to the transfer number while forward_calls is on, so Sofía is not answering.
+    ["calls_forwarded", ok({ profile: { enabled: true, forwardCalls: true } })],
   ]],
   ["sofia", "waiting", [["billing_paused", ok({ verdict: PAUSED })]]],
   ["sofia", "bigger_plan", [["plan_no_voice", ok({ verdict: NO_VOICE })]]],
@@ -114,6 +116,8 @@ function callPathAnswers(f: OkFacts): boolean {
     (s === "testing" && f.profile !== null) || (s === "live" && f.profile?.enabled === true));
   return numberAnswers && voiceBlock(f.verdict) === null;
 }
+/** route.ts ~1110: after the billing check, forward_calls on sends a cleared call to the transfer number. */
+const forwarded = (f: OkFacts) => callPathAnswers(f) && f.profile?.forwardCalls === true;
 
 describe("capabilityState: the table", () => {
   it("covers exactly 15 cells", () => {
@@ -159,7 +163,7 @@ describe("capabilityState: parity with what the call and chat paths enforce", ()
       if (!CRM_ONLY.has(f.trade)) continue;
       const sofia = capabilityState("sofia", f);
       const chat = capabilityState("webChat", f);
-      expect(sofia.state, JSON.stringify(f)).toBe(callPathAnswers(f) ? "live" : "absent");
+      expect(sofia.state, JSON.stringify(f)).toBe(callPathAnswers(f) ? (forwarded(f) ? "needs_setup" : "live") : "absent");
       expect(chat.state, JSON.stringify(f)).toBe(f.conciergeLive && f.verdict.concierge ? "live" : "absent");
       if (sofia.state === "absent" && voiceBlock(f.verdict) !== null) absent += 1;
     }
@@ -174,8 +178,18 @@ describe("capabilityState: parity with what the call and chat paths enforce", ()
 
   it("Sofía is live iff the call path answers: an answerable testing or live number, and billing does not block", () => {
     for (const f of FACTS) {
-      expect(capabilityState("sofia", f).state === "live", JSON.stringify(f)).toBe(callPathAnswers(f));
+      expect(capabilityState("sofia", f).state === "live", JSON.stringify(f)).toBe(callPathAnswers(f) && !forwarded(f));
     }
+  });
+
+  it("forward_calls on: Sofía is never live or answering while the route forwards, and only then calls_forwarded (mutation: drop the forwardCalls check -> FAILS)", () => {
+    let seen = 0;
+    for (const f of FACTS) {
+      const g = capabilityState("sofia", f);
+      expect(g.reason === "calls_forwarded", JSON.stringify(f)).toBe(forwarded(f));
+      if (forwarded(f)) { seen += 1; expect(g.state).toBe("needs_setup"); }
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 
   it("an enabled profile with no answerable number needs setup (no_number), never live", () => {
@@ -261,11 +275,17 @@ describe("readCapabilityFacts: the grade reads billingVerdictFor, never accounts
     world.rows.phone_numbers = [{ ...LIVE_NUMBER[0], status: "testing" }];
     const facts = await readCapabilityFacts(A);
     expect(facts).toEqual({
-      read: "ok", verdict: expect.any(Object), trade: "restaurant", profile: { enabled: false },
+      read: "ok", verdict: expect.any(Object), trade: "restaurant", profile: { enabled: false, forwardCalls: false },
       numberStatuses: ["testing"], conciergeLive: false, a2pStatus: "pending",
     });
     // A testing number answers with the profile off (accept-gate.ts), so Sofía is live in testing mode.
     expect(capabilityState("sofia", facts)).toEqual({ state: "live", reason: "sofia_testing" });
+  });
+
+  it("reads forward_calls off the profile: on, Sofía's grade is calls_forwarded (mutation: ignore forward_calls -> FAILS)", async () => {
+    setWorld(null);
+    world.rows.voice_profiles = { ...PROFILE, forward_calls: true };
+    expect(capabilityState("sofia", await readCapabilityFacts(A))).toEqual({ state: "needs_setup", reason: "calls_forwarded" });
   });
 
   it("an enabled profile and no number: Sofía needs setup, never live (mutation: drop the number condition → FAILS)", async () => {

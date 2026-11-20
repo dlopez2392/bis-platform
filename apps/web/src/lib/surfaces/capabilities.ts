@@ -30,7 +30,7 @@ export const CAPABILITIES = ["sofia", "webChat", "texting"] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 export type CapabilityStateName = "live" | "needs_setup" | "waiting" | "bigger_plan" | "absent";
 export type CapabilityReason =
-  | "sofia_answering" | "sofia_testing" | "chat_open" | "texting_registered"
+  | "sofia_answering" | "sofia_testing" | "calls_forwarded" | "chat_open" | "texting_registered"
   | "read_failed" | "no_trade" | "sofia_off" | "no_number" | "chat_off" | "not_registered" | "registration_rejected"
   | "billing_paused" | "carrier_review"
   | "plan_no_voice" | "plan_no_chat"
@@ -44,8 +44,10 @@ export type CapabilityFacts =
       read: "ok";
       verdict: BillingVerdict;
       trade: string | null;
-      /** The voice profile as callAnswerable reads it; null = none. */
-      profile: { enabled: boolean } | null;
+      /** The voice profile as callAnswerable reads it; null = none. `forwardCalls` is voice_profiles.forward_calls:
+       *  the route sends a cleared call to the transfer number instead of Sofía (route.ts ~1110), and the
+       *  forwarded call is recorded in forwarded_calls, never in `calls`. */
+      profile: { enabled: boolean; forwardCalls?: boolean } | null;
       /** Every phone number of the account, by status. */
       numberStatuses: PhoneNumberStatus[];
       /** isConciergeLive: on, with a published destination of this account (the verdict is applied here). */
@@ -80,6 +82,9 @@ export function capabilityState(cap: Capability, facts: CapabilityFacts): Capabi
     const block = voiceBlock(verdict);
     const answering = answeringStatuses(facts);
     if (block === null && answering.length > 0) {
+      // After billing and before the bridge, as the route orders them: with forward_calls on, a cleared call
+      // rings the transfer number and Sofía never hears it, so she is not "answering" whatever the numbers say.
+      if (facts.profile?.forwardCalls === true) return grade("needs_setup", "calls_forwarded");
       return grade("live", answering.includes("live") ? "sofia_answering" : "sofia_testing");
     }
     if (!gate.ok && gate.reason === "crm_only") return grade("absent", "crm_only_trade");
@@ -138,7 +143,7 @@ export const readCapabilityFacts = cache(async (accountId: string): Promise<Capa
       read: "ok",
       verdict,
       trade: row.trade ?? null,
-      profile: profile ? { enabled: profile.enabled === true } : null,
+      profile: profile ? { enabled: profile.enabled === true, forwardCalls: profile.forward_calls === true } : null,
       numberStatuses: numbers.map((n) => n.status),
       // Defensive guard: public_id is unique, so this row is the account's own; never trust it unchecked.
       conciergeLive: chat !== null && chat.account_id === accountId && isConciergeLive(chat),
