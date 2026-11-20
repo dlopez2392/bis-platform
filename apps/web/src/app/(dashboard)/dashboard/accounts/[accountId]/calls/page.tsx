@@ -5,7 +5,7 @@ import {
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
-import { SurfaceStateNote, sofiaLink, sofiaSentenceKey, type SurfaceReader } from "@/components/surface-state-note";
+import { SurfaceStateNote, sofiaLink, sofiaPill, sofiaSentenceKey, type SurfaceReader } from "@/components/surface-state-note";
 import { capabilityState, readCapabilityFacts } from "@/lib/surfaces/capabilities";
 import { requireAccountAccess } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
@@ -212,6 +212,7 @@ export default async function CallsPage({
                 <SurfaceStateNote
                   state={sofiaNote.grade.state}
                   sentence={tr.text(sofiaSentenceKey(sofiaNote.grade, reader))}
+                  word={sofiaPill(sofiaNote.grade, locale, pseudo)}
                   link={sofiaLink(sofiaNote.grade, reader, accountId, locale, pseudo)}
                   locale={locale}
                   pseudo={pseudo}

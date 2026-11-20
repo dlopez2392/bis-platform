@@ -11,7 +11,7 @@ describe("styleguide: the five surface states (F-088 PR 2)", () => {
   const html = renderToStaticMarkup(createElement(SurfaceStateStates));
   it("shows every state in English, Spanish and the pseudo-locale (mutation: drop a state -> FAILS)", () => {
     for (const state of ["live", "needs_setup", "waiting", "bigger_plan", "absent"]) {
-      expect(html.match(new RegExp(`data-surface-state="${state}"`, "g"))).toHaveLength(3);
+      expect(html.match(new RegExp(`data-surface-state="${state}"`, "g"))).toHaveLength(state === "needs_setup" ? 9 : 3);
     }
     const text = renderedText(html);
     expect(text).toContain(m["surface.state.bigger_plan"]);

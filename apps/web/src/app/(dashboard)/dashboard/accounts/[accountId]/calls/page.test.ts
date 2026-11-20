@@ -25,9 +25,12 @@ const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | 
 /** F-088 PR 2: the grade the empty state is worded from. Mutable like authFixture; the grade itself is PR 1's
  *  (capabilities.test.ts), this file proves the WORDS it reaches. Default: Sofía answering, today's sentence. */
 const gradeFixture = vi.hoisted(() => ({ state: "live", reason: "sofia_answering" } as { state: string; reason: string }));
+const FACTS_RETURNED = vi.hoisted(() => ({ read: "failed" as const, marker: "facts-returned" }));
+const factsMock = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => FACTS_RETURNED));
+const stateMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => ({ ...gradeFixture })));
 vi.mock("@/lib/surfaces/capabilities", () => ({
-  readCapabilityFacts: async () => ({ read: "failed" }),
-  capabilityState: () => ({ ...gradeFixture }),
+  readCapabilityFacts: (...a: unknown[]) => factsMock(...a),
+  capabilityState: (...a: unknown[]) => stateMock(...a),
 }));
 // S-10 T5: this page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
 // same reason contacts/page.test.ts already uses — person-prefs pulls in @/lib/auth's
@@ -486,6 +489,7 @@ describe("CallsPage: the empty state is worded from the grade (F-088 PR 2)", () 
   /** The catalogue sentence as renderToStaticMarkup prints it (apostrophes are escaped in markup). */
   const word = (k: string) => (m as Record<string, string>)[k]!.replace(/'/g, "&#x27;");
   async function empty(grade: { state: string; reason: string }, who: { isAgency: boolean; role: "owner" | "staff" | "technician" | null }, language: "en" | "es" | null = null) {
+    factsMock.mockClear(); stateMock.mockClear();
     Object.assign(gradeFixture, grade);
     authFixture.isAgency = who.isAgency; authFixture.role = who.role; prefsFixture.language = language;
     listCallsMock.mockResolvedValue([]);
@@ -528,18 +532,19 @@ describe("CallsPage: the empty state is worded from the grade (F-088 PR 2)", () 
   it("a bigger plan links Plan and billing for an Owner only, Staff and Technician get the sentence alone", async () => {
     const g = { state: "bigger_plan", reason: "plan_no_voice" };
     const owner = await empty(g, client);
-    expect(owner).toContain("Your plan doesn&#x27;t include Sofía. Calls forwarded to you still show here.");
+    expect(owner).toContain("Your plan doesn&#x27;t include Sofía.");
+    expect(owner).not.toContain("forwarded");
     expect(owner).toContain(`href="${BILLING}"`);
-    expect(owner).toContain("Plan and billing");
+    expect(owner).toContain(">Billing<");
     for (const role of ["staff", "technician"] as const) {
       const other = await empty(g, { isAgency: false, role });
-      expect(other).toContain("Calls forwarded to you still show here.");
+      expect(other).toContain("Your plan doesn&#x27;t include Sofía.");
       expect(other).not.toContain(BILLING);
     }
   });
   it("renders the words in Spanish (usted), the link as Plan y facturación", async () => {
     const html = await empty({ state: "bigger_plan", reason: "plan_no_voice" }, client, "es");
-    expect(html).toContain("Plan y facturación");
+    expect(html).toContain(">Facturación<");
     expect(html).toContain("Su plan no incluye a Sofía");
     expect(html).toContain('data-surface-state="bigger_plan"');
     expect(html).not.toContain("Your plan");
@@ -548,5 +553,65 @@ describe("CallsPage: the empty state is worded from the grade (F-088 PR 2)", () 
     const html = await empty({ state: "needs_setup", reason: "read_failed" }, client);
     expect(html).toContain(word("surface.sofia.read_failed"));
     expect(html).not.toContain(word("calls.empty.body"));
+    // No pill: "Needs setup" would be false for a business that is in fact live.
+    expect(html).not.toContain(word("surface.state.needs_setup"));
+    expect(html).not.toContain("size-[7px]");
+  });
+  it("the grade is asked with Sofía and exactly what the facts read returned", async () => {
+    await empty({ state: "absent", reason: "crm_only_trade" }, client);
+    expect(factsMock).toHaveBeenCalledWith("acct1");
+    expect(stateMock).toHaveBeenCalledWith("sofia", FACTS_RETURNED);
+  });
+  it("a page with calls never reads the capability facts", async () => {
+    factsMock.mockClear(); stateMock.mockClear();
+    listCallsMock.mockResolvedValue([ROW]);
+    renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(factsMock).not.toHaveBeenCalled();
+    expect(stateMock).not.toHaveBeenCalled();
+  });
+  it("a cursored empty page (real history, none older) never reads the facts either", async () => {
+    factsMock.mockClear();
+    listCallsMock.mockResolvedValue([]);
+    renderToStaticMarkup(await CallsPage(route("2026-08-25T19:15:00.123Z")));
+    expect(factsMock).not.toHaveBeenCalled();
+  });
+  it("an unknown reason renders the 'could not check' sentence, never 'Sofía is answering'", async () => {
+    const html = await empty({ state: "live", reason: "chat_open" }, client);
+    expect(html).toContain(word("surface.sofia.read_failed"));
+    expect(html).not.toContain(word("surface.sofia.sofia_answering"));
+  });
+  it("testing wears 'Testing', not 'Live'; forwarded calls wear 'Calls forwarded'", async () => {
+    const t = await empty({ state: "live", reason: "sofia_testing" }, client);
+    expect(t).toContain(">Testing<");
+    expect(t).not.toContain(">Live<");
+    const f = await empty({ state: "needs_setup", reason: "calls_forwarded" }, client);
+    expect(f).toContain(">Calls forwarded<");
+    expect(f).toContain(word("surface.sofia.calls_forwarded"));
+  });
+  it("the agency reads its own words and link for each setup reason", async () => {
+    const agency = { isAgency: true, role: null } as const;
+    const rows: [string, string, string][] = [
+      ["sofia_off", "surface.sofia.sofia_off.agency", "/voice"],
+      ["no_number", "surface.sofia.no_number.agency", "/voice"],
+      ["no_trade", "surface.sofia.no_trade.agency", "/settings"],
+      ["calls_forwarded", "surface.sofia.calls_forwarded.agency", "/voice"],
+    ];
+    for (const [reason, key, path] of rows) {
+      const html = await empty({ state: "needs_setup", reason }, agency);
+      expect(html, reason).toContain(word(key));
+      expect(html, reason).toContain(`href="/dashboard/accounts/acct1${path}"`);
+    }
+  });
+  it("the agency reads 'This plan…' with no billing link, and the agency twins of paused and testing", async () => {
+    const agency = { isAgency: true, role: null } as const;
+    const plan = await empty({ state: "bigger_plan", reason: "plan_no_voice" }, agency);
+    expect(plan).toContain(word("surface.sofia.plan_no_voice.agency"));
+    expect(plan).not.toContain(BILLING);
+    expect(await empty({ state: "waiting", reason: "billing_paused" }, agency)).toContain(word("surface.sofia.billing_paused.agency"));
+    expect(await empty({ state: "live", reason: "sofia_testing" }, agency)).toContain(word("surface.sofia.sofia_testing.agency"));
+  });
+  it("a failed read gives the agency no link", async () => {
+    const html = await empty({ state: "needs_setup", reason: "read_failed" }, { isAgency: true, role: null });
+    expect(html).not.toContain("<a ");
   });
 });
