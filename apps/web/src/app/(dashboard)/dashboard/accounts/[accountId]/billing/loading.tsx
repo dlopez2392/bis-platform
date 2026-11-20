@@ -19,7 +19,7 @@ import { m } from "@/lib/messages";
 export default function Loading() {
   const locale = useLocale();
   return (
-    <div className="p-6" aria-busy="true" aria-label={t(m, "billing.page.title", locale)}>
+    <div className="space-y-4 p-6" aria-busy="true" aria-label={t(m, "billing.page.title", locale)}>
       <Skeleton className="mb-6 h-[76px] rounded-lg" />
       <div className="flex flex-col gap-4 rounded-xl border border-border p-6">
         <div className="flex items-center justify-between gap-4">
@@ -38,6 +38,19 @@ export default function Loading() {
           <Skeleton className="h-9 w-36" />
           <Skeleton className="h-3 w-72 max-w-full" />
         </div>
+      </div>
+      {/* "What your plan includes": the card title, then one row per capability (name, pill, one sentence). */}
+      <div className="flex flex-col gap-4 rounded-xl border border-border p-6">
+        <Skeleton className="h-5 w-48" />
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-6">
+            <Skeleton className="h-4 w-28 sm:w-40" />
+            <div className="flex flex-1 flex-col gap-2">
+              <Skeleton className="h-6 w-20 rounded-full" />
+              <Skeleton className="h-4 w-72 max-w-full" />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

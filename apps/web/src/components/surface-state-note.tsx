@@ -3,7 +3,7 @@ import { DotPill } from "@/components/dot-pill";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import type { MessageKey } from "@/lib/messages";
-import type { CapabilityGrade, CapabilityStateName } from "@/lib/surfaces/capabilities";
+import type { Capability, CapabilityGrade, CapabilityStateName } from "@/lib/surfaces/capabilities";
 
 /**
  * F-088 PR 2: one capability's honest state in words (principle 6, `docs/crm-features.md` 2519-2523): live,
@@ -13,8 +13,8 @@ import type { CapabilityGrade, CapabilityStateName } from "@/lib/surfaces/capabi
  * sentence stays on text tokens.
  */
 export const TONE: Record<CapabilityStateName, { chip: string; dot: string }> = {
-  live: { chip: "bg-[var(--good-bg)] text-[var(--good)]", dot: "bg-[var(--good)]" },
-  needs_setup: { chip: "bg-[var(--warn-bg)] text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  live: { chip: "bg-[var(--good-bg)] text-[var(--text-1)]", dot: "bg-[var(--good)]" },
+  needs_setup: { chip: "bg-[var(--warn-bg)] text-[var(--text-1)]", dot: "bg-[var(--warn)]" },
   waiting: { chip: "bg-[var(--accent-dim)] text-[var(--accent)]", dot: "bg-[var(--accent)]" },
   bigger_plan: { chip: "bg-[var(--surface-2)] text-[var(--text-2)]", dot: "bg-[var(--text-2)]" },
   // The word is on --text-2 (--text-3 on --surface-2 is 3.1:1 in light, under AA); only the dot is --text-3.
@@ -24,7 +24,7 @@ export const TONE: Record<CapabilityStateName, { chip: string; dot: string }> = 
 export type SurfaceNoteLink = { href: string; label: string };
 
 export function SurfaceStateNote({
-  state, sentence, word, link, locale, pseudo = false,
+  state, sentence, word, link, locale, pseudo = false, align = "center",
 }: {
   state: CapabilityStateName;
   sentence: string;
@@ -34,14 +34,17 @@ export function SurfaceStateNote({
   link?: SurfaceNoteLink;
   locale: Locale;
   pseudo?: boolean;
+  /** "center" (default) is the empty-state note; "start" is a row inside a card (Plan and billing). */
+  align?: "center" | "start";
 }) {
   const tr = makeTr(locale, pseudo);
+  const start = align === "start";
   return (
-    <div data-surface-state={state} lang={locale} className="flex flex-col items-center gap-2 text-center">
+    <div data-surface-state={state} lang={locale} className={start ? "flex flex-col items-start gap-2" : "flex flex-col items-center gap-2 text-center"}>
       {word === null ? null : (
         <DotPill label={word ?? tr.text(`surface.state.${state}`)} chip={TONE[state].chip} dot={TONE[state].dot} />
       )}
-      <p className="max-w-sm text-sm text-muted-foreground">{sentence}</p>
+      <p className={start ? "max-w-prose text-sm text-muted-foreground" : "max-w-sm text-sm text-muted-foreground"}>{sentence}</p>
       {link ? (
         <Link
           href={link.href}
@@ -65,7 +68,7 @@ export function sofiaSentenceKey(grade: CapabilityGrade, reader: SurfaceReader):
   switch (reason) {
     case "sofia_off": case "no_number": case "no_trade":
       return reader.isAgency ? (`surface.sofia.${reason}.agency` as MessageKey) : "surface.sofia.setting_up";
-    case "plan_no_voice": case "sofia_testing": case "billing_paused": case "calls_forwarded":
+    case "plan_no_voice": case "sofia_testing": case "billing_paused": case "billing_ended": case "calls_forwarded":
       return (reader.isAgency ? `surface.sofia.${reason}.agency` : `surface.sofia.${reason}`) as MessageKey;
     case "sofia_answering": case "read_failed": case "crm_only_trade":
       return `surface.sofia.${reason}` as MessageKey;
@@ -102,4 +105,61 @@ export function sofiaLink(
     if (grade.reason !== "read_failed") return { href: `${base}/voice`, label: tr.text("surface.link.voice") };
   }
   return undefined;
+}
+
+/** F-088 PR 3: the website chat's sentence, as a message key (same rule as Sofía's: the client reads that BIS is
+ *  setting it up, the agency reads where to fix it). An unexpected reason reads as "could not check", never live. */
+export function webChatSentenceKey(grade: CapabilityGrade, reader: SurfaceReader): MessageKey {
+  const { reason } = grade;
+  switch (reason) {
+    case "chat_off":
+      return reader.isAgency ? "surface.chat.chat_off.agency" : "surface.chat.setting_up";
+    case "no_trade":
+      return reader.isAgency ? "surface.chat.no_trade.agency" : "surface.chat.setting_up";
+    case "plan_no_chat": case "billing_paused": case "billing_ended":
+      return (reader.isAgency ? `surface.chat.${reason}.agency` : `surface.chat.${reason}`) as MessageKey;
+    case "chat_open": case "crm_only_trade": case "read_failed":
+      return `surface.chat.${reason}` as MessageKey;
+    default:
+      return "surface.chat.read_failed";
+  }
+}
+
+/** Texting's sentence. Live says it is set up, never that texts go out (a paused account's texts are blocked). */
+export function textingSentenceKey(grade: CapabilityGrade, reader: SurfaceReader): MessageKey {
+  switch (grade.reason) {
+    case "texting_registered": case "carrier_review": case "read_failed":
+      return `surface.texting.${grade.reason}` as MessageKey;
+    case "not_registered":
+      return reader.isAgency ? "surface.texting.not_registered.agency" : "surface.texting.setting_up";
+    case "registration_rejected":
+      return reader.isAgency ? "surface.texting.registration_rejected.agency" : "surface.texting.registration_rejected";
+    default:
+      return "surface.texting.read_failed";
+  }
+}
+
+/** One capability's sentence key: Sofía's, the chat's or texting's. */
+export function capabilitySentenceKey(cap: Capability, grade: CapabilityGrade, reader: SurfaceReader): MessageKey {
+  if (cap === "sofia") return sofiaSentenceKey(grade, reader);
+  return cap === "webChat" ? webChatSentenceKey(grade, reader) : textingSentenceKey(grade, reader);
+}
+
+/** The pill word for a row on Plan and billing: Sofía's own overrides, no pill for a failed read, else the state's. */
+export function capabilityPill(cap: Capability, grade: CapabilityGrade, locale: Locale, pseudo = false): string | null | undefined {
+  if (cap === "sofia") return sofiaPill(grade, locale, pseudo);
+  return grade.reason === "read_failed" ? null : undefined;
+}
+
+/** The one link a row on Plan and billing may carry. Never the Billing page itself (the reader is on it); only the
+ *  agency gets one, to the page that fixes the setup: Voice for Sofía and the chat, the Checklist for texting. */
+export function capabilityLink(
+  cap: Capability, grade: CapabilityGrade, reader: SurfaceReader, accountId: string, locale: Locale, pseudo = false,
+): SurfaceNoteLink | undefined {
+  const tr = makeTr(locale, pseudo);
+  const base = `/dashboard/accounts/${accountId}`;
+  if (!reader.isAgency || grade.state !== "needs_setup" || grade.reason === "read_failed") return undefined;
+  if (grade.reason === "no_trade") return { href: `${base}/settings`, label: tr.text("nav.settings") };
+  if (cap === "texting") return { href: `${base}/checklist#a2p-registration`, label: tr.text("surface.link.checklist") };
+  return { href: `${base}/voice`, label: tr.text("surface.link.voice") };
 }

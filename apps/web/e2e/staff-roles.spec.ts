@@ -109,14 +109,14 @@ test.describe("a Staff login sees no Billing, Team, Delete or Export", () => {
   // Contacts staying visible is what proves this is a real, working session
   // rather than a sidebar that rendered nothing at all, which would pass the
   // next two assertions for the wrong reason.
-  test("the sidebar has no Billing link and no Team link", async ({ page }) => {
+  test("the sidebar has no Plan and billing link and no Team link", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
     await expect(page.getByRole("link", { name: "Contacts", exact: true })).toBeVisible();
     // Mutation: dropping nav-groups.ts's `!isOwner` guard on Billing reds
     // this line; dropping app-sidebar.tsx's `isOwner` branch on the footer
     // (Team) reds the next one.
-    await expect(page.getByRole("link", { name: "Billing", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Plan and billing", exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Team", exact: true })).toHaveCount(0);
   });
 

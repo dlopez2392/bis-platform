@@ -32,7 +32,7 @@ export type CapabilityStateName = "live" | "needs_setup" | "waiting" | "bigger_p
 export type CapabilityReason =
   | "sofia_answering" | "sofia_testing" | "calls_forwarded" | "chat_open" | "texting_registered"
   | "read_failed" | "no_trade" | "sofia_off" | "no_number" | "chat_off" | "not_registered" | "registration_rejected"
-  | "billing_paused" | "carrier_review"
+  | "billing_paused" | "billing_ended" | "carrier_review"
   | "plan_no_voice" | "plan_no_chat"
   | "crm_only_trade";
 export type CapabilityGrade = { state: CapabilityStateName; reason: CapabilityReason };
@@ -42,7 +42,8 @@ export type CapabilityFacts =
   | { read: "failed" }
   | {
       read: "ok";
-      verdict: BillingVerdict;
+      /** `cause` is billingVerdictFor's: a paused account whose plan ENDED is not waiting on a payment. */
+      verdict: BillingVerdict & { cause?: "payment" | "ended" | null };
       trade: string | null;
       /** The voice profile as callAnswerable reads it; null = none. `forwardCalls` is voice_profiles.forward_calls:
        *  the route sends a cleared call to the transfer number instead of Sofía (route.ts ~1110), and the
@@ -63,6 +64,9 @@ function answeringStatuses(facts: Extract<CapabilityFacts, { read: "ok" }>): Pho
   return facts.numberStatuses.filter((status) =>
     (status === "testing" || status === "live") && callAnswerable({ status, profile: facts.profile }).answerable);
 }
+
+/** A pause because the plan ended reads "ended", never "until the payment is settled" (billing/page.tsx's own split). */
+const pausedReason = (v: { cause?: "payment" | "ended" | null }): CapabilityReason => (v.cause === "ended" ? "billing_ended" : "billing_paused");
 
 export function capabilityState(cap: Capability, facts: CapabilityFacts): CapabilityGrade {
   if (facts.read === "failed") return grade("needs_setup", "read_failed");
@@ -88,7 +92,7 @@ export function capabilityState(cap: Capability, facts: CapabilityFacts): Capabi
       return grade("live", answering.includes("live") ? "sofia_answering" : "sofia_testing");
     }
     if (!gate.ok && gate.reason === "crm_only") return grade("absent", "crm_only_trade");
-    if (block?.reason === "billing-paused") return grade("waiting", "billing_paused");
+    if (block?.reason === "billing-paused") return grade("waiting", pausedReason(verdict));
     if (block?.reason === "plan-no-voice") return grade("bigger_plan", "plan_no_voice");
     if (!gate.ok) return grade("needs_setup", "no_trade");
     return grade("needs_setup", facts.profile?.enabled === true ? "no_number" : "sofia_off");
@@ -96,7 +100,7 @@ export function capabilityState(cap: Capability, facts: CapabilityFacts): Capabi
   // conciergeOpen's own question: isConciergeLive AND the verdict's concierge.
   if (facts.conciergeLive && verdict.concierge) return grade("live", "chat_open");
   if (!gate.ok && gate.reason === "crm_only") return grade("absent", "crm_only_trade");
-  if (verdict.paused) return grade("waiting", "billing_paused");
+  if (verdict.paused) return grade("waiting", pausedReason(verdict));
   if (!verdict.concierge) return grade("bigger_plan", "plan_no_chat");
   return grade("needs_setup", gate.ok ? "chat_off" : "no_trade");
 }

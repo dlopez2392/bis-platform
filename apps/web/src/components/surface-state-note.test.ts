@@ -3,7 +3,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import type { CapabilityGrade } from "@/lib/surfaces/capabilities";
-import { SurfaceStateNote, TONE, sofiaLink, sofiaPill, sofiaSentenceKey } from "./surface-state-note";
+import {
+  SurfaceStateNote, TONE, capabilityLink, capabilityPill, capabilitySentenceKey, sofiaLink, sofiaPill, sofiaSentenceKey,
+  textingSentenceKey, webChatSentenceKey,
+} from "./surface-state-note";
 
 const AGENCY = { isAgency: true, role: null } as const;
 const OWNER = { isAgency: false, role: "owner" } as const;
@@ -13,6 +16,9 @@ describe("SurfaceStateNote", () => {
   it("no chip word sits on --text-3 (3.1:1 on --surface-2 in light, under AA); only a dot may", () => {
     for (const [state, tone] of Object.entries(TONE)) {
       expect(tone.chip, state).not.toContain("text-[var(--text-3)]");
+      // --good/--warn on their own tint is 4.21:1 in light; the dot carries the colour, the word is --text-1.
+      expect(tone.chip, state).not.toContain("text-[var(--good)]");
+      expect(tone.chip, state).not.toContain("text-[var(--warn)]");
     }
   });
   it("renders the state's own word by default, a reason word when given, and no pill at all for null", () => {
@@ -57,8 +63,8 @@ describe("sofiaSentenceKey", () => {
 describe("sofiaLink", () => {
   const BILLING = "/dashboard/accounts/a1/billing";
   it("the Billing page is an Owner's: not the agency's, not Staff's, not a Technician's, and labelled with the page's own title", () => {
-    expect(sofiaLink(g("bigger_plan", "plan_no_voice"), OWNER, "a1", "en")).toEqual({ href: BILLING, label: "Billing" });
-    expect(sofiaLink(g("bigger_plan", "plan_no_voice"), OWNER, "a1", "es")?.label).toBe("Facturación");
+    expect(sofiaLink(g("bigger_plan", "plan_no_voice"), OWNER, "a1", "en")).toEqual({ href: BILLING, label: "Plan and billing" });
+    expect(sofiaLink(g("bigger_plan", "plan_no_voice"), OWNER, "a1", "es")?.label).toBe("Plan y facturación");
     expect(sofiaLink(g("bigger_plan", "plan_no_voice"), AGENCY, "a1", "en")).toBeUndefined();
     for (const role of ["staff", "technician", null] as const) {
       expect(sofiaLink(g("bigger_plan", "plan_no_voice"), { isAgency: false, role }, "a1", "en")).toBeUndefined();
@@ -72,5 +78,76 @@ describe("sofiaLink", () => {
     expect(sofiaLink(g("needs_setup", "read_failed"), AGENCY, "a1", "en")).toBeUndefined();
     expect(sofiaLink(g("needs_setup", "sofia_off"), OWNER, "a1", "en")).toBeUndefined();
     expect(sofiaLink(g("absent", "crm_only_trade"), AGENCY, "a1", "en")).toBeUndefined();
+  });
+});
+
+// F-088 PR 3: the chat's and texting's words, and the row helpers Plan and billing reads.
+describe("webChatSentenceKey and textingSentenceKey", () => {
+  const words = (key: ReturnType<typeof webChatSentenceKey>) => m[key];
+  it("every reason the grade can return for the chat has its own words, client and agency", () => {
+    expect(words(webChatSentenceKey(g("live", "chat_open"), OWNER))).toContain("ready to answer your visitors");
+    expect(words(webChatSentenceKey(g("needs_setup", "chat_off"), OWNER))).toBe("BIS is setting up the chat on your website.");
+    expect(words(webChatSentenceKey(g("needs_setup", "chat_off"), AGENCY))).toContain("Voice page");
+    expect(words(webChatSentenceKey(g("needs_setup", "no_trade"), AGENCY))).toContain("Settings page");
+    expect(words(webChatSentenceKey(g("bigger_plan", "plan_no_chat"), OWNER))).toBe("Your plan doesn't include the website chat.");
+    expect(words(webChatSentenceKey(g("bigger_plan", "plan_no_chat"), AGENCY))).toBe("This plan doesn't include the website chat.");
+    expect(words(webChatSentenceKey(g("waiting", "billing_paused"), OWNER))).toContain("paused");
+    expect(words(webChatSentenceKey(g("absent", "crm_only_trade"), OWNER))).toContain("isn't offered");
+  });
+  it("a reason that is not the chat's reads as 'could not check', never as live", () => {
+    expect(webChatSentenceKey(g("live", "sofia_answering"), OWNER)).toBe("surface.chat.read_failed");
+    expect(textingSentenceKey(g("live", "chat_open"), OWNER)).toBe("surface.texting.read_failed");
+  });
+  it("texting: live says set up and nothing about sending; waiting names the carriers; no A2P jargon in any English words", () => {
+    expect(m[textingSentenceKey(g("live", "texting_registered"), OWNER)]).toBe("Texting is set up for your business.");
+    expect(m[textingSentenceKey(g("waiting", "carrier_review"), OWNER)]).toBe("Texting is waiting on the phone carriers' approval.");
+    for (const reason of ["texting_registered", "carrier_review", "not_registered", "registration_rejected", "read_failed"] as const) {
+      for (const reader of [OWNER, AGENCY]) expect(m[textingSentenceKey(g("needs_setup", reason), reader)]).not.toMatch(/A2P|10DLC|campaign/i);
+    }
+  });
+});
+
+describe("capabilitySentenceKey, capabilityPill, capabilityLink", () => {
+  it("dispatches to the capability's own words, and Sofía keeps her overrides", () => {
+    expect(capabilitySentenceKey("sofia", g("bigger_plan", "plan_no_voice"), OWNER)).toBe("surface.sofia.plan_no_voice");
+    expect(capabilitySentenceKey("webChat", g("bigger_plan", "plan_no_chat"), OWNER)).toBe("surface.chat.plan_no_chat");
+    expect(capabilitySentenceKey("texting", g("waiting", "carrier_review"), OWNER)).toBe("surface.texting.carrier_review");
+    expect(capabilityPill("sofia", g("live", "sofia_testing"), "en")).toBe("Testing");
+    expect(capabilityPill("webChat", g("needs_setup", "read_failed"), "en")).toBeNull();
+    expect(capabilityPill("texting", g("needs_setup", "read_failed"), "en")).toBeNull();
+    expect(capabilityPill("texting", g("waiting", "carrier_review"), "en")).toBeUndefined();
+  });
+  it("only the agency gets a link, to the page that fixes it; a client reading Plan and billing never gets one (not even to itself)", () => {
+    const base = "/dashboard/accounts/a1";
+    expect(capabilityLink("texting", g("needs_setup", "not_registered"), AGENCY, "a1", "en")).toEqual({ href: `${base}/checklist#a2p-registration`, label: "Open the Checklist page" });
+    expect(capabilityLink("webChat", g("needs_setup", "chat_off"), AGENCY, "a1", "en")?.href).toBe(`${base}/voice`);
+    expect(capabilityLink("sofia", g("needs_setup", "no_trade"), AGENCY, "a1", "en")?.href).toBe(`${base}/settings`);
+    expect(capabilityLink("webChat", g("needs_setup", "read_failed"), AGENCY, "a1", "en")).toBeUndefined();
+    expect(capabilityLink("webChat", g("bigger_plan", "plan_no_chat"), AGENCY, "a1", "en")).toBeUndefined();
+    for (const reason of ["chat_off", "not_registered", "sofia_off"] as const) {
+      expect(capabilityLink("webChat", g("needs_setup", reason), OWNER, "a1", "en")).toBeUndefined();
+    }
+    expect(capabilityLink("sofia", g("bigger_plan", "plan_no_voice"), OWNER, "a1", "en")).toBeUndefined();
+  });
+});
+
+describe("SurfaceStateNote align", () => {
+  it("'start' is a left-aligned row for a card; the default stays the centred empty-state note", () => {
+    const html = (align?: "start" | "center") => renderToStaticMarkup(
+      createElement(SurfaceStateNote, { state: "live", sentence: "S.", locale: "en", align }));
+    expect(html()).toContain("items-center");
+    expect(html("start")).toContain("items-start");
+    expect(html("start")).not.toContain("text-center");
+  });
+});
+
+// F-088 PR 3 review: an ended plan has its own words everywhere a grade is worded, Calls included.
+describe("billing_ended", () => {
+  it("Sofía and the chat read the ended sentence, client and agency, never the payment one and never as answering (mutation: drop the case → falls to read_failed → FAILS)", () => {
+    const ended = g("waiting", "billing_ended");
+    expect(m[sofiaSentenceKey(ended, OWNER)]).toBe("Sofía is off because your plan has ended.");
+    expect(m[sofiaSentenceKey(ended, AGENCY)]).toBe("Sofía is off because this account's plan has ended.");
+    expect(m[webChatSentenceKey(ended, OWNER)]).toBe("The website chat is off because your plan has ended.");
+    expect(m[webChatSentenceKey(ended, AGENCY)]).toBe("The website chat is off because this account's plan has ended.");
   });
 });

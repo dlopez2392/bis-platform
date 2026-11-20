@@ -28,6 +28,12 @@ vi.mock("@/lib/billing/account-billing-read", () => ({ readAccountBilling: seam.
 const direct = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), getAccountBilling: direct.read }));
 vi.mock("./actions", () => ({ openBillingPortalAction: async () => ({ ok: false, error: "x" }) }));
+// F-088 PR 3: the page also grades the capabilities and names the brand; neither is the billing row, and the
+// real tenant reader would reach for the auth seam this test narrows. A failed read is the cheapest honest fact.
+vi.mock("@/lib/surfaces/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<object>()), readCapabilityFacts: async () => ({ read: "failed" }),
+}));
+vi.mock("@/lib/branding/tenant-theme-reader", () => ({ getTenantBranding: async () => ({ brandName: null }) }));
 // The layout also reads the person's own language (mis preferencias).
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 

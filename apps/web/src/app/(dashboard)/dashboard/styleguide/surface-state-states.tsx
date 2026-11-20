@@ -1,6 +1,8 @@
-import { SurfaceStateNote, sofiaLink, sofiaPill, sofiaSentenceKey, type SurfaceReader } from "@/components/surface-state-note";
+import {
+  SurfaceStateNote, capabilityLink, capabilityPill, capabilitySentenceKey, sofiaLink, sofiaPill, sofiaSentenceKey, type SurfaceReader,
+} from "@/components/surface-state-note";
 import { makeTr } from "@/lib/record/copy";
-import type { CapabilityGrade } from "@/lib/surfaces/capabilities";
+import type { Capability, CapabilityGrade } from "@/lib/surfaces/capabilities";
 
 /**
  * F-088 PR 2: the five surface states as one note each, for Sofía, in English, Spanish and the QA pseudo-locale
@@ -16,6 +18,12 @@ const GRADES: CapabilityGrade[] = [
   { state: "waiting", reason: "billing_paused" },
   { state: "bigger_plan", reason: "plan_no_voice" },
   { state: "absent", reason: "crm_only_trade" },
+];
+/** The `align="start"` row, as "What your plan includes" on Plan and billing lays it out: capability name, then the note. */
+const ROWS: { cap: Capability; grade: CapabilityGrade }[] = [
+  { cap: "sofia", grade: { state: "bigger_plan", reason: "plan_no_voice" } },
+  { cap: "webChat", grade: { state: "needs_setup", reason: "chat_off" } },
+  { cap: "texting", grade: { state: "waiting", reason: "carrier_review" } },
 ];
 const COLUMNS = [
   { locale: "en" as const, pseudo: false, label: "English" },
@@ -43,6 +51,24 @@ export function SurfaceStateStates() {
                 />
               </div>
             ))}
+            <div className="rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-card)]" data-surface-rows>
+              <ul className="flex flex-col divide-y divide-[var(--line)]">
+                {ROWS.map(({ cap, grade }) => (
+                  <li key={cap} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
+                    <h4 className="text-sm font-medium text-foreground">{tr.text(`surface.cap.${cap}`)}</h4>
+                    <SurfaceStateNote
+                      align="start"
+                      state={grade.state}
+                      sentence={tr.text(capabilitySentenceKey(cap, grade, OWNER))}
+                      word={capabilityPill(cap, grade, col.locale, col.pseudo)}
+                      link={capabilityLink(cap, grade, OWNER, "demo", col.locale, col.pseudo)}
+                      locale={col.locale}
+                      pseudo={col.pseudo}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         );
       })}
