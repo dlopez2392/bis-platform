@@ -5,13 +5,14 @@ import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, stubToolResult, renderTranscript,
   resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
   selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName, newStubSession, STUB_BOOKING,
-  CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
+  CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL, tradeModuleOf,
   type CorpusFixture, type CorpusItem,
 } from "./corpus-lib";
 import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
 import { leadHasContact } from "../../concierge/lead";
 import { capturePhoneLead, droppedNote } from "../tools/placeholders";
 import { NOT_CONFIRMED_YET, BOOK_ASK_WHOSE, LEAD_ASK_WHOSE } from "../identity/results";
+import { buildSystemPrompt } from "../system-prompt";
 
 const ITEM = `---
 lang: es
@@ -134,6 +135,14 @@ describe("promptInputFor / toolsFor: the real input and tools of each medium", (
     expect(names(full)).toContain("book_appointment");
     expect(names(msgOnly)).not.toContain("book_appointment");
     expect(names(msgOnly)).toContain("check_availability");
+  });
+  // Model switch plan G1/Q2 (2026-11-26): the base slice plays the prompt a live call runs with no trade module.
+  it("base: tradeModule is null, so the prompt carries no TRADE RULES block (mutation: map base to events -> FAILS)", () => {
+    const item = parseCorpusItem("10-es-choque.md", ITEM);
+    const input = promptInputFor(item, FIXTURE, "base");
+    expect(input.tradeModule).toBeNull();
+    expect(buildSystemPrompt(input, new Date("2026-12-01T16:00:00Z"))).not.toContain("TRADE RULES");
+    expect(buildSystemPrompt(promptInputFor(item, FIXTURE, "events"), new Date("2026-12-01T16:00:00Z"))).toContain("TRADE RULES");
   });
 });
 
@@ -305,11 +314,24 @@ describe("newStubSession / stubToolResult with a session: the stub follows the l
     expect(stubToolResult("find_my_booking", {}, { medium: "phone", timezone: "America/Chicago" })).toEqual({ ok: true });
   });
 
-  it("every existing corpus fixture still parses, with no contactsOnNumber (parseFixture is unchanged)", () => {
+  it("base: the session runs the no-pack ladder, so one contact on the number is found by caller ID alone (mutation: map base to insurance_pc, rung 2 -> FAILS)", () => {
+    const session = newStubSession(FIXTURE_ONE, ITEM, "base");
+    expect(session.module).toBeNull();
+    expect(stubToolResult("find_my_booking", {}, { medium: "phone", timezone: FIXTURE_ONE.timezone, session }))
+      .toEqual({ found: true, ...STUB_BOOKING, startsAtLocal: expect.any(String) });
+    // base items 11 and 12: the found booking can then be moved on the same call.
+    expect(stubToolResult("reschedule_appointment", { bookingId: STUB_BOOKING.bookingId, startsAt: "2027-06-03T20:00:00.000Z" },
+      { medium: "phone", timezone: FIXTURE_ONE.timezone, session })).toEqual({ ok: true });
+  });
+
+  it("every corpus fixture parses; only the known-caller fixture puts anyone on the number, exactly one contact (mutation: add a contact to rio-roofing.json -> FAILS)", () => {
     const dir = path.resolve(__dirname, "corpus/fixtures");
-    for (const file of readdirSync(dir)) {
+    const files = readdirSync(dir).sort();
+    expect(files).toEqual(["agencia-de-seguros-rio.json", "rio-roofing-known-caller.json", "rio-roofing.json", "salon-los-ebanos.json"]);
+    for (const file of files) {
       const fixture = parseFixture(file, readFileSync(path.join(dir, file), "utf8"));
-      expect(fixture.contactsOnNumber).toBeUndefined();
+      if (file === "rio-roofing-known-caller.json") expect(fixture.contactsOnNumber).toEqual([{ firstName: "Rosa", lastName: "Treviño" }]);
+      else expect(fixture.contactsOnNumber, file).toBeUndefined();
     }
   });
 });
@@ -361,10 +383,14 @@ describe("the sheet and the transcript are bound to the exact words", () => {
 });
 
 describe("the slugs, the engine, and what the script may touch", () => {
-  it("slugs map to the two modules and back", () => {
-    expect(CORPUS_SLUGS).toEqual({ insurance_pc: "insurance-pc", events: "events" });
+  it("slugs map to the two modules and the base slice, and back; only base plays no trade module (mutation: tradeModuleOf returns the id for base -> FAILS)", () => {
+    expect(CORPUS_SLUGS).toEqual({ insurance_pc: "insurance-pc", events: "events", base: "base" });
     expect(moduleForSlug("insurance-pc")).toBe("insurance_pc");
     expect(moduleForSlug("insurance_pc")).toBeNull();
+    expect(moduleForSlug("base")).toBe("base");
+    expect(tradeModuleOf("base")).toBeNull();
+    expect(tradeModuleOf("insurance_pc")).toBe("insurance_pc");
+    expect(tradeModuleOf("events")).toBe("events");
   });
   it("the phone engine is realtime, as Task 0's spike showed on 2026-10-22 (run 39814905846: gpt-realtime takes a text-only session via output_modalities), and the fallback is gpt-4o (spec section 7; mutation: \"chat\" -> FAILS)", () => {
     expect(DEFAULT_PHONE_ENGINE).toBe("realtime");

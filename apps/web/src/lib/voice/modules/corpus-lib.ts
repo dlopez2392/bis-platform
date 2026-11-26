@@ -31,10 +31,17 @@ export const DEFAULT_PHONE_ENGINE: PhoneEngine = "realtime";
 /** Spec section 7's fallback for phone items when the Realtime model will not run text-only. */
 export const PHONE_FALLBACK_MODEL = "gpt-4o";
 
-export const CORPUS_SLUGS = { insurance_pc: "insurance-pc", events: "events" } as const satisfies Record<TradeModuleId, string>;
-export function moduleForSlug(slug: string): TradeModuleId | null {
-  const hit = (Object.entries(CORPUS_SLUGS) as Array<[TradeModuleId, string]>).find(([, s]) => s === slug);
+/** A corpus: one per trade module, plus "base" (model switch plan G1/Q2, owner 2026-11-26), which plays the prompt a
+ *  live call runs with NO trade module, the one every live account has today. */
+export type CorpusModuleId = TradeModuleId | "base";
+export const CORPUS_SLUGS = { insurance_pc: "insurance-pc", events: "events", base: "base" } as const satisfies Record<CorpusModuleId, string>;
+export function moduleForSlug(slug: string): CorpusModuleId | null {
+  const hit = (Object.entries(CORPUS_SLUGS) as Array<[CorpusModuleId, string]>).find(([, s]) => s === slug);
   return hit ? hit[0] : null;
+}
+/** The trade module a corpus plays under: its own, or none for base (the prompt's and the ladder's null). */
+export function tradeModuleOf(id: CorpusModuleId): TradeModuleId | null {
+  return id === "base" ? null : id;
 }
 
 export type CorpusItem = {
@@ -136,13 +143,14 @@ export function parseFixture(name: string, json: string): CorpusFixture {
 /** The live input for this item's medium: the incoming call route's (`promptInput` in
  *  api/voice/incoming/route.ts) or the concierge turn route's (its `buildSystemPrompt({...})` call in
  *  api/concierge/[publicId]/turn/route.ts), with this item's flags and the module under test. */
-export function promptInputFor(item: CorpusItem, f: CorpusFixture, module: TradeModuleId): VoicePromptInput {
+export function promptInputFor(item: CorpusItem, f: CorpusFixture, corpus: CorpusModuleId): VoicePromptInput {
+  const tradeModule = tradeModuleOf(corpus);
   if (item.medium === "web") {
     return {
       personaName: f.personaName, businessName: f.businessName, facts: f.facts, services: f.services,
       languages: f.languages, bookingEnabled: false, timezone: f.timezone, slotDurationMinutes: 30,
       afterHours: item.afterHours ?? f.afterHours, callerNumber: null, meetingType: "in_person", medium: "web",
-      disclosed: item.disclosure, tradeModule: module,
+      disclosed: item.disclosure, tradeModule,
     };
   }
   return {
@@ -150,7 +158,7 @@ export function promptInputFor(item: CorpusItem, f: CorpusFixture, module: Trade
     languages: f.languages, bookingEnabled: item.booking, timezone: f.timezone,
     slotDurationMinutes: f.slotDurationMinutes, afterHours: item.afterHours ?? f.afterHours,
     callerNumber: item.callerId === "withheld" ? null : f.callerNumber,
-    meetingType: f.meetingType, handoffAvailable: item.transfer, disclosed: item.disclosure, tradeModule: module,
+    meetingType: f.meetingType, handoffAvailable: item.transfer, disclosed: item.disclosure, tradeModule,
   };
 }
 
@@ -178,7 +186,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** O2, S24: the stub's per-item memory: the identity state and the bookings this item made. */
 export type StubSession = {
-  state: CallState; candidates: Candidate[]; module: TradeModuleId; callerNumber: string | null; transfer: boolean;
+  state: CallState; candidates: Candidate[]; module: TradeModuleId | null; callerNumber: string | null; transfer: boolean;
   /** booking id -> the contact it belongs to (the found one, or "this-call" for one the item booked). */
   bookings: Map<string, string>;
   made: number;
@@ -186,13 +194,13 @@ export type StubSession = {
 /** The fixed booking a confirmed find answers (spec 5.11). */
 export const STUB_BOOKING = { bookingId: "stub-booking-1", startsAt: "2027-06-03T15:00:00.000Z" } as const;
 
-export function newStubSession(f: CorpusFixture, item: CorpusItem, module: TradeModuleId): StubSession {
+export function newStubSession(f: CorpusFixture, item: CorpusItem, corpus: CorpusModuleId): StubSession {
   const candidates = (f.contactsOnNumber ?? []).map((c, i) => candidateOf({
     id: `stub-contact-${i + 1}`, first_name: c.firstName, last_name: c.lastName, email_key: c.email ? emailKey(c.email) : null,
   }));
   // The fixed booking exists from the start (the live tool's getBookingById finds any id it is given), owned
   // by the first contact until a confirmed find hands it to the one confirmed.
-  return { state: emptyCallState(), candidates, module, callerNumber: item.callerId === "withheld" ? null : f.callerNumber,
+  return { state: emptyCallState(), candidates, module: tradeModuleOf(corpus), callerNumber: item.callerId === "withheld" ? null : f.callerNumber,
     transfer: item.transfer, bookings: new Map(candidates.length > 0 ? [[STUB_BOOKING.bookingId, candidates[0]!.id]] : []), made: 0 };
 }
 
@@ -360,7 +368,7 @@ export function handlerFailureReason(err: unknown): string {
 
 export type TranscriptTurn = { role: "caller" | "sofia" | "tool"; text: string };
 export type RunMeta = {
-  moduleId: TradeModuleId; slug: string; version: number; sha256: string; date: string;
+  moduleId: CorpusModuleId; slug: string; version: number; sha256: string; date: string;
   phoneEngine: PhoneEngine; phoneModel: string; chatModel: string;
 };
 
