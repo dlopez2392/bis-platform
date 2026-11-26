@@ -255,3 +255,10 @@ Owner items: every Vercel env change (Preview and Production), every real call a
 - **Q2.** gpt-realtime never met the absolute bar. Do you accept the paired bar (2.1 no worse than gpt-realtime on the same day)? Recommended: yes. And should we add the 12-item base corpus? Recommended: yes.
 - **Q3.** Should every account move at once by env, in a window (recommended, at about 0.7 calls a day)? Or should we first build a per-number trial switch (about 150 lines, HIGH) so only the BIS line moves?
 - **Q4.** If luna costs several times what gpt-4o-mini does, should we raise account AI budgets, or accept more fact-line summaries?
+
+## 11. Owner answers (danlo, 2026-11-26)
+
+- **Q1.** Yes: grading Dec 4 to 8, calls on Dec 10.
+- **Q2.** The paired bar (2.1 no worse than gpt-realtime on the same day), plus the 12-item base corpus slice.
+- **Q3.** Every account at once, by env, in danlo's window. No per-number switch.
+- **Q4.** Raise account AI budgets if luna costs more. The real figure is shown to danlo before PR 2 merges.
