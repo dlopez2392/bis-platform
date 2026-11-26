@@ -32,6 +32,68 @@ written.
 | Reply-to on the billing-link email | `AGENCY_SUPPORT_EMAIL`, falling back to `hello@bis-rgv.com` in code |
 | CI | signs its fixture events with the public literal `whsec_bis_ci_e2e_fixture_only` in `ci.yml`'s e2e job. It verifies nothing anywhere else. **Never put it on Vercel.** Nothing in the code refuses it next to a live key. |
 
+## 0. Go-live checklist
+
+One page. The numbered sections below hold the detail.
+
+Where things stand on 2026-11-24 (Vercel's environment list, names only): **no Stripe
+variable exists on Vercel at all** (no `STRIPE_SECRET_KEY`, no `STRIPE_WEBHOOK_SECRET`,
+no `BILLING_ENFORCE`, on Production or Preview). `AGENCY_SUPPORT_EMAIL` is
+`hello@bis-rgv.com` on Production and forwards through ImprovMX, which answers
+section 1 step 3's open question. So today no billing link can be sent, the Plans
+page cannot create a plan in Stripe, and nothing is enforced.
+
+Do these in order. Who does each is in brackets.
+
+**A. Test mode (before any live key)**
+1. [danlo] The failed-payment settings. **Done 2026-11-26.** The end-state
+   setting ("after all retries fail") is HIDDEN in test mode and in
+   sandboxes. It is set in LIVE mode, and a sandbox follows it. danlo set it
+   in LIVE mode to mark the subscription **unpaid** (section 1 step 6).
+2. [Claude] The TEST-mode probes. **Done 2026-11-26.** Results: X1 and X2 in
+   section 7, B4 in section 8, S2, S3, S4 and S8 in section 9.13.
+3. [Claude] If any probe contradicts its assumption, fix it first. One did:
+   **B4** (section 8). Its fix for now is a rule, step 9; no code changed.
+   S8 also left an open item: usage from a period's last hour can miss that
+   period's invoice if it reaches Stripe late (section 9.13).
+
+**B. Live Stripe (once)**
+4. [danlo] LIVE mode: **confirm** the failed-payment settings match section
+   1 step 6 (the after-the-last-retry setting is already made), and fill in
+   the rest of its table.
+5. [danlo] Vercel Production only, Sensitive: `STRIPE_SECRET_KEY` = the LIVE
+   secret key. Never on Preview.
+6. [danlo] The live webhook endpoint, its six events and API version
+   (section 1 step 1), then `STRIPE_WEBHOOK_SECRET` (section 1 step 2).
+7. [danlo] Redeploy production. [Claude] Check the deployment, then section 1
+   step 5's endpoint check together.
+
+**C. The price (in BIS, which creates it in Stripe)**
+8. [danlo, Claude can drive it] Plans page: create the plans decided on
+   2026-11-09: CRM $79; Sofía $199 (300 min, 100 chats, 1,000 texts,
+   $0.35/min over); and the founding Sofía plan at $149 for the first 10
+   clients, no setup fee. Sofía Plus ($349) waits for a month of real
+   cost-per-minute. The $299 setup fee is not something BIS bills today;
+   invoice it from Stripe by hand if it is charged at all.
+9. [danlo] The founding plan's 12 months is not enforced by the code: put a
+   reminder on each founding client to Change plan at month 12. **Change a
+   paying client's plan only at the start of their billing period.** A
+   mid-period change splits the period's usage at the change and gives each
+   part its own full allowance (section 8). What to do about that (keep the
+   rule, or make the code switch at the next billing date) is still open
+   for danlo.
+
+**D. The first paying client**
+10. [danlo] Send the billing link from the client's account (Settings →
+    Billing). [Claude] Watch the endpoint's deliveries and the Vercel logs
+    as the client pays; the card should show the plan as paid.
+
+**E. Enforcement: later, not at go-live**
+11. Leave `BILLING_ENFORCE` unset until at least one real client has paid
+    and a night's cron log has been read (section 9.5 step 1). Then follow
+    section 9.5 steps 3 to 6 in order, including the real test call.
+    Rollback is section 9.5 step 7, held usage first.
+
 ## 1. Live setup (once, before the first live client pays)
 
 Do these in order, after migration 0052 is on production and before (or right
@@ -130,12 +192,18 @@ only on a deployment made AFTER it was added (step 4).
    - **Customer emails:** receipts for successful payments ON, and notices
      for failed payments ON.
 
+   **The after-the-last-retry setting exists in LIVE mode only.** Test mode
+   and sandboxes hide it ("Settings that affect your live integration are
+   hidden in test mode"), and a sandbox follows the live setting. It is under
+   Settings → Billing → Subscriptions and emails. Before it was set, a
+   sandbox subscription was CANCELED after its last retry (section 9.13, S2).
+
    Record what was set, with the date:
 
    | Setting | Set to | Date | By |
    |---|---|---|---|
    | Retry schedule | | | |
-   | After the last retry | | | |
+   | After the last retry | Mark the subscription unpaid | 2026-11-26 | danlo |
    | Receipt emails | | | |
    | Failed-payment emails | | | |
 
@@ -143,8 +211,9 @@ only on a deployment made AFTER it was added (step 4).
    on the first Manage billing click (`apps/web/src/lib/billing/portal.ts`),
    and Checkout needs no setup.
 8. **Before the first live client:** the pre-launch probe (section 7) has
-   been run and recorded. **Before the first live mid-month Change plan on
-   a paid account:** B4 is settled (section 8).
+   been run and recorded (done 2026-11-26). **B4 does NOT hold** (section 8,
+   2026-11-26): change a paid account's plan only at the start of its
+   billing period, never mid-month.
 
 **Never point a TEST-mode endpoint at production.** The mode check answers
 400 to every test event there, and Stripe retries each one for days.
@@ -452,13 +521,23 @@ is refused as `another_live_subscription`, and **the client pays twice**.
 
 ## 6. Changing plan on a paid account
 
-Change plan applies NOW, with Stripe's proration (DECISION 2). What that
-means in money rests on **B4, which is UNVERIFIED**: that the base price is
-prorated, and that the WHOLE period's usage is priced at the NEW plan's
-metered prices at the end of the period. **Do not use Change plan on a paid
-live account in the middle of a period until B4 is settled (section 8).**
-Changing a complimentary account's plan touches only BIS's database and is
-unaffected.
+Change plan applies NOW, with Stripe's proration (DECISION 2). The plan
+assumed (B4) that the base price is prorated and that the WHOLE period's
+usage is priced at the NEW plan's metered prices. **The B4 probe showed the
+second half is wrong** (section 8, TEST mode, 2026-11-26). What a mid-period
+change actually bills:
+- **The base price is prorated.** A credit for the unused part of the old
+  plan, and a charge for the rest of the period on the new one.
+- **Usage is split at the moment of the change.** Usage before it is billed
+  at the OLD plan's prices (proration lines on the next invoice). Usage
+  after it is billed at the NEW plan's prices.
+- **Each part gets its own full allowance.** The free tier starts again
+  after the change, so a client who changes plan mid-month can get two
+  allowances in one month.
+
+**Rule until danlo decides otherwise: change a paying client's plan only at
+the start of their billing period, never mid-month.** Changing a
+complimentary account's plan touches only BIS's database and is unaffected.
 
 ## 7. Pre-launch probe (TEST mode, once, before the first live client)
 
@@ -482,10 +561,11 @@ subscription-mode session, for example:
    with card `4242 4242 4242 4242` (any future date, any CVC). Then call
    `POST /v1/checkout/sessions/<cs_…>/expire`. Record the error's type, code
    and message. Expected: an invalid-request error saying the session is not
-   open **(assumption)**.
+   open (observed 2026-11-26, below).
 2. **X2 on a payment held in 3-D Secure.** Create a new session and open it.
    Pay with Stripe's always-authenticate test card `4000 0027 6000 3184`
-   **(from Stripe's testing docs; not verified here)**. When the 3-D Secure
+   (it stopped at the 3-D Secure step on 2026-11-26, but only on the second
+   try: below). When the 3-D Secure
    challenge appears, STOP, and do not answer it. Expire the session through
    the API. Then complete the challenge. Record:
    - whether the payment went through;
@@ -495,8 +575,11 @@ subscription-mode session, for example:
 
    | Probe | Date | By | Result |
    |---|---|---|---|
-   | X1, expire a completed session | | | |
-   | X2, expire during 3-D Secure, then complete it | | | |
+   | X1, expire a completed session | 2026-11-26 | Claude (script), with danlo's OK | **Holds.** Paid with 4242: the session was complete and paid, and its subscription active. The expire was refused: 400 "Only Checkout Sessions with a status in ["open"] can be expired. This Checkout Session has a status of `complete`." (the error's type and code were not recorded). The subscription stayed active. |
+   | X2, expire during 3-D Secure, then complete it | 2026-11-26 | Claude (script), with danlo's OK | **Holds.** Card 4000 0027 6000 3184 stopped at the test 3-D Secure screen. Before the expire: open, unpaid, no subscription. The expire was accepted: expired, unpaid. danlo then pressed Complete on the 3-D Secure screen, and Stripe showed "You're all done here". After: the session expired and unpaid, NO subscription, NO charge, NO invoice, and its PaymentIntent `canceled`. A first attempt did not stop at 3-D Secure and was paid; it was discarded, not counted. |
+
+   Both hold, so `settleDeadLink`'s comment stays as it is. danlo made the
+   two test payments on Stripe's checkout page.
 
 If a result contradicts the assumption, update `settleDeadLink`'s comment in
 `billing-actions.ts`. If X2 FAILS (a subscription appears after the expire),
@@ -507,7 +590,7 @@ means:
 - Send's expiry of an earlier link is not a guarantee either, so
   `another_live_subscription` (section 3) becomes a case to expect.
 
-## 8. Settle B4 before the first live mid-month Change plan
+## 8. B4: what a mid-month Change plan bills (probed 2026-11-26: it does NOT hold)
 
 On a Stripe TEST clock:
 1. A customer on the clock, subscribed to plan A (base price plus the three
@@ -524,7 +607,34 @@ live mid-month Change plan. Record the result:
 
 | Date | By | Base price | Metered usage priced at | B4 holds? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-11-26 | Claude (script), with danlo's OK | Prorated correctly: -$50 for the unused part of plan A, +$100 for the rest of the period on plan B ($100 → $200, changed at day 15) | Split at the change: usage before it at plan A's prices, usage after it at plan B's. Each part gets its own full allowance. | **No** |
+
+What the probe showed, in detail:
+- **Usage before the change is billed at the OLD plan's prices**, as
+  proration lines on the next invoice ("plan A from 26 Nov until 11 Dec",
+  marked as proration). Usage after the change is billed at the new plan's
+  prices.
+- **The numbers (run 2).** Usage sent before the change (voice 30, texts
+  100, chats 12) came to a metered total of 1270 cents. That is exactly
+  what all of it costs at plan A. At plan B, as B4 assumed, it would have
+  been 360.
+- **Each part gets its own full allowance.** The graduated tiers start
+  again: plan A's part billed 12 chats with its 5 free ones taken off, and
+  plan B's part also starts with its full free tier. A client who changes plan
+  mid-month can get two allowances in one month.
+- **Usage sent moments before a change can be billed on neither part
+  (run 1).** Voice usage sent about 40 real seconds before the change was
+  on the meter (its event summary showed 30) but billed as 0 on both parts.
+  Texts and chats sent at the same moment were billed. Most likely Stripe
+  had not finished processing that event when the change happened (test
+  clocks compress time). Run 2 billed it. The risk is only for usage
+  reported moments before a change.
+
+**What this means now.** Change a paying client's plan only at the start of
+their billing period, never mid-month (section 6). The follow-up plan named
+above (switch at the next billing date, or subscription schedules) is not
+written. Whether to write it, or keep the rule, is danlo's decision and
+stays open.
 
 ## 9. The pause and the nightly reconciliation (M7a PR-4)
 
@@ -676,7 +786,8 @@ with a row Stripe already reports; it does not make Stripe report anything.
    fresh as the last webhook) — that is expected, not a fault. The work
    queue's "Payment failed:" line already shows these accounts today.
 2. **Run the TEST-mode probe below (9.13) once**, in TEST mode, before
-   trusting day counts and invoice timing against a real client.
+   trusting day counts and invoice timing against a real client. Done
+   2026-11-26; read 9.13's open item before step 4.
 3. **Check every billed account's plan features and transfer numbers BEFORE
    step 4.** The moment the switch goes on, a plan with `voice_receptionist:
    false` sends that account's calls to its OWN transfer number at once (not
@@ -843,11 +954,12 @@ the same window: if the remaining rows went out, it reads `match` (or
 
 ### 9.10 A closed-period mismatch (S8)
 
-Stripe finalises a period's invoice about an hour after the period ends
-**(assumption, Stripe's docs, not re-read)**. The nightly step compares a
+Stripe finalises a period's invoice 60 minutes after the period ends
+(observed in TEST mode on 2026-11-26, S8 in 9.13). The nightly step compares a
 just-closed period once, on the first night after it closes — usually AFTER
 that invoice is already final, so this comparison REPORTS a mismatch, it
-cannot prevent one. If it shows `stripe_over` or `stripe_under` on a closed
+cannot prevent one. It also cannot see usage that reached Stripe after the
+invoice was final: see 9.13's open item. If it shows `stripe_over` or `stripe_under` on a closed
 period (the row's `window_end` is before the account's current period
 started), credit or adjust the FINAL invoice directly, the same as any other
 mismatch (9.9) — there is no draft left to fix.
@@ -930,14 +1042,48 @@ Record the results here:
 
 | Probe | Date | By | Result |
 |---|---|---|---|
-| S2, past_due then unpaid | | | |
-| S3, canceled period end | | | |
-| S4, usage with no subscription | | | |
-| S8, invoice finalized_at vs period end | | | |
+| S2, past_due then unpaid | 2026-11-26 | Claude (script), with danlo's OK | **Holds, once the live setting was made.** Smart Retries: up to 4 retries within 3 weeks (5 attempts in all). Run 1, on the sandbox's default: `past_due` through the retries, then **`canceled`** on day 22 after attempt 5, because the after-all-retries setting is hidden in test mode (section 1 step 6). danlo then set it in LIVE mode to mark unpaid, and the sandbox follows it. Run 2: `past_due` through attempts 1 to 4 (next attempts about day 5, 11, 16 and 21), then **`unpaid`** on day 22 after attempt 5. Never canceled, and the invoice stays open. |
+| S3, canceled period end | 2026-11-26 | Claude (script), with danlo's OK | **Holds.** Canceled on day 5: status `canceled` at once, and every item's `current_period_end` still the original period end (2026-12-26), in the future. |
+| S4, usage with no subscription | 2026-11-26 | Claude (script), with danlo's OK | **Holds.** Stripe accepted meter events for the canceled customer (no error), but nothing bills them. The invoice preview for that customer, with no subscription, is refused outright: 400 "You must provide at least one of: subscription, schedule, ...". |
+| S8, invoice finalized_at vs period end | 2026-11-26 | Claude (script), with danlo's OK | The period's invoice is created AT the period end and finalized **60 minutes** after it (both runs). Usage that reaches Stripe more than an hour after the period end misses that invoice. See the open item below. |
 
 If S2 or S3 contradicts what is written above, stop before turning
 `BILLING_ENFORCE` on and tell the orchestrator: `decidePause` (Task 4,
 `apps/web/src/lib/billing/standing.ts`) is written against exactly these two
 behaviours. If S4 contradicts it, the usage report's own DECISION 7-era
-assumption (A17 in the PR-2 plan) needs the same re-check. S8 cannot fail —
-it only tells you how early 9.10 starts mattering for a given account.
+assumption (A17 in the PR-2 plan) needs the same re-check. S8 cannot fail as
+a probe, but its answer leaves the open item below.
+
+**How usage reaches Stripe.** Not in a nightly push. The usage report
+(`usageReportPass`, `apps/web/src/lib/automations/passes/usage-report.ts`)
+runs on every cron tick, every 15 minutes (`apps/web/vercel.json`,
+`/api/cron/reminders`). Each tick sends the oldest unreported rows first, at
+most 200 (`USAGE_REPORT_TICK_CAP`) within 60 seconds
+(`USAGE_REPORT_BUDGET_MS`, both in `apps/web/src/lib/automations/caps.ts`).
+Each event carries the time the fact happened; for a call, that is when the
+call ended. So on an ordinary day, a call or text in a period's last minutes
+reaches Stripe within about 15 minutes, inside the 60.
+
+**Open item (S8, found 2026-11-26, not fixed): usage from a period's last
+hour can miss that period's invoice.** It misses whenever it does not reach
+Stripe within 60 minutes of the period end. That happens when:
+- Stripe fails for that long. A tick stops at a Stripe failure, and a row
+  Stripe refuses holds back the rest of its account's rows to the next tick.
+- One or more ticks do not run (a missed or failed cron).
+- More than 200 rows are waiting, so the newest wait for later ticks.
+- Stripe has not finished processing an event sent minutes before the
+  invoice is finalized. Stripe processes a meter event after it accepts it.
+  This was seen once beside a plan change (B4 run 1, section 8), not at a
+  period end.
+
+Nothing catches this before the invoice is final. With `BILLING_ENFORCE`
+on, the nightly step checks a closed period once, after that night's 08:00
+UTC start, and only reports (9.10, `apps/web/src/lib/billing/nightly.ts`).
+By then the invoice is final. And that check compares BIS with the METER's
+total for the period (`listEventSummaries`, in `meterTotal`,
+`apps/web/src/lib/billing/stripe-gateway.ts`), not with the invoice. A late
+event that Stripe accepted counts in that total **(assumption: the total
+counts an event by its own time, as the reconciliation already assumes)**,
+so the check reads `match` while the final invoice lacks it. With the switch
+off, nothing compares at all. What Stripe then does with a late event (bill
+it on the next invoice, or never) was not observed.
