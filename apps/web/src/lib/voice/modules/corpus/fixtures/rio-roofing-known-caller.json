@@ -1,0 +1,15 @@
+{
+  "businessName": "Rio Roofing",
+  "personaName": "Sofía",
+  "languages": "both",
+  "timezone": "America/Chicago",
+  "services": "Roof repair, leak repair, full roof replacement, free inspections and estimates",
+  "facts": "- Rio Roofing, 2100 N 23rd St, McAllen, TX. We work across the Rio Grande Valley.\n- Hours: Monday to Friday 7 AM to 5 PM, Saturday 8 AM to 12 noon. Closed Sunday.\n- We repair and replace residential roofs: shingle, metal and flat roofs.\n- Roof inspections and written estimates are free.\n- Leak repair service call: $95, credited toward the repair if you go ahead with it.\n- A new roof or a full replacement is priced only after an inspection.\n- Every new roof comes with a 10-year workmanship warranty.\n- Hablamos español.",
+  "meetingType": "in_person",
+  "slotDurationMinutes": 60,
+  "afterHours": "hours_then_message",
+  "callerNumber": "+19565550164",
+  "greetingEn": "Thanks for calling Rio Roofing. How can I help you?",
+  "greetingEs": "Gracias por llamar a Rio Roofing. ¿En qué le puedo ayudar?",
+  "contactsOnNumber": [{ "firstName": "Rosa", "lastName": "Treviño" }]
+}

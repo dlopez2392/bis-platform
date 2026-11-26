@@ -8,6 +8,7 @@ name: Sofía corpus
 #
 #   gh workflow run sofia-corpus.yml --ref main -f step=spike -f realtime_model=gpt-realtime-2.1
 #   gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both
+#   gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=base
 #   gh workflow run sofia-corpus.yml --ref main -f step=model-spike
 #
 # How to download and open the result: docs/runbooks/sofia-corpus.md.
@@ -67,7 +68,9 @@ on:
           - corpus
           - model-spike
       module:
-        description: Which corpus to play (corpus only).
+        description: >-
+          Which corpus to play (corpus only). both is the two trade modules;
+          base is the live prompt with no trade module, played on its own.
         type: choice
         required: true
         default: both
@@ -75,6 +78,7 @@ on:
           - both
           - insurance-pc
           - events
+          - base
       phone_engine:
         description: Phone items on the Realtime model (text only) or on chat completions (corpus only).
         type: choice
@@ -193,7 +197,7 @@ jobs:
           esac
           case "$MODULE" in
             both) modules=(insurance-pc events) ;;
-            insurance-pc|events) modules=("$MODULE") ;;
+            insurance-pc|events|base) modules=("$MODULE") ;;
             *) echo "::error::Unknown module: $MODULE"; exit 1 ;;
           esac
           failed=0

@@ -1515,6 +1515,14 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
     expect(optionsOf(block)).toEqual(["spike", "corpus", "model-spike"]);
   });
 
+  it("module is a FIXED choice of both, insurance-pc, events and base, default both, reaching the tool step as MODULE (mutation: `type: string`, or drop base -> FAILS)", () => {
+    const block = inputBlock("module");
+    expect(block).toContain("type: choice");
+    expect(block).toContain("default: both");
+    expect(optionsOf(block)).toEqual(["both", "insurance-pc", "events", "base"]);
+    expect(blockEnv(toolBlock!).MODULE).toBe("${{ inputs.module }}");
+  });
+
   it("realtime_model is a FIXED choice, the spike's own list, default gpt-realtime, reaching the tool step as REALTIME_MODEL (mutation: `type: string`, or a third option → FAILS)", () => {
     const block = inputBlock("realtime_model");
     expect(block).toContain("type: choice");
@@ -1588,6 +1596,28 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
       const r = step({ STEP: "corpus", REALTIME_MODEL: "gpt-realtime-2.1", MODULE: "events", REPEAT: "1" });
       expect(r.calls).toEqual(["--silent --filter web sofia:corpus events --phone-engine realtime --repeat 1 | REALTIME_MODEL=gpt-realtime-2.1"]);
       expect(r.status).toBe(0);
+    });
+
+    // Model switch plan G1/Q2: the base slice (the live prompt, no trade module) is its own run.
+    it("corpus base plays the base slice alone (mutation: drop base from the bash case -> FAILS)", () => {
+      const r = step({ STEP: "corpus", MODULE: "base", REPEAT: "3" });
+      expect(r.calls).toEqual(["--silent --filter web sofia:corpus base --phone-engine realtime --repeat 3 | REALTIME_MODEL=gpt-realtime"]);
+      expect(r.status).toBe(0);
+    });
+
+    it("corpus both still means the two trade modules, insurance-pc then events, never base (mutation: add base to both -> FAILS)", () => {
+      const r = step({ STEP: "corpus", MODULE: "both", REPEAT: "1" });
+      expect(r.calls).toEqual([
+        "--silent --filter web sofia:corpus insurance-pc --phone-engine realtime --repeat 1 | REALTIME_MODEL=gpt-realtime",
+        "--silent --filter web sofia:corpus events --phone-engine realtime --repeat 1 | REALTIME_MODEL=gpt-realtime",
+      ]);
+    });
+
+    it("refuses a module outside the choice before running anything", () => {
+      const r = step({ STEP: "corpus", MODULE: "base; echo pwned" });
+      expect(r.status).toBe(1);
+      expect(r.out).toContain("::error::Unknown module: base; echo pwned");
+      expect(r.calls).toEqual([]);
     });
 
     it("model-spike runs the model spike, copies its output to the job summary, and exits with the SPIKE's status, not tee's (mutation: `exit 0`, or no exit so it falls through to the corpus → FAILS)", () => {

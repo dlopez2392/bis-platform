@@ -1,4 +1,6 @@
-// pnpm --filter web sofia:corpus <insurance-pc|events> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]
+// pnpm --filter web sofia:corpus <insurance-pc|events|base> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]
+//
+// `base` (model switch plan G1/Q2) plays the live prompt with no trade module; the other two play their module.
 //
 // S-47b (spec section 7): plays each corpus item's caller lines through Sofía's REAL prompt and tools for
 // that item's medium, one line after each reply, with every tool stubbed (ok, and logged), and writes one
@@ -19,8 +21,7 @@ import { budgetNotice } from "../src/lib/concierge/prompt";
 import { CONCIERGE_MAX_TURNS } from "../src/lib/concierge/guards";
 import { AI_TASKS } from "../src/lib/ai/tasks";
 import { modelBodyFields } from "../src/lib/ai/providers/openai";
-import { TRADE_MODULES } from "../src/lib/voice/modules";
-import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
+import { corpusPin } from "../src/lib/voice/modules/pin";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult, newStubSession,
   renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
@@ -40,7 +41,7 @@ const RESPONSE_TIMEOUT_MS = 45_000;
 const args = process.argv.slice(2);
 const slug = args[0] ?? "";
 const moduleId = moduleForSlug(slug);
-if (!moduleId) { console.error("usage: sofia:corpus <insurance-pc|events> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]"); process.exit(2); }
+if (!moduleId) { console.error("usage: sofia:corpus <insurance-pc|events|base> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]"); process.exit(2); }
 const flag = (n: string) => { const i = args.indexOf(n); return i < 0 ? null : args[i + 1] ?? null; };
 const only = flag("--only");
 const repeatArg = parseRepeat(flag("--repeat"));
@@ -55,10 +56,11 @@ if (!dryRun && !key) { console.error("OPENAI_API_KEY is not set in this shell (i
 /** The web chat's own row (lib/ai/tasks.ts): its model and its body fields, as the turn route sends them. */
 const WEB_CHAT = AI_TASKS.web_chat.primary;
 const corpusDir = path.resolve(__dirname, "../src/lib/voice/modules/corpus");
-const mod = TRADE_MODULES[moduleId];
+// A module's version and text hash, or the base slice's (the live prompt's words; pin.ts).
+const pin = corpusPin(moduleId);
 const date = new Date().toISOString().slice(0, 10);
 const meta: RunMeta = {
-  moduleId, slug, version: mod.version, sha256: moduleTextSha256(mod), date, phoneEngine,
+  moduleId, slug, version: pin.version, sha256: pin.sha256, date, phoneEngine,
   phoneModel: phoneEngine === "realtime" ? REALTIME_MODEL : PHONE_FALLBACK_MODEL, chatModel: WEB_CHAT.model,
 };
 const outDir = path.resolve(__dirname, "../.sofia-corpus", slug, new Date().toISOString().replace(/[:.]/g, "-"));

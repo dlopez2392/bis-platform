@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { parseCorpusItem, parseFixture, moduleForSlug, CORPUS_SLUGS } from "./corpus-lib";
-import { SHA256_HISTORY } from "./pin";
+import { CORPUS_SHA256_HISTORY } from "./pin";
 
 const CORPUS = path.resolve(__dirname, "corpus");
 const RESULTS = path.resolve(__dirname, "../../../../../../docs/superpowers/results");
@@ -29,23 +29,39 @@ const EXPECTED: Record<string, string[]> = {
     "23-en-hold-the-date.md", "24-es-plan-de-pagos.md", "25-es-solo-recados.md", "26-en-real-person-transfer.md",
     "27-en-guest-collapsed.md",
   ],
+  // Model switch plan G1/Q2 (owner, 2026-11-26): the live prompt, no trade module. Six scenarios, each in English
+  // then Spanish.
+  base: [
+    "01-en-leave-a-message.md", "02-es-dejar-recado.md", "03-en-book-an-inspection.md", "04-es-agendar-estimado.md",
+    "05-en-business-hours.md", "06-es-horario.md", "07-en-price-new-roof.md", "08-es-precio-techo-nuevo.md",
+    "09-en-real-person-transfer.md", "10-es-hablar-con-el-dueno-sin-transferencia.md",
+    "11-en-known-caller-move-appointment.md", "12-es-cliente-conocido-cambiar-cita.md",
+  ],
 };
+const COUNT: Record<string, number> = { "insurance-pc": 28, events: 27, base: 12 };
 const WEB: Record<string, string[]> = {
   "insurance-pc": ["04", "08", "11", "16", "18", "20", "22", "23"],
   events: ["06", "08", "10", "15", "19", "21", "22", "24"],
+  base: [],
 };
 // v2 fix round: insurance 27 and events 26 ask "am I talking to a real person?" on a line with a transfer number.
-const TRANSFER: Record<string, string[]> = { "insurance-pc": ["09", "12", "24", "27"], events: ["13", "23", "26"] };
-const BOOKING: Record<string, string[]> = { "insurance-pc": [], events: ["16", "17", "25"] };
+// base: English asks for a person on a line with a transfer number, Spanish on a line with none (both live paths).
+const TRANSFER: Record<string, string[]> = { "insurance-pc": ["09", "12", "24", "27"], events: ["13", "23", "26"], base: ["09"] };
+// base: booking is on for every item, as voice_profiles.booking_enabled defaults to true on a live account.
+const BOOKING: Record<string, string[]> = {
+  "insurance-pc": [], events: ["16", "17", "25"],
+  base: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"],
+};
 // Final-fix item 10: one item per override key, on exactly these phone items.
-const CALLER_ID_WITHHELD: Record<string, string[]> = { "insurance-pc": ["26"], events: [] };
-const AFTER_HOURS_MESSAGE_ONLY: Record<string, string[]> = { "insurance-pc": [], events: ["25"] };
+const CALLER_ID_WITHHELD: Record<string, string[]> = { "insurance-pc": ["26"], events: [], base: [] };
+const AFTER_HOURS_MESSAGE_ONLY: Record<string, string[]> = { "insurance-pc": [], events: ["25"], base: [] };
 // M15: one item per module plays an account whose AI disclosure is On.
-const DISCLOSURE: Record<string, string[]> = { "insurance-pc": ["19"], events: ["17"] };
+const DISCLOSURE: Record<string, string[]> = { "insurance-pc": ["19"], events: ["17"], base: [] };
 // insurance: 28 items, 14 English (C1 added 25, Spanish; final fix added 26, English; v2's fix round added 27,
 // English, and 28, Spanish). events: 27 items, 14 English (final fix added 25, Spanish; v2's fix round added 26
 // and 27, English).
-const ENGLISH: Record<string, number> = { "insurance-pc": 14, events: 14 };
+// base: 12 items, 6 English (owner, 2026-11-26: half Spanish).
+const ENGLISH: Record<string, number> = { "insurance-pc": 14, events: 14, base: 6 };
 // v2 (2026-10-22): run 1's three new failure patterns, as rules on the items. Whole lines, as the files carry them.
 const NO_PLACEHOLDER_RULE = `Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.`;
 const NO_POLICY_RULE = `States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").`;
@@ -53,15 +69,15 @@ const ENGLISH_RULE = "Replies in English to every line the customer says or writ
 // v3 (D): the code now drops placeholders on every account; this rule grades what reached the record.
 const RECORDS_NO_PLACEHOLDER_RULE = "Records no placeholder value.";
 /** The Spanish items whose caller switches to English mid-conversation. */
-const SWITCH_TO_ENGLISH: Record<string, string[]> = { "insurance-pc": ["20"], events: ["18"] };
+const SWITCH_TO_ENGLISH: Record<string, string[]> = { "insurance-pc": ["20"], events: ["18"], base: [] };
 
 describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   const files = readdirSync(path.join(CORPUS, slug)).filter((f) => f.endsWith(".md")).sort();
   const items = files.map((f) => parseCorpusItem(f, readFileSync(path.join(CORPUS, slug, f), "utf8")));
 
-  it("is exactly the planned items, 28 for insurance and 27 for events (mutation: delete one -> FAILS)", () => {
+  it("is exactly the planned items, 28 for insurance, 27 for events and 12 for base (mutation: delete one -> FAILS)", () => {
     expect(files).toEqual(EXPECTED[slug]);
-    expect(files.length).toBe(slug === "insurance-pc" ? 28 : 27);
+    expect(files.length).toBe(COUNT[slug]);
   });
   it("is about half English and half Spanish; 8 web items, on exactly the planned ones, the rest phone", () => {
     expect(items.filter((i) => i.lang === "en").length).toBe(ENGLISH[slug]);
@@ -94,7 +110,7 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
       const english = i.lang === "en" || SWITCH_TO_ENGLISH[slug]!.includes(i.id);
       expect(i.must.includes(ENGLISH_RULE), i.file).toBe(english);
     }
-    expect(items.filter((i) => i.must.includes(ENGLISH_RULE)).length).toBe(ENGLISH[slug]! + 1);
+    expect(items.filter((i) => i.must.includes(ENGLISH_RULE)).length).toBe(ENGLISH[slug]! + SWITCH_TO_ENGLISH[slug]!.length);
   });
   it("v3 (D): every item requires that nothing recorded holds a placeholder, as its LAST must rule, whole (mutation: delete it from one item -> FAILS)", () => {
     for (const i of items) {
@@ -118,6 +134,41 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   });
 });
 
+// Model switch plan G1/Q2: what only the base slice carries.
+describe("the base corpus slice", () => {
+  const dir = path.join(CORPUS, "base");
+  const items = readdirSync(dir).filter((f) => f.endsWith(".md")).sort()
+    .map((f) => parseCorpusItem(f, readFileSync(path.join(dir, f), "utf8")));
+  const SPANISH_RULE = "Replies in Spanish, using usted, to every line the customer says in Spanish.";
+  const fixture = (name: string) => parseFixture(name, readFileSync(path.join(CORPUS, "fixtures", `${name}.json`), "utf8"));
+
+  it("is six scenarios, each in English then Spanish: odd items English, even items Spanish (mutation: swap 01's lang -> FAILS)", () => {
+    expect(items.map((i) => i.lang)).toEqual(["en", "es", "en", "es", "en", "es", "en", "es", "en", "es", "en", "es"]);
+  });
+  it("every Spanish item, and only those, requires Spanish with usted, whole (mutation: drop it from 02 -> FAILS)", () => {
+    for (const i of items) expect(i.must.includes(SPANISH_RULE), i.file).toBe(i.lang === "es");
+  });
+  it("only the two known-caller items play the known-caller fixture; the rest play rio-roofing, nobody on the number (mutation: point 03 at the known-caller fixture -> FAILS)", () => {
+    expect(items.filter((i) => i.facts === "rio-roofing-known-caller").map((i) => i.id)).toEqual(["11", "12"]);
+    expect(items.filter((i) => i.facts === "rio-roofing").map((i) => i.id)).toEqual(["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"]);
+  });
+  it("the two fixtures are the same business, differing only in the caller's number and who is on it (mutation: change the hours in one -> FAILS)", () => {
+    const strip = (f: ReturnType<typeof fixture>) =>
+      Object.fromEntries(Object.entries(f).filter(([k]) => k !== "callerNumber" && k !== "contactsOnNumber"));
+    expect(strip(fixture("rio-roofing-known-caller"))).toEqual(strip(fixture("rio-roofing")));
+    expect(fixture("rio-roofing").languages).toBe("both");
+  });
+  it("the known caller never says her own name, so any name Sofía uses for her came from nowhere the call gave (the rule 'Says any name for her' rests on this)", () => {
+    const { firstName, lastName } = fixture("rio-roofing-known-caller").contactsOnNumber![0]!;
+    for (const i of items.filter((x) => x.facts === "rio-roofing-known-caller")) {
+      for (const line of i.caller) {
+        expect(line, i.file).not.toContain(firstName);
+        expect(line, i.file).not.toContain(lastName);
+      }
+    }
+  });
+});
+
 describe("graded results sheets are bound to the exact words they graded (SD8)", () => {
   const files = readdirSync(RESULTS);
   it("the results folder is the right one (guards the loop below from a mistyped path)", () => {
@@ -125,14 +176,14 @@ describe("graded results sheets are bound to the exact words they graded (SD8)",
   });
   it("every sheet's Text SHA-256 equals pin.ts's hash for that version (mutation: overwrite a graded version's hash in pin.ts -> FAILS)", () => {
     for (const f of files) {
-      const m = /^\d{4}-\d{2}-\d{2}-(insurance-pc|events)-v(\d+)\.md$/.exec(f);
+      const m = /^\d{4}-\d{2}-\d{2}-(insurance-pc|events|base)-v(\d+)\.md$/.exec(f);
       if (!m) continue;
       const id = moduleForSlug(m[1]!)!;
       const sha = /^Text SHA-256: ([0-9a-f]{64})$/m.exec(readFileSync(path.join(RESULTS, f), "utf8"))?.[1];
       // M1: both sides must be real hashes, so an undefined history entry and a sheet with no hash line cannot pass together.
       expect(sha, f).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
-      expect(SHA256_HISTORY[id][Number(m[2]) - 1], f).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
-      expect(sha, f).toBe(SHA256_HISTORY[id][Number(m[2]) - 1]);
+      expect(CORPUS_SHA256_HISTORY[id][Number(m[2]) - 1], f).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
+      expect(sha, f).toBe(CORPUS_SHA256_HISTORY[id][Number(m[2]) - 1]);
     }
   });
   it("the slugs the sheets use are the corpus's own", () => {

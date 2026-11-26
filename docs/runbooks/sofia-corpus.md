@@ -26,12 +26,14 @@ gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f rea
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=events -f only=7
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=insurance-pc -f phone_engine=chat
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f repeat=1
+gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=base
+gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=base -f realtime_model=gpt-realtime-2.1
 ```
 
 | Input | Values | Default |
 |---|---|---|
 | `step` | `spike` (the Realtime model: text-only session, full config with each transcriber, spoken round trip), `corpus`, or `model-spike` (what gpt-6-luna accepts for each text task) | `spike` (the cheaper one) |
-| `module` | `both`, `insurance-pc`, `events` | `both` |
+| `module` | `both` (the two trade modules: `insurance-pc`, then `events`), `insurance-pc`, `events`, or `base` (the live prompt with no trade module; section 1a) | `both` |
 | `phone_engine` | `realtime` (phone items on the Realtime model, text only) or `chat` (phone items on gpt-4o) | `realtime` |
 | `only` | one item number, `7` or `07`; empty plays every item | empty |
 | `repeat` | 1 or 3: plays each item that many times; 3 writes NN-…-r1.md to -r3.md and a sheet with one column per run | 3 |
@@ -46,6 +48,45 @@ code's default (`apps/web/src/lib/voice/session-config.ts`). If production's
 Vercel `REALTIME_MODEL` names a different model, pick that one here, or the
 run does not play the model that live calls use. The results sheet's header
 names the model the run played.
+
+### 1a. The base slice (`module=base`)
+
+`insurance-pc` and `events` each play their trade module's rules, and both
+modules are paused on every live account. `base` plays the prompt a live
+call actually runs: no trade module (model switch plan G1, owner answer Q2,
+2026-11-26). It is 12 phone items in
+`apps/web/src/lib/voice/modules/corpus/base/`: six scenarios, each in English
+(odd numbers) then Spanish (even numbers). The scenarios are leaving a
+message, booking, business hours, a price question, asking for a person, and
+a known caller moving their appointment.
+
+- The business is the repository's synthetic Rio Roofing
+  (`fixtures/rio-roofing.json`), bilingual, booking on for every item (a
+  live profile's default). Hours and prices are in the facts text. There are
+  no structured hours, no price list and no business status, so no item's
+  words depend on the time the run starts.
+- Item 09 (English) asks for a person on a line WITH a transfer number.
+  Item 10 (Spanish) asks on a line WITHOUT one, so both live paths are played.
+- Items 11 and 12 play `fixtures/rio-roofing-known-caller.json`, where one
+  contact (Rosa Treviño) is on the caller's number. The live line never tells
+  Sofía a caller's name. A known caller is recognised by caller ID through
+  `find_my_booking`, which is the identity ladder the stub runs. So the rules
+  check that she looks the appointment up first and never says a name the
+  caller did not give.
+- `both` still means the two trade modules. Play `base` as its own run, so
+  its sheet and its grading stay separate from the modules'.
+
+**Its pin.** A module's sheet is bound to its words by `SHA256_HISTORY`.
+The base sheet is bound by `BASE_VERSION` and `BASE_SHA256_HISTORY` in
+`apps/web/src/lib/voice/modules/pin.ts`. The hash covers what a base item's
+session is sent, apart from the business's own data: the system prompt, the
+tool list and the greeting instruction. It covers them over all 288 phone
+contexts a base item can play. The prompt's date line is masked, so the hash
+does not change with the day or the machine. Any change to the live phone
+prompt's words (`system-prompt.ts`, its knowledge blocks, the tool
+descriptions, the greeting) fails `pin.test.ts` until `BASE_VERSION` is
+bumped and the new hash is APPENDED. A sheet graded on the old words keeps
+its own entry.
 
 Runs go one at a time, and a running one is never cancelled. A second
 dispatch waits for the first. GitHub keeps only ONE waiting run, though: a
@@ -103,7 +144,7 @@ gh run view <run id> --log
   The job is red
   when a task had no accepted variant on either API. Every message is
   synthetic.
-- **corpus**: `== insurance-pc ==`, then `ok   NN-….md` or `FAIL NN-….md:
+- **corpus**: `== insurance-pc ==` (or `== events ==`, `== base ==`), then `ok   NN-….md` or `FAIL NN-….md:
   <reason>` per item, then `N of M played`. The job is red when any item
   failed. The transcripts are still sealed and uploaded, because a failed
   item's transcript says what happened. The upload runs only when the seal
@@ -166,6 +207,13 @@ Every module's run folder holds one transcript per item and an ungraded
 `docs/superpowers/results/_template-sofia-corpus.md` and commit the graded
 sheet under `docs/superpowers/results/`. The transcripts themselves stay in
 the gitignored `.sofia-corpus/` and are never committed.
+
+Name a graded sheet `YYYY-MM-DD-<slug>-v<N>.md`, for example
+`2026-12-04-base-v1.md`. `corpus.test.ts` reads that name and checks the
+sheet's `Text SHA-256` line against `pin.ts`, for the base slice as for
+the modules. For the paired model runs (model switch plan G1), both sheets
+must print the same `Text SHA-256`. Two different hashes mean the two runs
+played different words.
 
 ## 6. The certificate, its pin, and replacing them
 
@@ -241,4 +289,13 @@ sealed to the old certificate open only with the old key.
 - `apps/web/src/lib/voice/modules/corpus-lib.test.ts` pins that an `only`
   matching no item stops the runner non-zero. It also pins that a throw while
   handling a Realtime event fails that one item, by the error's class only,
-  and the run goes on.
+  and the run goes on. It pins that `base` plays no trade module: no TRADE
+  RULES block in the prompt, and the no-pack identity ladder in the stub.
+- `apps/web/src/lib/voice/modules/corpus.test.ts` pins every corpus's item
+  list and flags. For `base` it also pins the English/Spanish order, the
+  Spanish-with-usted rule on every Spanish item, which items play the
+  known-caller fixture, and that the two Rio Roofing fixtures differ only in
+  the caller's number and who is on it.
+- `apps/web/src/lib/voice/modules/pin.test.ts` pins the base slice's hash
+  (see section 1a). The same `ci-workflow.test.ts` block pins the `module`
+  choice list, that `base` runs alone, and that `both` never includes it.
