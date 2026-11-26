@@ -194,13 +194,13 @@ describe("readCallForCard: the model's reading, grounded", () => {
     expect((await readCallForCard(transcript, { ...GATE, fetchImpl })).reason).toBeNull();
   });
 
-  it("asks gpt-4o-mini in JSON mode, under a time limit, with the transcript and an English-reason rule", async () => {
+  it("asks gpt-6-luna in JSON mode, under a time limit, with the transcript and an English-reason rule", async () => {
     const fetchImpl = modelReturning({ reason: null, quote: null });
     await readCallForCard(transcript, { ...GATE, fetchImpl });
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body.messages[1].content).toContain("caller: Hi, my roof started leaking");
     expect(body.messages[0].content).toMatch(/English/);

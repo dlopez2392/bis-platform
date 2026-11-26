@@ -4,6 +4,26 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { runModelSpike, SPIKE_MODEL } from "../scripts/model-spike-lib";
 
+// The spike derives its variants from each task's row (V1 is the row as it stands). These cases pin that
+// derivation against the rows the spike measured on 2026-11-26 (run 45887051394): every task on gpt-4o-mini,
+// before model switch PR 2 moved four of them to gpt-6-luna. Fixed here, so a later row edit cannot rewrite
+// what these cases prove about the spike.
+vi.mock("../src/lib/ai/tasks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ai/tasks")>();
+  const json = { type: "json_object" } as const;
+  const measured = (feature: string, gated: boolean, params: object) => ({ feature, gated, primary: { model: "gpt-4o-mini", params } });
+  return {
+    ...actual,
+    AI_TASKS: {
+      web_chat: measured("web_chat", false, { maxOutput: { field: "max_tokens", tokens: 500 } }),
+      call_summary: measured("call_summary", true, {}),
+      call_card: measured("call_card", true, { maxOutput: { field: "max_tokens", tokens: 300 }, responseFormat: json }),
+      call_proposals: measured("call_proposals", true, { maxOutput: { field: "max_tokens", tokens: 2000 }, responseFormat: json }),
+      record_summary: measured("record_summary", true, { maxOutput: { field: "max_tokens", tokens: 400 } }),
+    },
+  };
+});
+
 // apps/web/scripts/model-spike.ts (OpenAI model switch plan, Step 0 (a)) runs in sofia-corpus.yml, whose log
 // and job summary are PUBLIC. It may print statuses, error codes, token counts and yes/no facts about an
 // answer, never the key, an error's free-text message or a model's words. These cases drive the real spike

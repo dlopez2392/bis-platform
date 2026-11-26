@@ -137,7 +137,7 @@ describe("the AI summary route (spec 4.2)", () => {
     aiCompleteMock.mockResolvedValueOnce({ ok: true, text: "x", model: "some-fallback", usage: {} } as never);
     await deps.complete([]);
     await deps.save(s);
-    expect(saveMock.mock.calls.map((c) => (c[1] as { model: string }).model)).toEqual(["gpt-4o-mini", "some-fallback"]);
+    expect(saveMock.mock.calls.map((c) => (c[1] as { model: string }).model)).toEqual(["gpt-6-luna", "some-fallback"]);
   });
 
   it("the cap's day and the budget's month are the ACCOUNT's, not UTC's: at 22:30 in Chicago on Oct 31 (03:30 UTC Nov 1) the gate is asked for 2026-10 / 2026-10-31 (orchestrator note 1; mutation: periodKeys(now, \"UTC\") -> FAILS)", async () => {

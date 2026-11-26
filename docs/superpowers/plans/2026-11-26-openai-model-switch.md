@@ -142,12 +142,18 @@ Each PR has one tier, ships on its own, and stays under 800 changed lines. None 
   Every caller already has a non-AI form (the gateway's header). A luna failure means fact-line summaries and no card,
   never a broken call. Before merging: price the last 30 days of `ai_ledger` tokens at luna's price against each account's
   budget, so no account goes over its budget just from the switch. Rollback: Instant Rollback right after the deploy, or a
-  one-line revert PR. `AI_GATEWAY_OFF=1` plus a redeploy is the kill switch.
+  one-line revert PR. `AI_GATEWAY_OFF=1` plus a redeploy is the kill switch. (Done 2026-11-26: one account, 12 rows,
+  1,471 µUSD now, 1,141 on luna, budget 10,000,000. Luna is cheaper per token in and out, so the check only matters
+  if luna writes about 20% more output.) Also before merging, or watched right after the deploy: production's OpenAI
+  key can call gpt-6-luna (A6). A 404/403 is not transient, so the fallback would not fire.
 - **PR 2b. Website chat to luna (HIGH: replies customers read).** The `web_chat` row and the `guards.ts` comment.
-  `scripts/sofia-corpus.ts` follows the row on its own. Gate: the corpus web items on luna against a gpt-4o-mini baseline,
+  `scripts/sofia-corpus.ts` follows the row on its own. First, `ModelRule` gains an efforts-with-tools list (luna:
+  `["none"]`) and the conformance test sends `web_chat`'s real tools and `tool_choice` (PR 2 review, finding 3).
+  Gate: the corpus web items on luna against a gpt-4o-mini baseline,
   paired as in section 6, and danlo chats on BIS's chat page (one English, one Spanish, one lead). About 150 lines.
 - **PR 3. The corpus phone fallback leaves gpt-4o (LOW).** `PHONE_FALLBACK_MODEL` becomes luna and sends luna's params
-  through `modelBodyFields`. Also the `corpus-lib.test` pin, the yml description and one runbook line. About 40 lines. No production effect.
+  through `modelBodyFields`, and its model and params join the conformance test's list (it is not a task row).
+  Also the `corpus-lib.test` pin, the yml description and one runbook line. About 40 lines. No production effect.
 - **PR 4. The voice models can be set by env, defaults unchanged (HIGH: voice routing).** `TRANSCRIBE_MODEL` becomes
   `process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe"`. `owner-line/session-config.ts:22` reads `TRANSCRIBE_MODEL`.
   Tests prove two things. With no env set, every accept body is byte for byte today's. An override reaches the phone

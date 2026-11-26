@@ -5,6 +5,12 @@ describe("the price table (spec 3.5)", () => {
   it("gpt-4o-mini at $0.15 and $0.60 per million tokens, in micro-dollars (mutation: 150 instead of 150_000 -> FAILS)", () => {
     expect(PRICES["gpt-4o-mini"]).toEqual({ inputMicroUsdPerMTok: 150_000, outputMicroUsdPerMTok: 600_000 });
   });
+  it("gpt-6-luna at $0.10 and $0.50 per million tokens (OpenAI's pricing page, 2026-11-26; mutation: 0.15 -> 150_000 -> FAILS)", () => {
+    expect(PRICES["gpt-6-luna"]).toEqual({ inputMicroUsdPerMTok: 100_000, outputMicroUsdPerMTok: 500_000 });
+    // The same post-call completion on luna: ceil((4000 * 100000 + 200 * 500000) / 1e6) = 500, against 4o-mini's 720.
+    expect(costMicroUsd("gpt-6-luna", 4000, 200)).toBe(500);
+    expect(isPricedModel("gpt-6-luna")).toBe(true);
+  });
   it("a post-call completion of 4,000 in and 200 out costs 720 micro-dollars (spec 3.4's $0.0007)", () => {
     expect(costMicroUsd("gpt-4o-mini", 4000, 200)).toBe(720);
   });
