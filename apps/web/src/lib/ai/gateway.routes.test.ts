@@ -58,20 +58,34 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-describe("the task table is today's requests, byte for byte (this PR changes routing, not behaviour)", () => {
-  // The exact body each task sent before the table existed: same fields, same values, same order.
-  const today: Record<AiTask, Record<string, unknown>> = {
+describe("the task table's requests, byte for byte (model switch PR 2: four tasks on gpt-6-luna, their old gpt-4o-mini body behind them)", () => {
+  // The exact body each task's primary sends: same fields, same values, same order.
+  const primary: Record<AiTask, Record<string, unknown>> = {
     web_chat: { model: "gpt-4o-mini", messages: MESSAGES, max_tokens: 500 },
+    call_summary: { model: "gpt-6-luna", messages: MESSAGES, reasoning_effort: "none" },
+    call_card: { model: "gpt-6-luna", messages: MESSAGES, response_format: { type: "json_object" }, max_completion_tokens: 300, reasoning_effort: "none" },
+    call_proposals: { model: "gpt-6-luna", messages: MESSAGES, response_format: { type: "json_object" }, max_completion_tokens: 2000, reasoning_effort: "none" },
+    record_summary: { model: "gpt-6-luna", messages: MESSAGES, max_completion_tokens: 400, reasoning_effort: "none" },
+  };
+  // The body each task sent before the switch, which is now its fallback's (the web chat has none until PR 2b).
+  const fallback: Record<AiTask, Record<string, unknown> | undefined> = {
+    web_chat: undefined,
     call_summary: { model: "gpt-4o-mini", messages: MESSAGES },
     call_card: { model: "gpt-4o-mini", messages: MESSAGES, response_format: { type: "json_object" }, max_tokens: 300 },
     call_proposals: { model: "gpt-4o-mini", messages: MESSAGES, response_format: { type: "json_object" }, max_tokens: 2000 },
     record_summary: { model: "gpt-4o-mini", messages: MESSAGES, max_tokens: 400 },
   };
-  it.each(AI_TASK_NAMES)("%s sends exactly today's body, and no task has a fallback yet (mutations: any row's model, cap or JSON mode changed; a fallback added to any row -> FAILS)", async (task) => {
-    expect(AI_TASKS[task].fallback).toBeUndefined();
+  it.each(AI_TASK_NAMES)("%s's primary sends exactly its body (mutations: any row's model, cap field, cap, effort or JSON mode changed -> FAILS)", async (task) => {
     const { fetchImpl, raw } = scripted(ok());
     expect((await aiComplete(openGateDb().db, base({ task, fetchImpl }))).ok).toBe(true);
-    expect(raw).toEqual([JSON.stringify(today[task])]);
+    expect(raw).toEqual([JSON.stringify(primary[task])]);
+  });
+  it.each(AI_TASK_NAMES)("%s after a 503: its fallback sends exactly the pre-switch body, or there is none (mutations: a fallback dropped, added to web_chat, or changed -> FAILS)", async (task) => {
+    const { fetchImpl, raw } = scripted(new Response("{}", { status: 503 }), ok());
+    const r = await aiComplete(openGateDb().db, base({ task, fetchImpl }));
+    const want = fallback[task];
+    expect(raw).toEqual(want ? [JSON.stringify(primary[task]), JSON.stringify(want)] : [JSON.stringify(primary[task])]);
+    expect(r).toMatchObject(want ? { ok: true, model: "gpt-4o-mini" } : { ok: false, reason: "provider_error" });
   });
 });
 

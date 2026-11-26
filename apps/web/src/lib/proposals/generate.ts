@@ -349,9 +349,11 @@ export async function generateProposals(input: {
       // fallback (`composeSummary`) when the completion is unusable, so a
       // stray code fence in the response costs it nothing. This function
       // parses JSON with no fallback of its own — an empty proposal list
-      // IS the fallback — and `gpt-4o-mini` routinely wraps JSON in a
-      // ```json fence when asked for JSON without `response_format`,
-      // which would silently zero this feature forever. Forcing JSON mode
+      // IS the fallback — and a model asked for JSON without
+      // `response_format` can wrap it in a ```json fence (gpt-4o-mini, this
+      // task's model before gpt-6-luna and now its fallback, routinely
+      // did), which would silently zero this feature forever. JSON mode is
+      // in both models' rules (lib/ai/prices.ts, MODEL_RULES). Forcing JSON mode
       // removes that failure instead of tolerating it.
       //
       // The cap. Minor 6 of the fix-wave: with no bound here, nothing states a

@@ -810,8 +810,11 @@ describe("generateProposals", () => {
     }), { status: 500 })) as unknown as typeof fetch;
     expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
     expect(db.rows).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0]![0])).toContain("HTTP 500");
+    // A 500 is transient, so the task's gpt-4o-mini fallback (tasks.ts) is tried once and fails the same way:
+    // one line per attempt, the second naming the model it fell back from.
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy.mock.calls.map((c) => String(c[0]).includes("HTTP 500"))).toEqual([true, true]);
+    expect(String(errorSpy.mock.calls[1]![0])).toContain("(fallback after gpt-6-luna)");
     errorSpy.mockRestore();
   });
 
@@ -839,8 +842,9 @@ describe("generateProposals", () => {
       ...base, db,
       fetchImpl: vi.fn(async () => { throw new Error("network down"); }) as unknown as typeof fetch,
     });
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0]![0])).toContain("call1");
+    // A network failure is transient: the primary and then its gpt-4o-mini fallback each log one line, both naming the call.
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy.mock.calls.map((c) => String(c[0]).includes("call1"))).toEqual([true, true]);
     errorSpy.mockClear();
 
     await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: [] }) });
@@ -886,7 +890,7 @@ describe("generateProposals", () => {
     const [url, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     const body = requestBodyOf(fetchImpl);
-    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
@@ -1087,13 +1091,14 @@ describe("generateProposals", () => {
   // flood of UNGROUNDED proposals still costs a full `groundedEvidence` scan
   // each. Bounding the completion's own token budget bounds the array that
   // can come back at all.
-  it("bounds the model's own completion so a runaway proposals array cannot be returned (mutation: drop max_tokens from the request body -> FAILS)", async () => {
+  it("bounds the model's own completion so a runaway proposals array cannot be returned (mutation: drop max_completion_tokens from the request body -> FAILS)", async () => {
     const db = fakeDb();
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });
     const body = requestBodyOf(fetchImpl);
-    expect(typeof body.max_tokens).toBe("number");
-    expect(body.max_tokens).toBeGreaterThan(0);
+    // gpt-6-luna takes the cap as max_completion_tokens (it refuses max_tokens; prices.ts, MODEL_RULES).
+    expect(typeof body.max_completion_tokens).toBe("number");
+    expect(body.max_completion_tokens).toBeGreaterThan(0);
   });
 
   it("a model answer that does not parse logs no word of it (plan deviation 6; mutation: log String(e) in the catch -> FAILS)", async () => {

@@ -1,6 +1,7 @@
 import { errorName } from "../log";
 import type { AiMessage, AiToolCall } from "../gateway";
 import type { ModelParams } from "../tasks";
+import { MODEL_RULES, type PricedModel } from "../prices";
 import type { Provider, ProviderAnswer } from "./types";
 
 export const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
@@ -20,6 +21,25 @@ export function modelBodyFields(p: ModelParams): Record<string, unknown> {
     ...(p.maxOutput ? { [p.maxOutput.field]: p.maxOutput.tokens } : {}),
     ...(p.reasoningEffort ? { reasoning_effort: p.reasoningEffort } : {}),
   };
+}
+
+/**
+ * The fields of a Chat Completions body that `model`'s rule (prices.ts, MODEL_RULES) refuses, each named so a
+ * failure says what to fix: a cap under the other field, a reasoning effort it refuses (or a missing one it
+ * requires), JSON mode it lacks. Empty means the body fits. model-rules.test.ts runs it over the body this
+ * provider sends for every task row. Not applied at request time: the rows are constants that test already
+ * covers, and the model spike (scripts/model-spike-lib.ts) sends refused variants through modelBodyFields on purpose.
+ */
+export function refusedBy(model: PricedModel, body: Record<string, unknown>): string[] {
+  const rule = MODEL_RULES[model];
+  const refused: string[] = [];
+  for (const f of ["max_tokens", "max_completion_tokens"] as const) if (f in body && f !== rule.capField) refused.push(f);
+  if ("reasoning_effort" in body) {
+    const effort = body.reasoning_effort;
+    if (!rule.reasoningEfforts.some((e) => e === effort)) refused.push(`reasoning_effort ${String(effort)}`);
+  } else if (rule.reasoningEffortRequired) refused.push("reasoning_effort (missing)");
+  if ("response_format" in body && !rule.jsonMode) refused.push("response_format");
+  return refused;
 }
 
 /** The gateway's messages in Chat Completions' wire shape. System and user messages pass as they are. */

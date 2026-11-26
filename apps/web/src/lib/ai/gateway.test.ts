@@ -26,11 +26,12 @@ describe("aiComplete: an answer", () => {
   it("returns the text and its usage, and records one ok row in the ACCOUNT's month and day (mutation: periodKeys in UTC -> p_month 2026-11 -> FAILS)", async () => {
     const { db, calls } = openGateDb();
     const r = await aiComplete(db, base({ fetchImpl: answer("Caller asked about hours."), now: new Date("2026-11-01T04:30:00Z") }));
-    expect(r).toEqual({ ok: true, text: "Caller asked about hours.", model: "gpt-4o-mini", usage: { inputTokens: 4000, outputTokens: 200, costMicroUsd: 720 } });
+    // call_summary runs on gpt-6-luna: ceil((4000 * 100000 + 200 * 500000) / 1e6) = 500.
+    expect(r).toEqual({ ok: true, text: "Caller asked about hours.", model: "gpt-6-luna", usage: { inputTokens: 4000, outputTokens: 200, costMicroUsd: 500 } });
     expect(calls.map((c) => c.fn)).toEqual(["ai_gate_check", "ai_ledger_record"]);
     expect(calls[0]!.args).toEqual({ p_account: "acct1", p_month: "2026-10", p_day: "2026-10-31" });
     expect(ledgerOf(calls)[0]).toMatchObject({
-      p_account: "acct1", p_feature: "call_summary", p_model: "gpt-4o-mini", p_in: 4000, p_out: 200, p_cost: 720,
+      p_account: "acct1", p_feature: "call_summary", p_model: "gpt-6-luna", p_in: 4000, p_out: 200, p_cost: 500,
       p_outcome: "ok", p_month: "2026-10", p_day: "2026-10-31",
     });
   });
@@ -80,7 +81,7 @@ describe("aiComplete: an answer", () => {
     const [url, init] = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     expect(JSON.parse(init.body as string)).toEqual({
-      model: "gpt-4o-mini", messages: base().messages, response_format: { type: "json_object" }, max_tokens: 2000,
+      model: "gpt-6-luna", messages: base().messages, response_format: { type: "json_object" }, max_completion_tokens: 2000, reasoning_effort: "none",
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
     // Review I2: the exact sequence (gate, completion, ledger), not "was called with" (which one call satisfies).
@@ -97,9 +98,9 @@ describe("aiComplete: an answer", () => {
     const { db, calls } = openGateDb();
     const msgs = [{ role: "system" as const, content: "a".repeat(400) }, { role: "user" as const, content: "b".repeat(400) }];
     const r = await aiComplete(db, base({ messages: msgs, fetchImpl: answer("c".repeat(40), null) }));
-    // 800 prompt characters -> 200 tokens; 40 answer characters -> 10 tokens; ceil((200*150000 + 10*600000) / 1e6) = 36.
-    expect(r).toEqual({ ok: true, text: "c".repeat(40), model: "gpt-4o-mini", usage: { inputTokens: null, outputTokens: null, costMicroUsd: 36 } });
-    expect(ledgerOf(calls)[0]).toMatchObject({ p_in: null, p_out: null, p_cost: 36 });
+    // 800 prompt characters -> 200 tokens; 40 answer characters -> 10 tokens; on gpt-6-luna ceil((200*100000 + 10*500000) / 1e6) = 25.
+    expect(r).toEqual({ ok: true, text: "c".repeat(40), model: "gpt-6-luna", usage: { inputTokens: null, outputTokens: null, costMicroUsd: 25 } });
+    expect(ledgerOf(calls)[0]).toMatchObject({ p_in: null, p_out: null, p_cost: 25 });
   });
 
   it("a failed ledger write keeps the text and logs ids only (mutation: return a refusal when the ledger throws -> FAILS)", async () => {
@@ -223,7 +224,7 @@ describe("aiComplete: a failing provider is a reason, never a throw (spec 3.1 st
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const { db, calls } = openGateDb();
     expect(await aiComplete(db, base({ fetchImpl: answer(null) }))).toEqual({ ok: false, reason: "provider_error" });
-    expect(ledgerOf(calls)[0]).toMatchObject({ p_outcome: "provider_error", p_in: 4000, p_out: 200, p_cost: 720 });
+    expect(ledgerOf(calls)[0]).toMatchObject({ p_outcome: "provider_error", p_in: 4000, p_out: 200, p_cost: 500 });
     expect(err).toHaveBeenCalledTimes(1);
     expect(String(err.mock.calls[0]![0])).toMatch(/^ai: call_summary for account acct1 \(call c1\): provider_error \(no content in the answer\) after \d+ ms$/);
   });
@@ -270,9 +271,10 @@ describe("the fake provider (spec 6, 8.1)", () => {
     const fetchImpl = answer("x");
     const r = await aiComplete(db, base({ fetchImpl, language: "es" }));
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ ok: true, usage: { inputTokens: 100, outputTokens: 20, costMicroUsd: 27 } });
+    // The fake's fixed usage priced at call_summary's model, gpt-6-luna: ceil((100 * 100000 + 20 * 500000) / 1e6) = 20.
+    expect(r).toMatchObject({ ok: true, usage: { inputTokens: 100, outputTokens: 20, costMicroUsd: 20 } });
     expect(r.ok ? r.text : "").toMatch(/^\[fake es\] [0-9a-f]{8}$/);
-    expect(ledgerOf(calls)[0]).toMatchObject({ p_in: 100, p_out: 20, p_cost: 27, p_outcome: "ok" });
+    expect(ledgerOf(calls)[0]).toMatchObject({ p_in: 100, p_out: 20, p_cost: 20, p_outcome: "ok" });
   });
 
   it("is IGNORED in production: VERCEL_ENV=production always calls OpenAI (spec 6; mutation: drop the VERCEL_ENV check -> FAILS)", async () => {
