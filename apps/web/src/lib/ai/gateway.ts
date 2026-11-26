@@ -85,8 +85,9 @@ const QUIET: ReadonlySet<AiOutcome> = new Set<AiOutcome>(["global_off", "account
  * The most time aiComplete may spend on one completion OUTSIDE the caller's time limit: the gate read before it
  * (steps 3-4, GATE_TIMEOUT_MS, none for an ungated task) and the ledger write after it (step 6, LEDGER_TIMEOUT_MS,
  * every task). A caller that budgets its own time around a completion (the web chat's follow-up) subtracts this
- * before it sets the completion's time limit, so the gate, the call and its row fit together. With a fallback the
- * second attempt adds one more ledger write; no task has a fallback today.
+ * before it sets the completion's time limit, so the gate, the call and its row fit together. A fallback attempt
+ * runs inside the caller's same time limit (the primary's ledger write comes out of it, see attempt()), so the
+ * overhead outside that limit is unchanged by a fallback.
  */
 export function aiOverheadMs(task: AiTask): number {
   return (AI_TASKS[task].gated ? GATE_TIMEOUT_MS : 0) + LEDGER_TIMEOUT_MS;
