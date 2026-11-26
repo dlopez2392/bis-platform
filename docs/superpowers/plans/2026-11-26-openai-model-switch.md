@@ -96,7 +96,7 @@ public, an OpenAI error is printed as code, type and param only, and every input
 - **(b) `step=spike` takes a new `realtime_model` input** and adds two checks. First, the FULL session config
   (audio block kept) with each transcription candidate: gpt-transcribe, gpt-live-transcribe and
   gpt-4o-mini-transcribe-2025-12-15. It records `session.updated` or the error param. Second, an audio round trip: one
-  session speaks one fixed English and one fixed Spanish sentence (model audio, no person recorded). A second session,
+  speaking session per language speaks one fixed English or Spanish sentence (model audio, no person recorded). A second session,
   using the candidate transcriber, is fed that audio. The spike records whether `.delta` and `.completed` arrive, the usage shape, and the transcript (capped at 120 characters).
 - **(c) `step=corpus` takes `realtime_model`** (a fixed choice: gpt-realtime or gpt-realtime-2.1). It is passed as `REALTIME_MODEL` to the one step. There is no free text.
 
@@ -106,8 +106,11 @@ as `spam`. A spam call is not billed and is not counted in "calls answered". The
 
 **What the findings decide (D1).**
 - The parameter map. For each task, take the cheapest accepted variant that passes all of these: 5 of 5 answers non-empty
-  and valid, finish_reason `stop`, and p95 latency under the caller's limit. The limit is 10 s for the summary, the card
-  and the proposals (`summary-service.ts:89`, `call-card.ts:226`, `generate.ts:371`), and the web chat's own budget for the chat.
+  and valid, finish_reason `stop`, and the slowest of the 5 runs under the caller's limit (5 runs give no real p95). The
+  limit is 10 s for the summary, the card and the proposals (`summary-service.ts:89`, `call-card.ts:226`, `generate.ts:371`),
+  and the web chat's own budget for the chat. The web chat is judged in two shapes: its FIRST turn (tools offered, as the
+  visitor gives a name and a number) passes on "tool call returned" 5 of 5, since a tool-call answer carries no text; its
+  follow-up (`tool_choice: "none"`, the tool's result in the history) passes on non-empty and finish_reason `stop`.
 - If luna refuses a param, the fix goes **per model, not per call site**. A `MODEL_RULES` table beside `PRICES` names
   each model's cap field, its accepted reasoning efforts, JSON mode yes or no, and its API (chat or responses).
   `modelBodyFields` reads it. A unit test fails if any task row sends a param its model's rule refuses. No call site
@@ -126,8 +129,10 @@ The orchestrator dispatches it with `gh workflow run`. It costs a few cents.
 Each PR has one tier, ships on its own, and stays under 800 changed lines. None adds a migration. Only PR 1 changes the pipeline.
 
 - **PR 1. The spike and the corpus take a model (HIGH: a CI file that holds a secret).** Files: `sofia-corpus.yml`,
-  `scripts/model-spike.ts` (new), `scripts/realtime-spike.ts`, `ci/ci-workflow.test.ts`, `ci/realtime-spike.test.ts`,
-  `docs/runbooks/sofia-corpus.md`. About 500 lines. Production does not change. The review probes the key's scope, the no-message rule and the fixed choices.
+  `scripts/model-spike.ts` (new), `scripts/model-spike-lib.ts` (new: the spike's logic, handed its fetch so a test can
+  drive it), `scripts/realtime-spike.ts`, `scripts/realtime-spike-checks.ts` (new: the transcription checks' pure parts),
+  `ci/ci-workflow.test.ts`, `ci/realtime-spike.test.ts`, `ci/model-spike.test.ts` (new), `docs/runbooks/sofia-corpus.md`.
+  Planned at about 500 lines; built at about 1,150, about 40% of it tests (#410). Production does not change. The review probes the key's scope, the no-message rule and the fixed choices.
 - **PR 2c. Responses path (HIGH; only if D1 says so).** A Responses branch in `providers/openai.ts`, chosen by `MODEL_RULES.api`. About 400 lines.
 - **PR 2. Internal text tasks to luna (MEDIUM).** The `call_summary`, `call_card`, `call_proposals` and `record_summary`
   rows move to luna with D1's params. gpt-4o-mini becomes each row's `fallback` until PR 6. Luna's price goes in

@@ -22,7 +22,26 @@ export const ROUND_TRIP_SENTENCES = {
 const token = (v: unknown) => (typeof v === "string" ? v.replace(/[^\w.[\]-]/g, "").slice(0, 80) : "");
 const obj = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null ? v as Record<string, unknown> : null);
 
-type WithTranscription = { audio: { input: { transcription: { model: string } } } };
+/** The event types the text-only check may name in the log; any other is counted as `other`. */
+const KNOWN_EVENTS = new Set([
+  "session.created", "session.updated", "error", "conversation.created", "conversation.item.created",
+  "conversation.item.added", "conversation.item.done", "response.created", "response.done",
+  "response.output_item.added", "response.output_item.done", "response.content_part.added",
+  "response.content_part.done", "response.output_text.delta", "response.output_text.done", "rate_limits.updated",
+  "(unparseable)", "(no type)",
+]);
+
+/** How many of each known event type arrived, every unknown one folded into `other`. */
+export function countEvents(types: readonly string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of types) {
+    const k = KNOWN_EVENTS.has(t) ? t : "other";
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
+type WithTranscription ={ audio: { input: { transcription: { model: string } } } };
 
 /** The session config exactly as built, audio block kept, with only the transcription model changed. */
 export function withTranscriber<T extends WithTranscription>(cfg: T, model: string): T {

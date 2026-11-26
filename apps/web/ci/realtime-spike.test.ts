@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { realtimeErrorWhy } from "../scripts/realtime-spike-why";
 import {
-  echoedTranscriber, REALTIME_MODEL_CHOICES, TRANSCRIBE_CANDIDATES, TRANSCRIPT_CAP, transcriptionTracker, withTranscriber,
+  countEvents, echoedTranscriber, REALTIME_MODEL_CHOICES, TRANSCRIBE_CANDIDATES, TRANSCRIPT_CAP, transcriptionTracker, withTranscriber,
 } from "../scripts/realtime-spike-checks";
 import { buildRealtimeSessionConfig } from "../src/lib/voice/session-config";
 
@@ -143,6 +143,14 @@ describe("realtime-spike.ts", () => {
         "transcription failed: error: transcription_failed / invalid_request_error / param session.audio.input.transcription.model",
       ]);
       expect(JSON.stringify(r)).not.toContain("SENTINEL");
+    });
+
+    it("countEvents counts the known event types and folds every other one into `other`, so no event name the server invents reaches the log (mutation: count any type → FAILS)", () => {
+      const counts = countEvents(["session.created", "session.updated", "response.output_text.delta", "response.output_text.delta",
+        `${SENTINEL} said hi`, "response.output_text.delta.extra", "response.done"]);
+      expect(counts).toEqual({ "session.created": 1, "session.updated": 1, "response.output_text.delta": 2, "response.done": 1, other: 2 });
+      expect(JSON.stringify(counts)).not.toContain("SENTINEL");
+      expect(countEvents([])).toEqual({});
     });
 
     it("echoedTranscriber reads session.updated's transcription model as identifier characters, and nothing else", () => {

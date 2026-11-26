@@ -209,6 +209,58 @@ describe("model-spike.ts", () => {
     expect(out.markdown).not.toContain(SENTINEL);
   });
 
+  /** A fetch that answers only when its signal aborts, with the signal's own reason (a TimeoutError). */
+  const hangs = ((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+  })) as typeof fetch;
+
+  it("bounds every call: a request that never answers becomes a `timeout` row, the models list included (mutation: drop the call's signal → FAILS by hanging)", async () => {
+    const out = await runModelSpike(hangs, KEY, { callTimeoutMs: 20 });
+    expect(out.markdown).toContain("GET /v1/models: timeout");
+    expect(out.markdown).toMatch(/\| call_card \| V1 \| chat \| 1 \| timeout \| - \|/);
+    expect(out.markdown).not.toMatch(/\| network \|/);
+  });
+
+  it("records a timeout while READING the answer as `timeout`, not as an answer that did not parse", async () => {
+    const { impl } = fakeOpenAi({
+      chat: () => ({ ok: true, status: 200, json: () => Promise.reject(Object.assign(new Error(SENTINEL), { name: "TimeoutError" })) }) as unknown as Response,
+    });
+    const out = await runModelSpike(impl, KEY);
+    expect(out.markdown).toMatch(/\| call_card \| V1 \| chat \| 1 \| timeout \| - \|/);
+    expect(out.markdown).not.toContain("did not parse");
+    expect(out.markdown).not.toContain(SENTINEL);
+  });
+
+  it("starts no call past the overall deadline and says where it stopped (mutation: drop the deadline check → FAILS)", async () => {
+    let t = 0;
+    const { impl, sent } = fakeOpenAi();
+    const ticking = ((input: string | URL | Request, init?: RequestInit) => {
+      if (!String(input).endsWith("/v1/models")) t += 10 * 60_000; // each completion takes ten minutes
+      return impl(input, init);
+    }) as typeof fetch;
+    const out = await runModelSpike(ticking, KEY, { clock: () => t });
+    // 45 minutes: calls start at 0, 10, 20, 30 and 40 minutes; none at 50.
+    expect(sent.filter((s) => s.method === "POST")).toHaveLength(5);
+    expect(out.markdown).toContain("Stopped early at 5 calls: the 45-minute deadline.");
+    expect(out.everyTaskAccepted).toBe(false);
+  });
+
+  it("emits each task's rows as soon as that task finishes, and the models list first, so a killed job still leaves them (mutation: emit only at the end → FAILS)", async () => {
+    const emitted: string[] = [];
+    let seenWhenSecondTaskStarted = "";
+    const { impl } = fakeOpenAi();
+    const watching = ((input: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (!seenWhenSecondTaskStarted && body.includes("Summarize this front-desk call")) seenWhenSecondTaskStarted = emitted.join("\n");
+      return impl(input, init);
+    }) as typeof fetch;
+    const out = await runModelSpike(watching, KEY, { emit: (chunk) => emitted.push(chunk) });
+    expect(seenWhenSecondTaskStarted).toContain("## Models this key can see");
+    expect(seenWhenSecondTaskStarted).toContain("| web_chat | V1 |");
+    expect(seenWhenSecondTaskStarted).not.toContain("| call_summary |");
+    expect(emitted.join("\n")).toBe(out.markdown);
+  });
+
   it("is a pass when every task had an accepted variant, and not when Chat Completions refuses everything", async () => {
     expect((await runModelSpike(fakeOpenAi().impl, KEY)).everyTaskAccepted).toBe(true);
     const out = await runModelSpike(fakeOpenAi({ chat: () => refusal("model") }).impl, KEY);

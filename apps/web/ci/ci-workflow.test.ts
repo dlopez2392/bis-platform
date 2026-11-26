@@ -1523,6 +1523,10 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
     expect(blockEnv(toolBlock!).REALTIME_MODEL).toBe("${{ inputs.realtime_model }}");
   });
 
+  it("gives the job 60 minutes: the model spike's own 45-minute deadline sits inside it (mutation: `timeout-minutes: 30`, or drop it → FAILS)", () => {
+    expect(jobValue(runJob, "timeout-minutes")).toBe("60");
+  });
+
   describe("the tool step's own bash, run for real with a stand-in pnpm", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sofia-corpus-step-"));
     afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -1550,7 +1554,15 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
         },
       });
       const calls = fs.existsSync(pnpmLog) ? fs.readFileSync(pnpmLog, "utf8").trim().split("\n") : [];
-      return { status: r.status, out: r.stdout + r.stderr, calls, summary: fs.readFileSync(summary, "utf8") };
+      const out = r.stdout + r.stderr;
+      const summaryText = fs.readFileSync(summary, "utf8");
+      // Every case: the step's own lines never carry the key, plain or base64 (mutation: add
+      // `printf %s "$OPENAI_API_KEY" | base64` to the step → every case below FAILS).
+      for (const text of [out, summaryText]) {
+        expect(text).not.toContain("sk-fake");
+        expect(text).not.toContain(Buffer.from("sk-fake").toString("base64").replace(/=+$/, ""));
+      }
+      return { status: r.status, out, calls, summary: summaryText };
     }
 
     it("refuses a realtime_model outside the choice before running anything (mutation: drop the bash check → FAILS)", () => {

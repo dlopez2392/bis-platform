@@ -6,8 +6,9 @@
 // line per check:
 //   - model: the model it ran against.
 //   - text_only: does the model answer a TEXT-ONLY session built from our real session config? Both names the
-//     switch has had, `output_modalities` (the GA shape) and then `modalities`. {variant, ok, why, seen, text}:
-//     `seen` is the event types in arrival order, `text` the reply capped at 400 characters.
+//     switch has had, `output_modalities` (the GA shape) and then `modalities`. {variant, ok, why, events,
+//     textLength, nonEmpty}: `events` counts each known event type (any other as `other`), and the reply is
+//     described by its length and whether it had any text, never printed.
 //   - session_config: our FULL session config, audio block kept, with each transcription candidate
 //     (realtime-spike-checks.ts): `session.updated` (and the transcriber it echoes) or the error.
 //   - speaker: one session speaks a fixed English, then a fixed Spanish sentence (model audio, no person).
@@ -25,16 +26,15 @@ import WebSocket from "ws";
 import { buildRealtimeSessionConfig, REALTIME_MODEL } from "../src/lib/voice/session-config";
 import { realtimeErrorWhy } from "./realtime-spike-why";
 import {
-  echoedTranscriber, REALTIME_MODEL_CHOICES, ROUND_TRIP_SENTENCES, TRANSCRIBE_CANDIDATES, transcriptionTracker, withTranscriber,
+  countEvents, echoedTranscriber, REALTIME_MODEL_CHOICES, ROUND_TRIP_SENTENCES, TRANSCRIBE_CANDIDATES, transcriptionTracker, withTranscriber,
   type TranscriptionResult,
 } from "./realtime-spike-checks";
 
 const VARIANTS = ["output_modalities", "modalities"] as const;
 type Variant = (typeof VARIANTS)[number];
-type SpikeResult = { check: "text_only"; variant: Variant; ok: boolean; why: string; seen: string[]; text: string };
+type SpikeResult = { check: "text_only"; variant: Variant; ok: boolean; why: string; events: Record<string, number>; textLength: number; nonEmpty: boolean };
 type Lang = keyof typeof ROUND_TRIP_SENTENCES;
 
-const TEXT_CAP = 400;
 const TIMEOUT_MS = 30_000;
 const ROUND_TRIP_TIMEOUT_MS = 45_000;
 /** 24 kHz, 16-bit mono PCM (the session's default audio format): 48,000 bytes a second. */
@@ -97,7 +97,9 @@ function trySession(key: string, variant: Variant): Promise<SpikeResult> {
   const session = { ...rest, [variant]: ["text"] };
   const seen: string[] = [];
   let text = "";
-  const result = (ok: boolean, why: string): SpikeResult => ({ check: "text_only", variant, ok, why, seen, text: text.slice(0, TEXT_CAP) });
+  const result = (ok: boolean, why: string): SpikeResult => ({
+    check: "text_only", variant, ok, why, events: countEvents(seen), textLength: text.length, nonEmpty: text.trim() !== "",
+  });
   return runSession(key, TIMEOUT_MS, (why) => result(false, why), (send, finish) => ({
     open: () => send({ type: "session.update", session }),
     event: (ev, type) => {

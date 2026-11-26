@@ -63,9 +63,11 @@ gh run view <run id> --log
 - **spike**: one JSON line per check, each with a `check` field. `why`
   names an OpenAI error by its code, type and param only, never its message.
   - `model`: the Realtime model the run used.
-  - `text_only`, one per variant: `{variant, ok, why, seen, text}`. `ok: true`
-    on either variant means the model works text-only. The job's exit code
-    follows these two lines only.
+  - `text_only`, one per variant: `{variant, ok, why, events, textLength,
+    nonEmpty}`. `events` counts each known event type, any other as `other`.
+    The reply itself is never printed, only its length and whether it had
+    text. `ok: true` on either variant means the model works text-only. The
+    job's exit code follows these two lines only.
   - `session_config`, one per transcription candidate (`gpt-transcribe`,
     `gpt-live-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`): our FULL
     session config, audio block kept. `ok: true` means `session.updated`
@@ -83,7 +85,11 @@ gh run view <run id> --log
     transcriber without both would leave calls with no caller transcript,
     and such calls are labelled spam.
 - **model-spike**: a markdown summary in the log and in the run's job summary
-  (the run page). For each of the five text tasks it tries V1 (today's row in
+  (the run page), printed a section at a time: the models list first, then
+  each task as soon as it finishes, so a run the job kills still leaves what
+  it measured. No call starts after 45 minutes (the job allows 60); a run cut
+  short ends with "Stopped early at N calls". Each call waits at most 30 s,
+  then shows `timeout`. For each of the five text tasks it tries V1 (today's row in
   `apps/web/src/lib/ai/tasks.ts`), V2 (`max_completion_tokens` instead of
   `max_tokens`; skipped where today's row sends no cap) and V3 (V2 plus
   `reasoning_effort` none, minimal and low). For the web chat it also tries
@@ -92,8 +98,9 @@ gh run view <run id> --log
   times, a refused one once. Each call shows its status, the error's
   code/type/param, finish reason, the three token counts, latency, and yes/no
   for empty content, JSON that parses and a tool call. It never shows a
-  model's words. Last, the models this key's project can see, filtered to
-  `gpt-6*`, `gpt-realtime*`, `gpt-transcribe*` and `gpt-live*`. The job is red
+  model's words. The models list shows what this key's project can see,
+  filtered to `gpt-6*`, `gpt-realtime*`, `gpt-transcribe*` and `gpt-live*`.
+  The job is red
   when a task had no accepted variant on either API. Every message is
   synthetic.
 - **corpus**: `== insurance-pc ==`, then `ok   NN-….md` or `FAIL NN-….md:
@@ -222,12 +229,15 @@ sealed to the old certificate open only with the old key.
 - `apps/web/ci/model-spike.test.ts` drives the model spike against a fake
   OpenAI whose every free-text path carries a sentinel. It pins the variant
   bodies, five runs for an accepted variant and one for a refused one, the
-  Responses shape, the model filter, and that no error message, answer or key
-  reaches the summary.
+  Responses shape, the model filter, the 30-second bound on each call, the
+  45-minute deadline, the section-by-section output, and that no error
+  message, answer or key reaches the summary.
 - The same `ci-workflow.test.ts` block runs the tool step's own bash with a
   stand-in `pnpm`: an unknown model or step and an empty key run nothing, each
   step runs its own tool on the chosen model, and `model-spike` copies its
-  output to the job summary and exits with the spike's status.
+  output to the job summary and exits with the spike's status. No case's
+  output or summary carries the key, plain or base64. The job's 60 minutes are
+  pinned too.
 - `apps/web/src/lib/voice/modules/corpus-lib.test.ts` pins that an `only`
   matching no item stops the runner non-zero. It also pins that a throw while
   handling a Realtime event fails that one item, by the error's class only,

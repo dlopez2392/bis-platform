@@ -25,9 +25,10 @@ name: Sofía corpus
 #     the corpus stubs every tool and touches no database (the runner also
 #     refuses a production Supabase variable, of which there is none here).
 #   - The log carries only the runner's per-item `ok`/`FAIL` lines and counts
-#     (for the spike, one JSON line per check: event types, a capped reply,
-#     and a capped transcript of the MODEL's own fixed sentence; for the model
-#     spike, a markdown table of statuses, error codes, token counts and
+#     (for the spike, one JSON line per check: counts of known event types,
+#     a reply's length and whether it had text, never the reply, and a
+#     capped transcript of the MODEL's own fixed sentence; for the model
+#     spike, markdown tables of statuses, error codes, token counts and
 #     yes/no facts, also copied to the job summary, never a model's words).
 #     Corpus transcripts never reach the log.
 #   - The transcripts are sealed (tar, then openssl cms, AES-256-CBC) to the

@@ -17,8 +17,13 @@ import { realtimeErrorWhy } from "./realtime-spike-why";
 export const SPIKE_MODEL = "gpt-6-luna";
 const BASE = "https://api.openai.com/v1";
 const RUNS = 5;
-/** Per call. Three of the callers allow 10 s; this records slower answers without letting ~140 calls outlast the job. */
-const TIMEOUT_MS = 30_000;
+/** Per call. Three of the callers allow 10 s; this still records a slower answer as a number, not a timeout. */
+const CALL_TIMEOUT_MS = 30_000;
+/**
+ * No call STARTS after this. At most 135 completions plus the models list can run (27 variants, 5 runs each), and
+ * at 30 s each they would outlast the job's 60 minutes; this, not the count, bounds the run.
+ */
+const DEADLINE_MS = 45 * 60_000;
 const MODEL_PREFIXES = ["gpt-6", "gpt-realtime", "gpt-transcribe", "gpt-live"];
 const EFFORTS = ["none", "minimal", "low"] as const;
 
@@ -140,29 +145,33 @@ function responsesBody(v: Variant, now: Date): Msg {
 type ChatAnswer = { choices?: { finish_reason?: unknown; message?: { content?: unknown; tool_calls?: unknown } }[]; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; completion_tokens_details?: { reasoning_tokens?: unknown } } };
 type ResponsesAnswer = { status?: unknown; incomplete_details?: { reason?: unknown }; output?: { type?: unknown; content?: { type?: unknown; text?: unknown }[] }[]; usage?: { input_tokens?: unknown; output_tokens?: unknown; output_tokens_details?: { reasoning_tokens?: unknown } } };
 
+/** One run's settings and progress. `clock` is milliseconds; `calls` counts the completions started. */
+type Run = { fetchImpl: typeof fetch; key: string; now: Date; callTimeoutMs: number; clock: () => number; started: number; deadlineMs: number; calls: number; stopped: boolean };
+
+const isTimeout = (e: unknown) => ["TimeoutError", "AbortError"].includes(errorClass(e));
 function parsesAsObject(text: string): boolean {
   try { const v: unknown = JSON.parse(text); return typeof v === "object" && v !== null; } catch { return false; }
 }
 
-async function callOnce(fetchImpl: typeof fetch, key: string, task: AiTask, v: Variant, now: Date): Promise<CallRecord> {
+async function callOnce(run: Run, task: AiTask, v: Variant): Promise<CallRecord> {
   const blank = { finish: "-", prompt: null, completion: null, reasoning: null, empty: null, json: null, tool: null };
   const started = performance.now();
   const ms = () => Math.round(performance.now() - started);
+  const timedOut = (): CallRecord => ({ ...blank, status: "timeout", why: "-", ms: ms() });
+  run.calls += 1;
   let r: Response;
   try {
-    r = await fetchImpl(`${BASE}/${v.api === "chat" ? "chat/completions" : "responses"}`, {
+    r = await run.fetchImpl(`${BASE}/${v.api === "chat" ? "chat/completions" : "responses"}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(v.api === "chat" ? chatBody(task, v, now) : responsesBody(v, now)),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${run.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(v.api === "chat" ? chatBody(task, v, run.now) : responsesBody(v, run.now)),
+      signal: AbortSignal.timeout(run.callTimeoutMs),
     });
   } catch (e) {
-    const cls = errorClass(e);
-    const timedOut = cls === "TimeoutError" || cls === "AbortError";
-    return { ...blank, status: timedOut ? "timeout" : "network", why: timedOut ? "-" : cls, ms: ms() };
+    return isTimeout(e) ? timedOut() : { ...blank, status: "network", why: errorClass(e), ms: ms() };
   }
   let data: unknown = null;
-  try { data = await r.json(); } catch { /* read below as "did not parse" */ }
+  try { data = await r.json(); } catch (e) { if (isTimeout(e)) return timedOut(); /* otherwise "did not parse", below */ }
   if (!r.ok) return { ...blank, status: String(r.status), why: realtimeErrorWhy((data as { error?: unknown } | null)?.error), ms: ms() };
   if (data === null || typeof data !== "object") return { ...blank, status: String(r.status), why: "an answer that did not parse", ms: ms() };
   const isJson = AI_TASKS[task].primary.params.responseFormat ? true : null;
@@ -188,42 +197,50 @@ async function callOnce(fetchImpl: typeof fetch, key: string, task: AiTask, v: V
   };
 }
 
-/** One call; when it was accepted (2xx), four more. */
-async function runVariant(fetchImpl: typeof fetch, key: string, task: AiTask, v: Variant, now: Date): Promise<VariantResult> {
-  const calls = [await callOnce(fetchImpl, key, task, v, now)];
+/** True, and the run marked stopped, once the deadline has passed: no call starts after it. */
+function pastDeadline(run: Run): boolean {
+  if (!run.stopped && run.clock() - run.started >= run.deadlineMs) run.stopped = true;
+  return run.stopped;
+}
+
+/** One call; when it was accepted (2xx), four more. Null when the deadline stopped it before its first call. */
+async function runVariant(run: Run, task: AiTask, v: Variant): Promise<VariantResult | null> {
+  if (pastDeadline(run)) return null;
+  const calls = [await callOnce(run, task, v)];
   if (/^2\d\d$/.test(calls[0]!.status)) {
-    for (let i = 1; i < RUNS; i += 1) calls.push(await callOnce(fetchImpl, key, task, v, now));
+    for (let i = 1; i < RUNS && !pastDeadline(run); i += 1) calls.push(await callOnce(run, task, v));
   }
   return { task, variant: v, calls };
 }
 
-async function listModels(fetchImpl: typeof fetch, key: string): Promise<{ status: string; why: string; ids: string[] }> {
+async function listModels(run: Run): Promise<{ status: string; why: string; ids: string[] }> {
   try {
-    const r = await fetchImpl(`${BASE}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const r = await run.fetchImpl(`${BASE}/models`, { headers: { Authorization: `Bearer ${run.key}` }, signal: AbortSignal.timeout(run.callTimeoutMs) });
     const data = await r.json().catch(() => null) as { data?: { id?: unknown }[]; error?: unknown } | null;
     if (!r.ok) return { status: String(r.status), why: realtimeErrorWhy(data?.error), ids: [] };
     const ids = (Array.isArray(data?.data) ? data.data : []).map((m) => m?.id)
       .filter((id): id is string => typeof id === "string" && /^[\w.-]{1,80}$/.test(id) && MODEL_PREFIXES.some((p) => id.startsWith(p)));
     return { status: String(r.status), why: "-", ids: [...new Set(ids)].sort() };
   } catch (e) {
-    return { status: "network", why: errorClass(e), ids: [] };
+    return isTimeout(e) ? { status: "timeout", why: "-", ids: [] } : { status: "network", why: errorClass(e), ids: [] };
   }
 }
 
-// ---- The summary. ----
+// ---- The summary, emitted a section at a time so a killed job still leaves what it measured. ----
 const yn = (b: boolean | null) => (b === null ? "-" : b ? "y" : "n");
 const num = (n: number | null) => (n === null ? "-" : String(n));
 const accepted = (r: VariantResult) => /^2\d\d$/.test(r.calls[0]!.status);
 
-function render(results: VariantResult[], models: Awaited<ReturnType<typeof listModels>>, notes: string[]): string {
-  const lines = [
-    `# Model spike: ${SPIKE_MODEL}`, "",
-    "Synthetic messages shaped like each task's real one. An accepted variant ran 5 times, a refused one once.", "",
-    ...notes.map((n) => `- ${n}`), "",
-    "## By variant", "",
+function modelsSection(models: Awaited<ReturnType<typeof listModels>>): string {
+  return ["## Models this key can see", "",
+    `GET /v1/models: ${models.status}${models.why === "-" ? "" : ` (${models.why})`}, filtered to ${MODEL_PREFIXES.map((p) => `${p}*`).join(", ")}.`, "",
+    ...(models.ids.length ? models.ids.map((id) => `- ${id}`) : ["- (none)"]), ""].join("\n");
+}
+
+function taskSection(task: AiTask, results: VariantResult[], notes: string[]): string {
+  const lines = [`## ${task}`, "", ...notes.map((n) => `- ${n}`), ...(notes.length ? [""] : []),
     "| task | variant | api | accepted | runs | non-empty | JSON parses | tool call | finish | slowest ms | most reasoning tokens |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
-  ];
+    "|---|---|---|---|---|---|---|---|---|---|---|"];
   for (const r of results) {
     const c = r.calls;
     const count = (f: (x: CallRecord) => boolean | null) => `${c.filter((x) => f(x) === true).length}/${c.length}`;
@@ -231,26 +248,40 @@ function render(results: VariantResult[], models: Awaited<ReturnType<typeof list
     const most = Math.max(...c.map((x) => x.reasoning ?? -1));
     lines.push(`| ${r.task} | ${r.variant.name} | ${r.variant.api} | ${accepted(r) ? "y" : "n"} | ${c.length} | ${count((x) => x.empty === null ? null : !x.empty)} | ${c[0]!.json === null ? "-" : count((x) => x.json)} | ${c[0]!.tool === null ? "-" : count((x) => x.tool)} | ${finishes} | ${Math.max(...c.map((x) => x.ms))} | ${most < 0 ? "-" : most} |`);
   }
-  lines.push("", "## Every call", "",
-    "| task | variant | api | run | status | why | finish | prompt | completion | reasoning | ms | empty | JSON parses | tool call |",
+  lines.push("", "| task | variant | api | run | status | why | finish | prompt | completion | reasoning | ms | empty | JSON parses | tool call |",
     "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of results) {
     r.calls.forEach((x, i) => lines.push(`| ${r.task} | ${r.variant.name} | ${r.variant.api} | ${i + 1} | ${x.status} | ${x.why} | ${x.finish} | ${num(x.prompt)} | ${num(x.completion)} | ${num(x.reasoning)} | ${x.ms} | ${yn(x.empty)} | ${yn(x.json)} | ${yn(x.tool)} |`));
   }
-  lines.push("", "## Models this key can see", "", `GET /v1/models: ${models.status}${models.why === "-" ? "" : ` (${models.why})`}, filtered to ${MODEL_PREFIXES.map((p) => `${p}*`).join(", ")}.`, "",
-    ...(models.ids.length ? models.ids.map((id) => `- ${id}`) : ["- (none)"]), "");
-  return lines.join("\n");
+  return [...lines, ""].join("\n");
 }
 
+export type SpikeOptions = {
+  /** Called with each section as soon as it is measured; the script prints it at once. */
+  emit?: (chunk: string) => void;
+  now?: Date; callTimeoutMs?: number; deadlineMs?: number; clock?: () => number;
+};
+
 /** The whole spike. `everyTaskAccepted`: every task had at least one accepted variant, on either API. */
-export async function runModelSpike(fetchImpl: typeof fetch, key: string, now = new Date()): Promise<{ markdown: string; everyTaskAccepted: boolean }> {
+export async function runModelSpike(fetchImpl: typeof fetch, key: string, opts: SpikeOptions = {}): Promise<{ markdown: string; everyTaskAccepted: boolean }> {
+  const clock = opts.clock ?? Date.now;
+  const run: Run = {
+    fetchImpl, key, now: opts.now ?? new Date(), callTimeoutMs: opts.callTimeoutMs ?? CALL_TIMEOUT_MS, clock,
+    started: clock(), deadlineMs: opts.deadlineMs ?? DEADLINE_MS, calls: 0, stopped: false,
+  };
+  const chunks: string[] = [];
+  const emit = (chunk: string) => { chunks.push(chunk); opts.emit?.(chunk); };
+  emit([`# Model spike: ${SPIKE_MODEL}`, "",
+    "Synthetic messages shaped like each task's real one. An accepted variant ran 5 times, a refused one once.", ""].join("\n"));
+  emit(modelsSection(await listModels(run)));
   const results: VariantResult[] = [];
-  const notes: string[] = [];
   for (const task of AI_TASK_NAMES) {
+    const notes: string[] = [];
     if (!AI_TASKS[task].primary.params.maxOutput) notes.push(`${task} sends no cap today, so V2 is V1 and is not sent; V3 is V1 plus each effort.`);
     const mine: VariantResult[] = [];
-    for (const v of variantsFor(task)) mine.push(await runVariant(fetchImpl, key, task, v, now));
-    if (task === "web_chat") {
+    const add = (r: VariantResult | null) => { if (r) mine.push(r); };
+    for (const v of variantsFor(task)) add(await runVariant(run, task, v));
+    if (task === "web_chat" && !run.stopped) {
       // The follow-up and Responses runs carry the first params Chat Completions accepted, else V1's.
       const params = mine.find(accepted)?.variant.params ?? AI_TASKS.web_chat.primary.params;
       notes.push(`web_chat's follow-up and Responses runs use ${mine.find(accepted)?.variant.name ?? "V1 (no Chat Completions variant was accepted)"}'s params.`);
@@ -258,11 +289,13 @@ export async function runModelSpike(fetchImpl: typeof fetch, key: string, now = 
         { name: "chat follow-up", api: "chat", shape: "followup", params },
         { name: "responses first turn", api: "responses", shape: "first_turn", params },
         { name: "responses follow-up", api: "responses", shape: "followup", params },
-      ] as const) mine.push(await runVariant(fetchImpl, key, task, v, now));
+      ] as const) add(await runVariant(run, task, v));
     }
+    if (mine.length) emit(taskSection(task, mine, notes));
     results.push(...mine);
+    if (run.stopped) break;
   }
-  const models = await listModels(fetchImpl, key);
+  if (run.stopped) emit(`Stopped early at ${run.calls} calls: the ${Math.round(run.deadlineMs / 60_000)}-minute deadline.\n`);
   const everyTaskAccepted = AI_TASK_NAMES.every((t) => results.some((r) => r.task === t && accepted(r)));
-  return { markdown: render(results, models, notes), everyTaskAccepted };
+  return { markdown: chunks.join("\n"), everyTaskAccepted };
 }
