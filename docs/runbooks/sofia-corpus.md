@@ -1,7 +1,7 @@
 # Sofía's corpus, run from GitHub (`sofia-corpus.yml`)
 
-Plays Sofía's S-47b test corpus, or the Realtime text-only spike, on a GitHub
-runner with the repository's `OPENAI_API_KEY` secret, so nobody has to hold
+Plays Sofía's S-47b test corpus, the Realtime spike, or the text model spike,
+on a GitHub runner with the repository's `OPENAI_API_KEY` secret, so nobody has to hold
 the key on a laptop. The run is manual only. It touches no database (every
 tool is stubbed) and costs OpenAI money each time.
 
@@ -19,7 +19,10 @@ GitHub only lists the workflow once `sofia-corpus.yml` is on `main`.
 
 ```
 gh workflow run sofia-corpus.yml --ref main -f step=spike
+gh workflow run sofia-corpus.yml --ref main -f step=spike -f realtime_model=gpt-realtime-2.1
+gh workflow run sofia-corpus.yml --ref main -f step=model-spike
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both
+gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f realtime_model=gpt-realtime-2.1
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=events -f only=7
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=insurance-pc -f phone_engine=chat
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f repeat=1
@@ -27,16 +30,22 @@ gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f rep
 
 | Input | Values | Default |
 |---|---|---|
-| `step` | `spike` (does gpt-realtime answer a text-only session) or `corpus` | `spike` (the cheaper one) |
+| `step` | `spike` (the Realtime model: text-only session, full config with each transcriber, spoken round trip), `corpus`, or `model-spike` (what gpt-6-luna accepts for each text task) | `spike` (the cheaper one) |
 | `module` | `both`, `insurance-pc`, `events` | `both` |
-| `phone_engine` | `realtime` (phone items on gpt-realtime, text only) or `chat` (phone items on gpt-4o) | `realtime` |
+| `phone_engine` | `realtime` (phone items on the Realtime model, text only) or `chat` (phone items on gpt-4o) | `realtime` |
 | `only` | one item number, `7` or `07`; empty plays every item | empty |
 | `repeat` | 1 or 3: plays each item that many times; 3 writes NN-…-r1.md to -r3.md and a sheet with one column per run | 3 |
+| `realtime_model` | `gpt-realtime` or `gpt-realtime-2.1`, for `spike` and `corpus` (a fixed choice, checked again in bash) | `gpt-realtime` |
 
-The run uses the code's default Realtime model (`gpt-realtime`,
-`apps/web/src/lib/voice/session-config.ts`). If production's Vercel
-`REALTIME_MODEL` names a different model, this run does not play the model
-that live calls use. Note that on the results sheet.
+`module`, `phone_engine`, `only` and `repeat` are read by `corpus` only.
+`model-spike` reads no input: it names gpt-6-luna in its own code
+(`apps/web/scripts/model-spike-lib.ts`).
+
+`realtime_model` reaches the run as `REALTIME_MODEL`. Its default is the
+code's default (`apps/web/src/lib/voice/session-config.ts`). If production's
+Vercel `REALTIME_MODEL` names a different model, pick that one here, or the
+run does not play the model that live calls use. The results sheet's header
+names the model the run played.
 
 Runs go one at a time, and a running one is never cancelled. A second
 dispatch waits for the first. GitHub keeps only ONE waiting run, though: a
@@ -51,9 +60,49 @@ gh run watch <run id>
 gh run view <run id> --log
 ```
 
-- **spike**: one JSON line per variant, `{variant, ok, why, seen, text}`.
-  `ok: true` on either variant means the Realtime engine works text-only.
-  `why` names an OpenAI error by its code, type and param only.
+- **spike**: one JSON line per check, each with a `check` field. `why`
+  names an OpenAI error by its code, type and param only, never its message.
+  - `model`: the Realtime model the run used.
+  - `text_only`, one per variant: `{variant, ok, why, events, textLength,
+    nonEmpty}`. `events` counts each known event type, any other as `other`.
+    The reply itself is never printed, only its length and whether it had
+    text. `ok: true` on either variant means the model works text-only. The
+    job's exit code follows these two lines only.
+  - `session_config`, one per transcription candidate (`gpt-transcribe`,
+    `gpt-live-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`): our FULL
+    session config, audio block kept. `ok: true` means `session.updated`
+    arrived; `echoed` is the transcriber the session reports back.
+  - `speaker`, one per language: the model read a fixed English or Spanish
+    sentence aloud (model audio; no person is recorded). `bytes` is the
+    audio's size.
+  - `round_trip`, one per candidate and language: that audio fed to a session
+    on the full config with the candidate. `deltas` counts
+    `conversation.item.input_audio_transcription.delta` events; `completed`
+    says whether `.completed` arrived; `usage` is the usage object's type and
+    key names; `transcript` is capped at 120 characters; `commit` is `vad`
+    when turn detection ended the turn, `manual` when the spike had to.
+    `ok: true` needs at least one delta and the completed event. A
+    transcriber without both would leave calls with no caller transcript,
+    and such calls are labelled spam.
+- **model-spike**: a markdown summary in the log and in the run's job summary
+  (the run page), printed a section at a time: the models list first, then
+  each task as soon as it finishes, so a run the job kills still leaves what
+  it measured. No call starts after 45 minutes (the job allows 60); a run cut
+  short ends with "Stopped early at N calls". Each call waits at most 30 s,
+  then shows `timeout`. For each of the five text tasks it tries V1 (today's row in
+  `apps/web/src/lib/ai/tasks.ts`), V2 (`max_completion_tokens` instead of
+  `max_tokens`; skipped where today's row sends no cap) and V3 (V2 plus
+  `reasoning_effort` none, minimal and low). For the web chat it also tries
+  the follow-up shape (`tool_choice: "none"`) on Chat Completions, and the
+  first turn and the follow-up on `/v1/responses`. An accepted variant runs 5
+  times, a refused one once. Each call shows its status, the error's
+  code/type/param, finish reason, the three token counts, latency, and yes/no
+  for empty content, JSON that parses and a tool call. It never shows a
+  model's words. The models list shows what this key's project can see,
+  filtered to `gpt-6*`, `gpt-realtime*`, `gpt-transcribe*` and `gpt-live*`.
+  The job is red
+  when a task had no accepted variant on either API. Every message is
+  synthetic.
 - **corpus**: `== insurance-pc ==`, then `ok   NN-….md` or `FAIL NN-….md:
   <reason>` per item, then `N of M played`. The job is red when any item
   failed. The transcripts are still sealed and uploaded, because a failed
@@ -171,8 +220,24 @@ sealed to the old certificate open only with the old key.
   it proves a check that fails after encryption leaves the upload folder
   empty.
 - `apps/web/ci/realtime-spike.test.ts` pins that the spike stops with exit 2
-  when there is no key, and that its error line (`realtime-spike-why.ts`)
-  never carries an error's message, `toString` or JSON form.
+  when there is no key or the model is not one of the choice, and that its
+  error line (`realtime-spike-why.ts`) never carries an error's message,
+  `toString` or JSON form. It also pins the transcription checks
+  (`realtime-spike-checks.ts`): the full config keeps its audio block and
+  changes only the transcriber, the transcript is capped, and an error is
+  code/type/param only.
+- `apps/web/ci/model-spike.test.ts` drives the model spike against a fake
+  OpenAI whose every free-text path carries a sentinel. It pins the variant
+  bodies, five runs for an accepted variant and one for a refused one, the
+  Responses shape, the model filter, the 30-second bound on each call, the
+  45-minute deadline, the section-by-section output, and that no error
+  message, answer or key reaches the summary.
+- The same `ci-workflow.test.ts` block runs the tool step's own bash with a
+  stand-in `pnpm`: an unknown model or step and an empty key run nothing, each
+  step runs its own tool on the chosen model, and `model-spike` copies its
+  output to the job summary and exits with the spike's status. No case's
+  output or summary carries the key, plain or base64. The job's 60 minutes are
+  pinned too.
 - `apps/web/src/lib/voice/modules/corpus-lib.test.ts` pins that an `only`
   matching no item stops the runner non-zero. It also pins that a throw while
   handling a Realtime event fails that one item, by the error's class only,
