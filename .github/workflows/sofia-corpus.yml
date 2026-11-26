@@ -1,12 +1,14 @@
 name: Sofía corpus
 
-# Plays Sofía's S-47b test corpus (apps/web/scripts/sofia-corpus.ts) or the
-# Realtime text-only spike (apps/web/scripts/realtime-spike.ts) against
-# OpenAI with the repository's OPENAI_API_KEY secret, so the owner can run
-# them away from the dev machine without ever handling the key.
+# Plays Sofía's S-47b test corpus (apps/web/scripts/sofia-corpus.ts), the
+# Realtime spike (apps/web/scripts/realtime-spike.ts) or the text model spike
+# (apps/web/scripts/model-spike.ts) against OpenAI with the repository's
+# OPENAI_API_KEY secret, so the owner can run them away from the dev machine
+# without ever handling the key.
 #
-#   gh workflow run sofia-corpus.yml --ref main -f step=spike
+#   gh workflow run sofia-corpus.yml --ref main -f step=spike -f realtime_model=gpt-realtime-2.1
 #   gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both
+#   gh workflow run sofia-corpus.yml --ref main -f step=model-spike
 #
 # How to download and open the result: docs/runbooks/sofia-corpus.md.
 #
@@ -23,8 +25,11 @@ name: Sofía corpus
 #     the corpus stubs every tool and touches no database (the runner also
 #     refuses a production Supabase variable, of which there is none here).
 #   - The log carries only the runner's per-item `ok`/`FAIL` lines and counts
-#     (and, for the spike, one JSON line per variant: event types and a capped
-#     reply). Transcripts never reach the log.
+#     (for the spike, one JSON line per check: event types, a capped reply,
+#     and a capped transcript of the MODEL's own fixed sentence; for the model
+#     spike, a markdown table of statuses, error codes, token counts and
+#     yes/no facts, also copied to the job summary, never a model's words).
+#     Corpus transcripts never reach the log.
 #   - The transcripts are sealed (tar, then openssl cms, AES-256-CBC) to the
 #     owner's PUBLIC certificate, .github/sofia-corpus-recipient.pem, whose
 #     SHA-256 fingerprint is pinned below, so a swapped .pem is refused. The
@@ -34,19 +39,24 @@ name: Sofía corpus
 #     refusal it deletes the file, so a failed seal publishes nothing. The
 #     private key never leaves the owner's machine.
 #   - Dispatch inputs reach the shell through env only, never as ${{ }} text
-#     inside a script, and the one free-text input is checked first.
+#     inside a script, and the one free-text input is checked first. The
+#     models are fixed: model-spike names gpt-6-luna in its code, and
+#     realtime_model is a choice, checked again in bash.
 # All of the above is pinned by apps/web/ci/ci-workflow.test.ts.
 
-run-name: "Sofía corpus: ${{ inputs.step }} (${{ inputs.module }}, ${{ inputs.phone_engine }})"
+run-name: "Sofía corpus: ${{ inputs.step }} (${{ inputs.module }}, ${{ inputs.phone_engine }}, ${{ inputs.realtime_model }})"
 
 on:
   workflow_dispatch:
     inputs:
       step:
         description: >-
-          spike: does gpt-realtime answer a text-only session (one JSON line
-          per variant in the log). corpus: play the corpus and upload the
-          sealed transcripts.
+          spike: does the Realtime model answer a text-only session, take the
+          full session config with each transcription candidate, and
+          transcribe its own spoken English and Spanish (one JSON line per
+          check in the log). corpus: play the corpus and upload the sealed
+          transcripts. model-spike: what gpt-6-luna accepts for each text
+          task (a table in the log and the job summary).
         type: choice
         required: true
         # The cheaper run, so a stray click on "Run workflow" costs little.
@@ -54,6 +64,7 @@ on:
         options:
           - spike
           - corpus
+          - model-spike
       module:
         description: Which corpus to play (corpus only).
         type: choice
@@ -64,7 +75,7 @@ on:
           - insurance-pc
           - events
       phone_engine:
-        description: Phone items on gpt-realtime (text only) or on chat completions (corpus only).
+        description: Phone items on the Realtime model (text only) or on chat completions (corpus only).
         type: choice
         required: true
         default: realtime
@@ -84,6 +95,16 @@ on:
         options:
           - "1"
           - "3"
+      realtime_model:
+        description: >-
+          The Realtime model for spike and corpus. A fixed choice: production's
+          default is gpt-realtime, which OpenAI retires on 2027-01-20.
+        type: choice
+        required: true
+        default: gpt-realtime
+        options:
+          - gpt-realtime
+          - gpt-realtime-2.1
 
 permissions:
   contents: read
@@ -134,16 +155,24 @@ jobs:
           PHONE_ENGINE: ${{ inputs.phone_engine }}
           ONLY: ${{ inputs.only }}
           REPEAT: ${{ inputs.repeat }}
+          REALTIME_MODEL: ${{ inputs.realtime_model }}
         run: |
           set -uo pipefail
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "::error::The repository secret OPENAI_API_KEY is not set. Nothing was run."
             exit 1
           fi
+          case "$REALTIME_MODEL" in
+            gpt-realtime|gpt-realtime-2.1) ;;
+            *) echo "::error::'realtime_model' must be gpt-realtime or gpt-realtime-2.1."; exit 1 ;;
+          esac
           case "$STEP" in
             spike)
               pnpm --silent --filter web exec tsx scripts/realtime-spike.ts
               exit $? ;;
+            model-spike)
+              pnpm --silent --filter web exec tsx scripts/model-spike.ts | tee -a "$GITHUB_STEP_SUMMARY"
+              exit "${PIPESTATUS[0]}" ;;
             corpus) ;;
             *)
               echo "::error::Unknown step: $STEP"

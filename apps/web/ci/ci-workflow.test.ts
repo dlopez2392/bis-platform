@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { REALTIME_MODEL_CHOICES } from "../scripts/realtime-spike-checks";
 
 // .github/workflows/ci.yml decides which Supabase project the gates write to,
 // and nothing else in the repo checks it. The runtime guard
@@ -125,6 +129,19 @@ const TYPES_CHECK = "pnpm --filter @bis/db types:check --db-url-env SUPABASE_DB_
 const WEB_UNIT_TESTS = "pnpm --filter web test --project unit";
 const SHARDS = 4;
 const PLAYWRIGHT = `pnpm --filter web test:e2e --shard=\${{ matrix.shard }}/${SHARDS}`;
+
+/** Git for Windows' bash (never WSL's launcher), or plain bash elsewhere (sofia-corpus-seal.test.ts's rule). */
+function bashExecutable(): string {
+  if (process.platform !== "win32") return "bash";
+  const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
+  const candidates = [
+    ...[process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean).map((b) => path.join(b!, "Git")),
+    path.resolve(execPath, "..", "..", ".."),
+  ].map((r) => path.join(r, "usr", "bin", "bash.exe"));
+  const found = candidates.find((c) => fs.existsSync(c));
+  if (!found) throw new Error(`No Git for Windows bash found (looked at: ${candidates.join(", ")})`);
+  return found;
+}
 
 function read(relative: string): string {
   return fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
@@ -1474,10 +1491,106 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
     expect(triggers).toEqual(["workflow_dispatch"]);
   });
 
-  it("takes exactly the five inputs: step, module, phone_engine, only and repeat", () => {
+  it("takes exactly the six inputs: step, module, phone_engine, only, repeat and realtime_model", () => {
     const on = topLevelBlock(corpusLines, "on");
     const inputs = on.flatMap((l) => /^ {6}([A-Za-z_]+):\s*$/.exec(l)?.[1] ?? []);
-    expect(inputs).toEqual(["step", "module", "phone_engine", "only", "repeat"]);
+    expect(inputs).toEqual(["step", "module", "phone_engine", "only", "repeat", "realtime_model"]);
+  });
+
+  /** One input's own lines under `on:`, trimmed. */
+  function inputBlock(name: string): string[] {
+    const on = topLevelBlock(corpusLines, "on");
+    const at = on.findIndex((l) => new RegExp(`^ {6}${name}:\\s*$`).test(l));
+    const block: string[] = [];
+    for (const l of on.slice(at + 1)) { if (/^ {6}\S/.test(l)) break; if (l.trim()) block.push(l.trim()); }
+    return block;
+  }
+  const optionsOf = (block: string[]) => block.slice(block.indexOf("options:") + 1).filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+
+  // OpenAI model switch plan, Step 0: the spike learns what gpt-6-luna takes; spike and corpus take a Realtime model.
+  it("step is a choice of spike, corpus or model-spike, default spike (the cheaper run)", () => {
+    const block = inputBlock("step");
+    expect(block).toContain("type: choice");
+    expect(block).toContain("default: spike");
+    expect(optionsOf(block)).toEqual(["spike", "corpus", "model-spike"]);
+  });
+
+  it("realtime_model is a FIXED choice, the spike's own list, default gpt-realtime, reaching the tool step as REALTIME_MODEL (mutation: `type: string`, or a third option → FAILS)", () => {
+    const block = inputBlock("realtime_model");
+    expect(block).toContain("type: choice");
+    expect(block).toContain("default: gpt-realtime");
+    expect(optionsOf(block)).toEqual([...REALTIME_MODEL_CHOICES]);
+    expect(blockEnv(toolBlock!).REALTIME_MODEL).toBe("${{ inputs.realtime_model }}");
+  });
+
+  describe("the tool step's own bash, run for real with a stand-in pnpm", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sofia-corpus-step-"));
+    afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    /** The `run: |` body of the tool step, dedented, exactly as the runner gets it. */
+    function runBody(block: string[]): string {
+      const at = block.findIndex((l) => /^\s+run: \|\s*$/.test(l));
+      const indent = block[at + 1]!.search(/\S/);
+      const body: string[] = [];
+      for (const l of block.slice(at + 1)) { if (l.trim() !== "" && l.search(/\S/) < indent) break; body.push(l.slice(indent)); }
+      return body.join("\n");
+    }
+    let n = 0;
+    /** Runs the step with `env`; the stand-in pnpm logs its arguments and REALTIME_MODEL, prints a line, and exits FAKE_PNPM_EXIT. */
+    function step(env: Record<string, string>) {
+      n += 1;
+      const pnpmLog = path.join(tmp, `pnpm-${n}.log`).replace(/\\/g, "/");
+      const summary = path.join(tmp, `summary-${n}.md`).replace(/\\/g, "/");
+      fs.writeFileSync(summary, "");
+      const fake = `pnpm() { printf '%s | REALTIME_MODEL=%s\\n' "$*" "$REALTIME_MODEL" >> "${pnpmLog}"; echo "| fake table |"; return "\${FAKE_PNPM_EXIT:-0}"; }\n`;
+      const r = spawnSync(bashExecutable(), ["-c", fake + runBody(toolBlock!)], {
+        encoding: "utf8",
+        env: {
+          NODE_ENV: "test", PATH: process.env.PATH ?? "", OPENAI_API_KEY: "sk-fake", STEP: "spike", MODULE: "both", PHONE_ENGINE: "realtime",
+          ONLY: "", REPEAT: "3", REALTIME_MODEL: "gpt-realtime", GITHUB_STEP_SUMMARY: summary, ...env,
+        },
+      });
+      const calls = fs.existsSync(pnpmLog) ? fs.readFileSync(pnpmLog, "utf8").trim().split("\n") : [];
+      return { status: r.status, out: r.stdout + r.stderr, calls, summary: fs.readFileSync(summary, "utf8") };
+    }
+
+    it("refuses a realtime_model outside the choice before running anything (mutation: drop the bash check → FAILS)", () => {
+      const r = step({ REALTIME_MODEL: "gpt-4o; echo pwned" });
+      expect(r.status).toBe(1);
+      expect(r.out).toContain("::error::'realtime_model' must be gpt-realtime or gpt-realtime-2.1.");
+      expect(r.calls).toEqual([]);
+    });
+
+    it("refuses an empty key before running anything", () => {
+      const r = step({ OPENAI_API_KEY: "" });
+      expect(r.status).toBe(1);
+      expect(r.calls).toEqual([]);
+    });
+
+    it("spike runs the Realtime spike on the chosen model and exits with its status", () => {
+      const r = step({ STEP: "spike", REALTIME_MODEL: "gpt-realtime-2.1", FAKE_PNPM_EXIT: "1" });
+      expect(r.calls).toEqual(["--silent --filter web exec tsx scripts/realtime-spike.ts | REALTIME_MODEL=gpt-realtime-2.1"]);
+      expect(r.status).toBe(1);
+    });
+
+    it("corpus plays each module on the chosen model", () => {
+      const r = step({ STEP: "corpus", REALTIME_MODEL: "gpt-realtime-2.1", MODULE: "events", REPEAT: "1" });
+      expect(r.calls).toEqual(["--silent --filter web sofia:corpus events --phone-engine realtime --repeat 1 | REALTIME_MODEL=gpt-realtime-2.1"]);
+      expect(r.status).toBe(0);
+    });
+
+    it("model-spike runs the model spike, copies its output to the job summary, and exits with the SPIKE's status, not tee's (mutation: `exit 0`, or no exit so it falls through to the corpus → FAILS)", () => {
+      const r = step({ STEP: "model-spike", FAKE_PNPM_EXIT: "3" });
+      expect(r.calls).toEqual(["--silent --filter web exec tsx scripts/model-spike.ts | REALTIME_MODEL=gpt-realtime"]);
+      expect(r.summary).toBe("| fake table |\n");
+      expect(r.out).toContain("| fake table |");
+      expect(r.status).toBe(3);
+    });
+
+    it("refuses an unknown step", () => {
+      const r = step({ STEP: "everything" });
+      expect(r.status).toBe(1);
+      expect(r.calls).toEqual([]);
+    });
   });
 
   // S-47b v3 (C): each item played three times by default, so a rule that held once by luck shows as a split.
