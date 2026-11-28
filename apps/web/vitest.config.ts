@@ -57,10 +57,12 @@ export default defineConfig({
     // `vi.stubEnv` itself. GOOGLE_CALENDAR_CLIENT_ID (S-22 PR 4): a .env.local or
     // shell holding the development client would wake the Google busy read in
     // every booking and voice suite; blank keeps it dormant (D15), and the
-    // Google tests hand their own env object.
+    // Google tests hand their own env object. REALTIME_MODEL / TRANSCRIBE_MODEL
+    // (model switch PR 4): a .env.local naming a trial model must not move every
+    // voice pin; the override tests set them with `vi.stubEnv` and a fresh import.
     env: {
       APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "", CRON_FANOUT: "",
-      GOOGLE_CALENDAR_CLIENT_ID: "",
+      GOOGLE_CALENDAR_CLIENT_ID: "", REALTIME_MODEL: "", TRANSCRIBE_MODEL: "",
     },
   },
   resolve: {
