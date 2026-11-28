@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { TRADE_ENTRIES } from "@/lib/vetting/trades";
+import { bodyDigest, FAKE_REALTIME, FAKE_TRANSCRIBE, stubVoiceModels, withModels } from "./testing/voice-models";
 import {
   parseProspectDemo, buildProspectDemoSession, PROSPECT_DEMO_MAX_SERVICES, type ProspectDemoForm,
 } from "./prospect-demo";
@@ -158,5 +159,41 @@ describe("buildProspectDemoSession", () => {
     expect(session.type).toBe("realtime");
     expect(session.audio.output.voice).toBe("marin");
     expect(session.audio.input.turn_detection).toBeTruthy();
+  });
+});
+
+// Model switch PR 4: the prospect demo's two models come from env. They are read when session-config loads, so each
+// session comes from a FRESH copy of this module. The pin is the bytes today's code built, as the demo's action sends
+// them (`JSON.stringify({ session })`, dashboard/demo/actions.ts), captured before the change.
+describe("buildProspectDemoSession: the voice models come from env; with none set, the session is today's", () => {
+  const SENT_DIGEST = "f57e9cc446c46d2926418c3cd47988a246eeb028b27c1d8dc7c4f154e1e6bb06";
+  async function sent(models: { realtime?: string; transcribe?: string }): Promise<string> {
+    stubVoiceModels(models);
+    vi.resetModules();
+    try {
+      const fresh = await import("./prospect-demo");
+      const parsed = fresh.parseProspectDemo(form());
+      if (!parsed.ok) throw new Error(`fixture refused: ${parsed.error}`);
+      return JSON.stringify({ session: fresh.buildProspectDemoSession(parsed.profile, NOW).session });
+    } finally {
+      vi.resetModules();
+    }
+  }
+  const session = (s: string) => (JSON.parse(s) as { session: Parameters<typeof withModels>[0] }).session;
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("with no model env set, the session is byte for byte today's", async () => {
+    const s = await sent({});
+    expect(session(s).model).toBe("gpt-realtime");
+    expect(session(s).audio.input.transcription).toEqual({ model: "gpt-4o-mini-transcribe" });
+    expect(bodyDigest(s)).toBe(SENT_DIGEST);
+  });
+  it("TRANSCRIBE_MODEL reaches the session, and moves nothing else", async () => {
+    const today = session(await sent({}));
+    expect(session(await sent({ transcribe: FAKE_TRANSCRIBE }))).toEqual(withModels(today, { transcribe: FAKE_TRANSCRIBE }));
+  });
+  it("REALTIME_MODEL reaches the session, and moves nothing else", async () => {
+    const today = session(await sent({}));
+    expect(session(await sent({ realtime: FAKE_REALTIME }))).toEqual(withModels(today, { realtime: FAKE_REALTIME }));
   });
 });
