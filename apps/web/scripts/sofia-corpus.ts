@@ -26,7 +26,7 @@ import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult, newStubSession,
   renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
   selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName,
-  DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
+  DEFAULT_PHONE_ENGINE, PHONE_FALLBACK,
   type CorpusItem, type CorpusFixture, type PhoneEngine, type RunMeta, type TranscriptTurn,
 } from "../src/lib/voice/modules/corpus-lib";
 
@@ -61,7 +61,7 @@ const pin = corpusPin(moduleId);
 const date = new Date().toISOString().slice(0, 10);
 const meta: RunMeta = {
   moduleId, slug, version: pin.version, sha256: pin.sha256, date, phoneEngine,
-  phoneModel: phoneEngine === "realtime" ? REALTIME_MODEL : PHONE_FALLBACK_MODEL, chatModel: WEB_CHAT.model,
+  phoneModel: phoneEngine === "realtime" ? REALTIME_MODEL : PHONE_FALLBACK.model, chatModel: WEB_CHAT.model,
 };
 const outDir = path.resolve(__dirname, "../.sofia-corpus", slug, new Date().toISOString().replace(/[:.]/g, "-"));
 mkdirSync(outDir, { recursive: true });
@@ -170,7 +170,7 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
 type ChatMsg = { role: string; content: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string };
 
 /** `fields` are the body fields beside model, messages and tools: the web chat's are its task row's
- *  (modelBodyFields); the phone fallback sends none. */
+ *  (modelBodyFields), and the phone fallback's are its own route's (corpus-lib.ts, PHONE_FALLBACK). */
 async function complete(model: string, messages: ChatMsg[], tools: unknown[], fields: Record<string, unknown> = {}): Promise<ChatMsg> {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -184,7 +184,7 @@ async function complete(model: string, messages: ChatMsg[], tools: unknown[], fi
 }
 
 /** Chat completions: the website chat (its own model, budget notice and reply cap, as the concierge turn
- *  route builds them), or the phone fallback (gpt-4o, the phone prompt and tools, the greeting as a system
+ *  route builds them), or the phone fallback (PHONE_FALLBACK's model, the phone prompt and tools, the greeting as a system
  *  instruction). */
 async function runChat(model: string, system: (turn: number) => string, tools: unknown[], lines: string[], stub: Stub,
   opts: { greeting?: string; fields?: Record<string, unknown> }): Promise<TranscriptTurn[]> {
@@ -232,8 +232,8 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
   const greeting = openingGreeting({ languages: f.languages, greeting_en: f.greetingEn, greeting_es: f.greetingEs },
     f.businessName, { disclose: item.disclosure, personaName: f.personaName }).instruction;
   if (phoneEngine === "realtime") return runRealtime(input, tools.map((t) => t.schema), greeting, item.caller, stub);
-  return runChat(PHONE_FALLBACK_MODEL, () => buildSystemPrompt(input, new Date()), tools.map((t) => realtimeToolAsChat(t.schema)),
-    item.caller, stub, { greeting });
+  return runChat(PHONE_FALLBACK.model, () => buildSystemPrompt(input, new Date()), tools.map((t) => realtimeToolAsChat(t.schema)),
+    item.caller, stub, { greeting, fields: modelBodyFields(PHONE_FALLBACK.params) });
 }
 
 async function main(): Promise<void> {
