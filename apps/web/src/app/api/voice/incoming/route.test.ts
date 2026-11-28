@@ -148,6 +148,7 @@ vi.mock("@/lib/owner-line/session", () => ({
 }));
 
 import { POST } from "./route";
+import { bodyDigest, FAKE_REALTIME, FAKE_TRANSCRIBE, stubVoiceModels, withModels } from "@/lib/voice/testing/voice-models";
 
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
 const PROFILE_ROW = {
@@ -1465,4 +1466,58 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     expect(line![2]).toMatchObject({ callerNumber: "+1••••••••96" });
     expect(JSON.stringify(logSpy.mock.calls)).not.toContain("+19565550196");
   });
+});
+
+// Model switch PR 4: both voice models come from env (danlo switches them, and back, with a deploy and no code change).
+// They are read when session-config loads, so each body comes from a FRESH copy of the route. The pins are the bytes
+// today's code sent (captured before the change), so "no env set" provably moves nothing.
+describe("POST /api/voice/incoming — the voice models come from env; with none set, every accept is today's", () => {
+  const NOW = new Date("2026-11-16T15:00:00Z");
+  const RECEPTIONIST_DIGEST = "b7857c27bd69de9dd3681b44f837012fa7ca0c97d2c10b9246276922522578bf";
+  const OWNER_LINE_DIGEST = "d48d3a218d73a758e8102d81aa0a8d360b541d19a59c5528cb777aa7da208b66";
+  const ownerEvent = () => {
+    const e = callIncomingEvent();
+    e.data.sip_headers.push({ name: "X-BIS-Handoff", value: "tok_owner" }, { name: "X-BIS-Owner-Pass", value: "1.a.b.owner.19565550999.mac" });
+    return e;
+  };
+  const OWNER_SESSION = { accountId: "acct1", userId: "u1", role: "owner", clerkUserId: "user_d", clerkOrgId: "org_a",
+    firstName: "Dan", actorName: "Dan Lopez", locale: "en", timezone: "America/Chicago" };
+  /** The exact accept body a fresh copy of the route sends with these models in env. */
+  async function acceptSent(models: { realtime?: string; transcribe?: string }, line: "receptionist" | "owner"): Promise<string> {
+    stubVoiceModels(models);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.resetModules();
+    try {
+      const { POST: freshPost } = await import("./route");
+      fetchMock.mockClear();
+      if (line === "owner") decideOwnerMock.mockResolvedValue({ ok: true, session: OWNER_SESSION });
+      unwrapMock.mockResolvedValue(line === "owner" ? ownerEvent() : callIncomingEvent());
+      expect((await freshPost(req())).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0]![0])).toMatch(/\/v1\/realtime\/calls\/call_abc123\/accept$/);
+      return String((fetchMock.mock.calls[0]![1] as RequestInit).body);
+    } finally {
+      vi.useRealTimers();
+      vi.resetModules();
+    }
+  }
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  for (const [line, digest] of [["receptionist", RECEPTIONIST_DIGEST], ["owner", OWNER_LINE_DIGEST]] as const) {
+    it(`${line}: with no model env set, the accept body is byte for byte today's`, async () => {
+      const sent = await acceptSent({}, line);
+      expect(JSON.parse(sent).model).toBe("gpt-realtime");
+      expect(JSON.parse(sent).audio.input.transcription).toEqual({ model: "gpt-4o-mini-transcribe" });
+      expect(bodyDigest(sent)).toBe(digest);
+    });
+    it(`${line}: TRANSCRIBE_MODEL reaches the accept, and moves nothing else`, async () => {
+      const today = JSON.parse(await acceptSent({}, line));
+      expect(JSON.parse(await acceptSent({ transcribe: FAKE_TRANSCRIBE }, line))).toEqual(withModels(today, { transcribe: FAKE_TRANSCRIBE }));
+    });
+    it(`${line}: REALTIME_MODEL reaches the accept, and moves nothing else`, async () => {
+      const today = JSON.parse(await acceptSent({}, line));
+      expect(JSON.parse(await acceptSent({ realtime: FAKE_REALTIME }, line))).toEqual(withModels(today, { realtime: FAKE_REALTIME }));
+    });
+  }
 });

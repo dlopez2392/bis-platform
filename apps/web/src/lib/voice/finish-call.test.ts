@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
@@ -103,6 +103,7 @@ import {
 } from "./call-state";
 import { REALTIME_MODEL, TRANSCRIBE_MODEL } from "./session-config";
 import { estimateCallCostMicroUsd } from "./call-usage";
+import { FAKE_REALTIME, FAKE_TRANSCRIBE, stubVoiceModels } from "./testing/voice-models";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { HoldingContactUnavailable } from "@bis/db";
@@ -1905,6 +1906,39 @@ describe("finishCall — the call's OpenAI usage (BIS's cost record, 0116)", () 
     expect(dbMocks.recordCallUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
       responses: 0, transcribeSeconds: 4.25, transcribeInputTokens: null,
     }));
+  });
+
+  // Model switch PR 4: the record names the models the session ran, which come from env. They are read when
+  // session-config loads, so each write comes from a FRESH copy of finishCall, and the names are literals (the test
+  // above compares against the imported constants, which agree with any value).
+  describe("the models it records come from env", () => {
+    async function recorded(models: { realtime?: string; transcribe?: string }) {
+      stubVoiceModels(models);
+      vi.resetModules();
+      try {
+        const { finishCall: freshFinish } = await import("./finish-call");
+        dbMocks.recordCallUsage.mockClear();
+        await freshFinish(spent(), ctx, meta);
+        expect(dbMocks.recordCallUsage).toHaveBeenCalledTimes(1);
+        return dbMocks.recordCallUsage.mock.calls[0]![1] as { model: string; transcribeModel: string; estCostMicrousd: number | null };
+      } finally {
+        vi.resetModules();
+      }
+    }
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it("with no model env set, today's two names and today's priced cost", async () => {
+      const r = await recorded({});
+      expect(r.model).toBe("gpt-realtime");
+      expect(r.transcribeModel).toBe("gpt-4o-mini-transcribe");
+      expect(r.estCostMicrousd).toBe(estimateCallCostMicroUsd("gpt-realtime", summed));
+    });
+    it("TRANSCRIBE_MODEL is the transcriber it records", async () => {
+      expect((await recorded({ transcribe: FAKE_TRANSCRIBE })).transcribeModel).toBe(FAKE_TRANSCRIBE);
+    });
+    it("REALTIME_MODEL is the model it records", async () => {
+      expect((await recorded({ realtime: FAKE_REALTIME })).model).toBe(FAKE_REALTIME);
+    });
   });
 });
 

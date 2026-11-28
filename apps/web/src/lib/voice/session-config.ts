@@ -11,8 +11,12 @@ import type { ClosedDayLine } from "./knowledge/closure-lines";
 import type { EffectiveStatus } from "../business-status/status";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
-/** The caller-speech transcriber the session runs; finishCall records its usage under this name (0116). */
-export const TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
+/**
+ * The caller-speech transcriber every voice session runs (the phone, both browser demos and the owner line);
+ * finishCall records its usage under this name (0116). Env, else the default, like REALTIME_MODEL, so the model
+ * switch and its rollback are a deploy, not a code change.
+ */
+export const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
 
 export type VoicePromptInput = {
   // No `greeting`: the prompt never embeds one. The phone line's opening is

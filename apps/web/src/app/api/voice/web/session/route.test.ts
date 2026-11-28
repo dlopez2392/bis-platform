@@ -92,6 +92,7 @@ import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 import { fileURLToPath } from "node:url";
 import { checkSamples, digestPrompts, WEBSITE_DEMO_MESSAGE_WORDS } from "@/lib/voice/prompt-snapshots.fixture";
 import { CUSTOMER_TOOL_NAMES } from "@/lib/tools/customer/specs";
+import { bodyDigest, FAKE_REALTIME, FAKE_TRANSCRIBE, stubVoiceModels, withModels } from "@/lib/voice/testing/voice-models";
 
 const ORIGIN = "https://bis-rgv.com";
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
@@ -493,5 +494,47 @@ describe("POST /api/voice/web/session — the whole prompt it mints (F-023 PR 4 
     const named = Object.entries(await allMinted())
       .flatMap(([key, text]) => CUSTOMER_TOOL_NAMES.filter((n) => text.includes(n)).map((n) => `${key}: ${n}`));
     expect(named).toEqual([]);
+  });
+});
+
+// Model switch PR 4: the website demo's two models come from env (incoming/route.test.ts has the phone's). They are
+// read when session-config loads, so each body comes from a FRESH copy of the route; the pin is the bytes today's
+// code minted (captured before the change).
+describe("POST /api/voice/web/session — the voice models come from env; with none set, the minted body is today's", () => {
+  const MINTED_DIGEST = "7257ca3c11dad312f805b5bfa3ebc3130aad744fa0f74788b831f33a559a0795";
+  /** The exact client_secrets body a fresh copy of the route sends with these models in env. */
+  async function minted(models: { realtime?: string; transcribe?: string }): Promise<string> {
+    stubVoiceModels(models);
+    vi.stubEnv("SOFIA_WEB_DISPLAY_NUMBER", "");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-16T15:00:00Z"));
+    vi.resetModules();
+    try {
+      const { POST: freshPost } = await import("./route");
+      fetchMock.mockClear();
+      expect((await freshPost(req())).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]![0]).toBe("https://api.openai.com/v1/realtime/client_secrets");
+      return String((fetchMock.mock.calls[0]![1] as { body: string }).body);
+    } finally {
+      vi.useRealTimers();
+      vi.resetModules();
+    }
+  }
+  const session = (sent: string) => (JSON.parse(sent) as { session: Parameters<typeof withModels>[0] }).session;
+
+  it("with no model env set, the minted body is byte for byte today's", async () => {
+    const sent = await minted({});
+    expect(session(sent).model).toBe("gpt-realtime");
+    expect(session(sent).audio.input.transcription).toEqual({ model: "gpt-4o-mini-transcribe" });
+    expect(bodyDigest(sent)).toBe(MINTED_DIGEST);
+  });
+  it("TRANSCRIBE_MODEL reaches the minted session, and moves nothing else", async () => {
+    const today = session(await minted({}));
+    expect(session(await minted({ transcribe: FAKE_TRANSCRIBE }))).toEqual(withModels(today, { transcribe: FAKE_TRANSCRIBE }));
+  });
+  it("REALTIME_MODEL reaches the minted session, and moves nothing else", async () => {
+    const today = session(await minted({}));
+    expect(session(await minted({ realtime: FAKE_REALTIME }))).toEqual(withModels(today, { realtime: FAKE_REALTIME }));
   });
 });
