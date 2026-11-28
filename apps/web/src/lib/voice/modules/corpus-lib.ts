@@ -10,6 +10,7 @@ import { isValidEmail, isValidPhone } from "../../forms/guards";
 import { formatWhen } from "../../booking/time";
 import { capturePhoneLead, messageBody, bookingName, sanitizeWebLead, withDroppedNote } from "../tools/placeholders";
 import type { TradeModuleId } from "./index";
+import type { ModelRoute } from "../../ai/tasks";
 // S-47e (Task 14): the corpus stub's per-item identity session, so a corpus run follows the SAME ladder
 // as the live tools (registry.ts) rather than answering ok:true vacuously (O2).
 import { emptyCallState, withBooking, type CallState } from "../call-state";
@@ -28,8 +29,12 @@ export type PhoneEngine = "realtime" | "chat";
  *  text-only session through `output_modalities`, so phone items play on the phone's own model. "chat"
  *  stays as the --phone-engine fallback (spec section 7). */
 export const DEFAULT_PHONE_ENGINE: PhoneEngine = "realtime";
-/** Spec section 7's fallback for phone items when the Realtime model will not run text-only. */
-export const PHONE_FALLBACK_MODEL = "gpt-4o";
+/** Spec section 7's fallback for phone items when the Realtime model will not run text-only: a model route
+ *  like a task row's, sent through the provider's own `modelBodyFields`, and held to its model's rule by
+ *  model-rules.test.ts. gpt-6-luna since the model switch's PR 3 (gpt-4o shuts down 2027-01-14). Effort
+ *  "none" because these calls carry the phone tools, and with tools luna accepts only "none" and refuses
+ *  an omitted effort (spike run 45887051394, 2026-11-26). No cap, as gpt-4o had none. */
+export const PHONE_FALLBACK: ModelRoute = { model: "gpt-6-luna", params: { reasoningEffort: "none" } };
 
 /** A corpus: one per trade module, plus "base" (model switch plan G1/Q2, owner 2026-11-26), which plays the prompt a
  *  live call runs with NO trade module, the one every live account has today. */

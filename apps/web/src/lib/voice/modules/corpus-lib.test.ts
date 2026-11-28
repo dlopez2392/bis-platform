@@ -5,7 +5,7 @@ import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, stubToolResult, renderTranscript,
   resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
   selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName, newStubSession, STUB_BOOKING,
-  CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL, tradeModuleOf,
+  CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK, tradeModuleOf,
   type CorpusFixture, type CorpusItem,
 } from "./corpus-lib";
 import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
@@ -392,9 +392,9 @@ describe("the slugs, the engine, and what the script may touch", () => {
     expect(tradeModuleOf("insurance_pc")).toBe("insurance_pc");
     expect(tradeModuleOf("events")).toBe("events");
   });
-  it("the phone engine is realtime, as Task 0's spike showed on 2026-10-22 (run 39814905846: gpt-realtime takes a text-only session via output_modalities), and the fallback is gpt-4o (spec section 7; mutation: \"chat\" -> FAILS)", () => {
+  it("the phone engine is realtime, as Task 0's spike showed on 2026-10-22 (run 39814905846: gpt-realtime takes a text-only session via output_modalities), and the fallback is gpt-6-luna at effort none, since gpt-4o shuts down 2027-01-14 (model switch PR 3; mutation: \"chat\" -> FAILS)", () => {
     expect(DEFAULT_PHONE_ENGINE).toBe("realtime");
-    expect(PHONE_FALLBACK_MODEL).toBe("gpt-4o");
+    expect(PHONE_FALLBACK).toEqual({ model: "gpt-6-luna", params: { reasoningEffort: "none" } });
   });
   it("scripts/sofia-corpus.ts imports no database value, reads no .env, and calls refuseProduction(process.env, …) exactly once (comments stripped first; mutation: comment the call out -> FAILS)", () => {
     const src = readFileSync(path.resolve(__dirname, "../../../../scripts/sofia-corpus.ts"), "utf8")

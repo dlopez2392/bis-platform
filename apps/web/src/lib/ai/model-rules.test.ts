@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AI_TASKS, AI_TASK_NAMES, type ModelRoute } from "./tasks";
 import { MODEL_RULES } from "./prices";
 import { openAiProvider, refusedBy } from "./providers/openai";
+import { PHONE_FALLBACK } from "../voice/modules/corpus-lib";
 
 /**
  * The model switch's D1 (docs/superpowers/plans/2026-11-26-openai-model-switch.md, section 4; spike run
@@ -20,15 +21,19 @@ async function sentBody(route: ModelRoute): Promise<Record<string, unknown>> {
   return body;
 }
 
-const ROUTES = AI_TASK_NAMES.flatMap((task) => {
-  const r = AI_TASKS[task];
-  return [[task, "primary", r.primary] as const, ...(r.fallback ? [[task, "fallback", r.fallback] as const] : [])];
-});
+/** Every task row, plus the one model route that is not a task row: the corpus's phone fallback (model switch PR 3). */
+const ROUTES = [
+  ...AI_TASK_NAMES.flatMap((task) => {
+    const r = AI_TASKS[task];
+    return [[task, "primary", r.primary] as const, ...(r.fallback ? [[task, "fallback", r.fallback] as const] : [])];
+  }),
+  ["corpus phone fallback", "route", PHONE_FALLBACK] as const,
+];
 
 beforeEach(() => { vi.stubEnv("OPENAI_API_KEY", "sk-test"); });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-describe("every task row sends only what its model accepts (mutation: give a luna row max_tokens, or a 4o-mini row reasoning_effort -> FAILS by task name)", () => {
+describe("every task row, and the corpus phone fallback, sends only what its model accepts (mutation: give a luna row max_tokens, or a 4o-mini row reasoning_effort -> FAILS by task name)", () => {
   it.each(ROUTES)("%s's %s", async (_task, _slot, route) => {
     expect(MODEL_RULES[route.model].api).toBe("chat");
     expect(refusedBy(route.model, await sentBody(route))).toEqual([]);

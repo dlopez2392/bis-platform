@@ -34,7 +34,7 @@ gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=base -f rea
 |---|---|---|
 | `step` | `spike` (the Realtime model: text-only session, full config with each transcriber, spoken round trip), `corpus`, or `model-spike` (what gpt-6-luna accepts for each text task) | `spike` (the cheaper one) |
 | `module` | `both` (the two trade modules: `insurance-pc`, then `events`), `insurance-pc`, `events`, or `base` (the live prompt with no trade module; section 1a) | `both` |
-| `phone_engine` | `realtime` (phone items on the Realtime model, text only) or `chat` (phone items on gpt-4o) | `realtime` |
+| `phone_engine` | `realtime` (phone items on the Realtime model, text only) or `chat` (phone items on gpt-6-luna over chat completions, effort none; gpt-4o until model switch PR 3) | `realtime` |
 | `only` | one item number, `7` or `07`; empty plays every item | empty |
 | `repeat` | 1 or 3: plays each item that many times; 3 writes NN-…-r1.md to -r3.md and a sheet with one column per run | 3 |
 | `realtime_model` | `gpt-realtime` or `gpt-realtime-2.1`, for `spike` and `corpus` (a fixed choice, checked again in bash) | `gpt-realtime` |
